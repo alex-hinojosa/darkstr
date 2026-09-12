@@ -47,6 +47,7 @@ See [docs/PROOF-PIN.md](docs/PROOF-PIN.md).
 - Slim DNR: Sec-GPC, tracking-param strip, third-party Referer strip, plus a chaff-safe tracker **block** list — enabled only when Pollution is active
 - Success-driven tab-scoped User-Agent DNR; Firefox personas **REMOVE** Client Hints (aligns with Duppel A1)
 - Popup/sidebar: mode radios, Native-Compatible (global + per-site list), strict next-nav, persona inspector, Quiet/Balanced/Loud chaff, tracker-cookie purge
+- Settings / chrome-prefs panel (`extension/settings/`, Options page): same prefs + XOR implications + PREF-BRIDGE key names + patches apply pointer (no Gecko tree)
 - Per-site Native-Compatible map + strict-first-document / next-nav coherence
 - Tracker-cookie purge (Firefox `cookies` API): Domain-list match only — **not** cookie containers
 
@@ -111,6 +112,7 @@ extension/                 load this in LibreWolf
   lib/profiles.js          persona generation (Duppel-aligned)
   lib/rfp-probe.js         UTC-timezone heuristic
   popup/                   toolbar + sidebar panel
+  settings/                chrome-prefs panel (options_ui)
   rules/tracking.json      slim DNR + chaff-safe tracker blocks (off until Pollution)
   lib/tracker-cookies.js   known-tracker Domain list + purge helpers
   src/content/anti-fingerprint/   bootstrap source (esbuild)

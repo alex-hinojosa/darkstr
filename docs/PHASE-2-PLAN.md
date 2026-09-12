@@ -255,7 +255,14 @@ Still **no** Mozilla/LibreWolf vendor:
 - [x] `docs/GECKO-HOOKS.md` — pref apply, XOR RFP, DocShell / nsHttp / canvas call-ins
 - [x] `patches/` stubs + apply script README (real diffs wait for M1 private tree)
 - [x] `duppel-bridge` prefs applicator trait for future XPCOM glue
-- [ ] PR opened to `alex-hinojosa/darkstr`
+- [x] PR opened to `alex-hinojosa/darkstr` (PR #7)
+
+### M0.8 — WebExt chrome-prefs settings panel (no Gecko tree)
+
+- [x] `extension/settings/` (+ `options_ui`) edits same semantic prefs as popup
+- [x] XOR implications copy (Pollution→RFP/FPP off; Homogeneous→stock RFP; no metric customization)
+- [x] Read-only chrome/`about:config` names from PREF-BRIDGE; patches apply pointer
+- [x] PROOF-PIN / Proof notes updated; PM copy unchanged (pollution framing, Quiet/Balanced/Loud)
 
 ### M1 — Fork bootstrap (4–6 weeks)
 

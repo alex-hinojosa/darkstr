@@ -1,6 +1,6 @@
 {
   "name": "darkstr",
-  "version": "0.1.2-phase1",
+  "version": "0.1.3-phase1",
   "private": true,
   "description": "darkstr Phase 1 — Firefox WebExtension. Pollution tool, not anti-detect / not Cloudflare bypass. Not official LibreWolf.",
   "license": "GPL-3.0-only",
