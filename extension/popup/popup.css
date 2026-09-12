@@ -1,7 +1,7 @@
 :root { color-scheme: dark; }
 html, body {
   margin: 0;
-  width: 320px;
+  width: 340px;
   background: #141418;
   color: #f4f4f5;
   font: 13px/1.45 ui-sans-serif, system-ui, sans-serif;
@@ -15,3 +15,28 @@ h2 { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.06em; colo
 .hidden { display: none; }
 .mono { font-family: ui-monospace, Menlo, monospace; font-size: 11px; word-break: break-all; }
 code { font-family: ui-monospace, Menlo, monospace; }
+.identity .detail { display: flex; gap: 0.5rem; margin: 0.2rem 0; }
+.identity .label { flex: 0 0 4.5rem; color: #a1a1aa; }
+.btn {
+  margin-top: 0.5rem;
+  background: #2ec4b6;
+  color: #0b1211;
+  border: 0;
+  border-radius: 6px;
+  padding: 0.4rem 0.7rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.btn.secondary { background: #2a2a32; color: #f4f4f5; }
+.btn:disabled { opacity: 0.6; cursor: default; }
+.chaos { display: flex; gap: 0.35rem; margin: 0.35rem 0; }
+.chaos-btn {
+  flex: 1;
+  background: #1c1c22;
+  color: #d4d4d8;
+  border: 1px solid #3f3f46;
+  border-radius: 6px;
+  padding: 0.35rem;
+  cursor: pointer;
+}
+.chaos-btn.active { border-color: #2ec4b6; color: #2ec4b6; }
