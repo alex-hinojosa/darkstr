@@ -7,13 +7,13 @@
 <body>
   <header>
     <h1>darkstr</h1>
-    <p class="tag">Pollution tool · not anti-detect · not CF bypass · not official LibreWolf</p>
+    <p class="tag">Pollution tool · not anti-detect · not Cloudflare bypass · not official LibreWolf</p>
   </header>
 
   <section>
     <h2>Mode (XOR)</h2>
-    <label class="row"><input type="radio" name="mode" value="homogeneous"> Homogeneous — stock LibreWolf RFP. You look like other LibreWolf users. darkstr does not apply a Duppel persona.</label>
-    <label class="row"><input type="radio" name="mode" value="pollution"> Pollution — Duppel persona + tracker chaff. RFP must be off.</label>
+    <label class="row"><input type="radio" name="mode" value="homogeneous"> Homogeneous — stock LibreWolf RFP</label>
+    <label class="row"><input type="radio" name="mode" value="pollution"> Pollution — Duppel persona + chaff (RFP off)</label>
     <p id="modeHint" class="hint"></p>
   </section>
 
@@ -49,12 +49,12 @@
   <section id="chaff" class="hidden">
     <h2>Chaff</h2>
     <div class="chaos">
-      <button type="button" class="chaos-btn" data-level="stealth">Stealth</button>
+      <button type="button" class="chaos-btn" data-level="quiet">Quiet</button>
       <button type="button" class="chaos-btn" data-level="balanced">Balanced</button>
-      <button type="button" class="chaos-btn" data-level="chaos">Chaos</button>
+      <button type="button" class="chaos-btn" data-level="loud">Loud</button>
     </div>
     <p id="chaosDesc" class="hint"></p>
-    <button type="button" id="fireBeaconsBtn" class="btn secondary">Queue beacons now</button>
+    <button type="button" id="fireBeaconsBtn" class="btn secondary">Send chaff now</button>
     <p id="statsLine" class="hint"></p>
   </section>
 

@@ -10,9 +10,9 @@
  *   poisoned data look like a real person with plausible interests.
  * - Credible timing: variable intervals that mimic human browsing
  *   rhythm instead of fixed alarm cadence.
- * - Volume by mode: stealth = 1 beacon every 8-20 min (auto-fire ON),
+ * - Volume by mode: quiet = 1 beacon every 8-20 min (auto-fire ON),
  *   balanced = 1-3 beacons every 3-8 min (auto-fire ON),
- *   chaos = 5-15 beacons every 1-3 min (auto-fire ON, lab-only gate).
+ *   loud = 5-15 beacons every 1-3 min (auto-fire ON, lab-only gate).
  * - 1% bypass zone principle (IDPI paper): fewer, more plausible
  *   data points are harder for downstream AI to filter than high-volume
  *   contradictory noise.
@@ -305,9 +305,9 @@ const POISONER = {
     if (!this._activeClusters) this.selectPersona();
 
     let count;
-    if (chaosLevel === "stealth") {
+    if (chaosLevel === "quiet" || chaosLevel === "stealth") {
       count = 1;
-    } else if (chaosLevel === "chaos") {
+    } else if (chaosLevel === "loud" || chaosLevel === "chaos") {
       count = 5 + Math.floor(Math.random() * 11); // 5-15
     } else {
       count = 1 + Math.floor(Math.random() * 3); // 1-3
@@ -353,8 +353,8 @@ const POISONER = {
     if (!this._activeClusters) this.selectPersona();
 
     let maxTargets;
-    if (chaosLevel === "stealth") maxTargets = 1;
-    else if (chaosLevel === "chaos") maxTargets = 5;
+    if (chaosLevel === "quiet" || chaosLevel === "stealth") maxTargets = 1;
+    else if (chaosLevel === "loud" || chaosLevel === "chaos") maxTargets = 5;
     else maxTargets = 2; // balanced
 
     // Pre-generate attribute sets (one per potential target, using persona data)
@@ -392,15 +392,15 @@ const POISONER = {
   },
 
   // === Fire a batch ===
-  // Stealth: 1 beacon. Balanced: 1-3. Chaos: 5-15.
+  // Quiet: 1 beacon. Balanced: 1-3. Loud: 5-15.
   async fireBatch(chaosLevel) {
     // Ensure persona is initialized
     if (!this._activeClusters) this.selectPersona();
 
     let actual;
-    if (chaosLevel === "stealth") {
+    if (chaosLevel === "quiet" || chaosLevel === "stealth") {
       actual = 1;
-    } else if (chaosLevel === "chaos") {
+    } else if (chaosLevel === "loud" || chaosLevel === "chaos") {
       actual = 5 + Math.floor(Math.random() * 11); // 5-15
     } else {
       actual = 1 + Math.floor(Math.random() * 3); // 1-3
@@ -408,8 +408,8 @@ const POISONER = {
 
     let fired = 0;
     for (let i = 0; i < actual; i++) {
-      // Stagger: stealth uses longer delays (looks like real page dwell)
-      const baseDelay = chaosLevel === "stealth" ? 4000 :
+      // Stagger: quiet uses longer delays (looks like real page dwell)
+      const baseDelay = (chaosLevel === "quiet" || chaosLevel === "stealth") ? 4000 :
                         chaosLevel === "balanced" ? 1500 : 500;
       const jitter = Math.floor(Math.random() * baseDelay);
       await new Promise(r => setTimeout(r, baseDelay + jitter));
@@ -420,11 +420,14 @@ const POISONER = {
 
   // === Timing model ===
   // Returns the next fire interval in minutes for the alarm scheduler.
-  // Stealth: 8-20 min. Balanced: 3-8 min. Chaos: 1-3 min.
+  // Quiet: 8-20 min. Balanced: 3-8 min. Loud: 1-3 min.
   getNextInterval(chaosLevel) {
     const ranges = {
-      stealth:  { min: 8,  max: 20 },
+      quiet:    { min: 8,  max: 20 },
       balanced: { min: 3,  max: 8  },
+      loud:     { min: 1,  max: 3  },
+      // Legacy aliases
+      stealth:  { min: 8,  max: 20 },
       chaos:    { min: 1,  max: 3  },
     };
     const range = ranges[chaosLevel] || ranges.balanced;

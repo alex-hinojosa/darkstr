@@ -43,7 +43,9 @@ async function loadPrefs() {
   ]);
   STATE.prefs = normalizeDarkstrPrefs(raw);
   if (raw["darkstr.chaosLevel"]) {
-    PERSONA_STATE.chaosLevel = raw["darkstr.chaosLevel"];
+    const legacy = { stealth: "quiet", chaos: "loud" };
+    const lvl = raw["darkstr.chaosLevel"];
+    PERSONA_STATE.chaosLevel = legacy[lvl] || lvl;
   }
   if (raw["darkstr.stats"] && typeof raw["darkstr.stats"] === "object") {
     Object.assign(PERSONA_STATE.stats, raw["darkstr.stats"]);
@@ -524,8 +526,9 @@ B.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       }
 
       case "setChaosLevel": {
-        const level = msg.level;
-        if (level !== "stealth" && level !== "balanced" && level !== "chaos") {
+        const legacy = { stealth: "quiet", chaos: "loud" };
+        const level = legacy[msg.level] || msg.level;
+        if (level !== "quiet" && level !== "balanced" && level !== "loud") {
           reply({ ok: false, error: "bad_chaos" });
           return;
         }

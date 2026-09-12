@@ -13,8 +13,11 @@ const rotateBtn = document.getElementById("rotateBtn");
 const fireBeaconsBtn = document.getElementById("fireBeaconsBtn");
 
 const chaosDescriptions = {
-  stealth: "Low-volume coherent chaff, long intervals (8–20 min).",
+  quiet: "Low-volume coherent chaff, long intervals (8–20 min).",
   balanced: "Moderate chaff with persona clusters (3–8 min).",
+  loud: "High-volume broad chaff, short intervals (1–3 min). Lab only.",
+  // Legacy stored prefs (pre Quiet/Balanced/Loud rename)
+  stealth: "Low-volume coherent chaff, long intervals (8–20 min).",
   chaos: "High-volume broad chaff, short intervals (1–3 min). Lab only.",
 };
 
@@ -121,9 +124,9 @@ document.querySelectorAll(".chaos-btn").forEach((btn) => {
 fireBeaconsBtn.addEventListener("click", async () => {
   fireBeaconsBtn.disabled = true;
   const resp = await B.runtime.sendMessage({ type: "fireBeaconsNow" });
-  fireBeaconsBtn.textContent = `Queued ${resp && resp.count != null ? resp.count : 0}`;
+  fireBeaconsBtn.textContent = `Sent ${resp && resp.count != null ? resp.count : 0}`;
   setTimeout(() => {
-    fireBeaconsBtn.textContent = "Queue beacons now";
+    fireBeaconsBtn.textContent = "Send chaff now";
     fireBeaconsBtn.disabled = false;
   }, 1500);
   refresh();
