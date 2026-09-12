@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "darkstr",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Pollution tool for LibreWolf. Homogeneous XOR Pollution + independent Native-Compatible. Not anti-detect, not a Cloudflare bypass, not official LibreWolf.",
   "browser_specific_settings": {
     "gecko": {
@@ -28,6 +28,7 @@
   "background": {
     "scripts": [
       "lib/sites.js",
+      "lib/tracker-cookies.js",
       "lib/prefs.js",
       "lib/modes.js",
       "lib/profiles.js",

@@ -27,17 +27,17 @@
       <input type="checkbox" id="nativeCompatSiteToggle">
       This site: <span id="nativeCompatSiteLabel" class="mono">—</span>
     </label>
-    <p class="hint">Per-site map (eTLD+1). Persists. Skips persona / tab UA / chaff for that site only.</p>
+    <p class="hint">Applies to this domain (and subdomains). Persists. Skips persona / tab UA / chaff for that site only.</p>
     <ul id="nativeCompatSiteList" class="site-list"></ul>
   </section>
 
   <section>
-    <h2>Strict next-nav</h2>
+    <h2>Delay persona one page</h2>
     <label class="row">
       <input type="checkbox" id="strictFirstDoc" checked>
-      Strict first-document: first nav stays native; next nav gets persona UA on main_frame then MAIN inject.
+      First page stays native; persona starts on the next page.
     </label>
-    <p class="hint">Coherence aid where Firefox DNR allows. Does not change XOR mode.</p>
+    <p class="hint">Helps sites that break when the persona starts too early. Does not change mode.</p>
   </section>
 
   <section id="conflict" class="conflict hidden">
@@ -71,6 +71,14 @@
     <p id="chaosDesc" class="hint"></p>
     <button type="button" id="fireBeaconsBtn" class="btn secondary">Send chaff now</button>
     <p id="statsLine" class="hint"></p>
+  </section>
+
+
+  <section>
+    <h2>Tracker cookies</h2>
+    <p class="hint">Removes cookies whose Domain matches a static known-tracker list (ad / analytics / beacon hosts). Not cookie containers. Not a first-party site wipe. Needs site access.</p>
+    <button type="button" id="cleanCookiesBtn" class="btn secondary">Purge tracker cookies</button>
+    <p id="cookieCleanHint" class="hint"></p>
   </section>
 
   <section class="meta">

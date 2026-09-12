@@ -15,6 +15,8 @@ const chaosDesc = document.getElementById("chaosDesc");
 const statsLine = document.getElementById("statsLine");
 const rotateBtn = document.getElementById("rotateBtn");
 const fireBeaconsBtn = document.getElementById("fireBeaconsBtn");
+const cleanCookiesBtn = document.getElementById("cleanCookiesBtn");
+const cookieCleanHint = document.getElementById("cookieCleanHint");
 
 let currentEtld1 = "";
 
@@ -125,7 +127,8 @@ function paint(state) {
     statsLine.textContent =
       `Beacons accepted: ${state.stats.fakeBeaconsFired || 0}` +
       ` · DOM chaff: ${state.stats.domChaffApplied || 0}` +
-      ` · Rotations: ${state.stats.identityRotations || 0}`;
+      ` · Rotations: ${state.stats.identityRotations || 0}` +
+      ` · Tracker cookies purged: ${state.stats.cookiesCleaned || 0}`;
   }
 }
 
@@ -231,6 +234,39 @@ fireBeaconsBtn.addEventListener("click", async () => {
     fireBeaconsBtn.disabled = false;
   }, 1500);
   refresh();
+});
+
+
+cleanCookiesBtn.addEventListener("click", async () => {
+  cleanCookiesBtn.disabled = true;
+  cleanCookiesBtn.textContent = "Purging…";
+  cookieCleanHint.textContent = "";
+  try {
+    const resp = await B.runtime.sendMessage({ type: "cleanCookiesNow" });
+    if (resp && resp.error === "host_permissions_required") {
+      cookieCleanHint.textContent =
+        "Site access required. Use first-run Grant site access, then retry.";
+      cleanCookiesBtn.textContent = "Purge tracker cookies";
+    } else if (resp && resp.error) {
+      cookieCleanHint.textContent = "Purge failed: " + resp.error;
+      cleanCookiesBtn.textContent = "Purge tracker cookies";
+    } else {
+      const n = (resp && resp.cleaned) || 0;
+      cleanCookiesBtn.textContent = n ? `Purged ${n}` : "None matched";
+      cookieCleanHint.textContent =
+        "Matched Domain against the static tracker list only.";
+      setTimeout(() => {
+        cleanCookiesBtn.textContent = "Purge tracker cookies";
+        cleanCookiesBtn.disabled = false;
+      }, 2000);
+      await refresh();
+      return;
+    }
+  } catch (err) {
+    cookieCleanHint.textContent = "Purge failed.";
+    cleanCookiesBtn.textContent = "Purge tracker cookies";
+  }
+  cleanCookiesBtn.disabled = false;
 });
 
 refresh();
