@@ -1,0 +1,75 @@
+:root {
+  color-scheme: dark;
+  --bg: #101014;
+  --sheet: #18181d;
+  --ink: #f4f4f5;
+  --muted: #a1a1aa;
+  --line: #2a2a32;
+  --teal: #2ec4b6;
+  --warn: #f59e0b;
+  --danger: #f87171;
+}
+* { box-sizing: border-box; }
+html, body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font: 16px/1.5 ui-sans-serif, system-ui, -apple-system, sans-serif;
+}
+.sheet {
+  max-width: 42rem;
+  margin: 2.5rem auto;
+  padding: 2rem;
+  background: var(--sheet);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+}
+.eyebrow { color: var(--teal); letter-spacing: 0.08em; text-transform: uppercase; font-size: 0.75rem; margin: 0 0 0.5rem; }
+h1, h2 { line-height: 1.2; }
+h1 { font-size: 2rem; margin: 0 0 0.75rem; }
+h2 { font-size: 1.15rem; margin: 1.75rem 0 0.5rem; }
+.lede { font-size: 1.1rem; color: var(--muted); }
+.banner {
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--teal);
+  padding: 0.75rem 1rem;
+  margin: 1.25rem 0;
+}
+.banner p { margin: 0.25rem 0; }
+.modes { border: 0; padding: 0; margin: 1rem 0 0; }
+.modes legend { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+.card {
+  display: flex;
+  gap: 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 0.9rem 1rem;
+  margin: 0.6rem 0;
+  cursor: pointer;
+}
+.card:has(input:checked) { border-color: var(--teal); }
+.card strong { display: block; }
+.card span { color: var(--muted); font-size: 0.92rem; }
+.rfp {
+  background: #22180a;
+  border: 1px solid #7c5a1a;
+  border-radius: 12px;
+  padding: 0.25rem 1rem 1rem;
+}
+.rfp h2 { color: var(--warn); }
+.hidden { display: none; }
+code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.9em; }
+.row { display: flex; gap: 0.6rem; align-items: flex-start; margin: 0.75rem 0; }
+.note, .fineprint, .status { color: var(--muted); font-size: 0.9rem; }
+.btn {
+  appearance: none;
+  border: 0;
+  border-radius: 999px;
+  padding: 0.65rem 1.15rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.btn.primary { background: var(--teal); color: #042321; }
+.btn.secondary { background: #27272f; color: var(--ink); }
+.error { color: var(--danger); min-height: 1.25rem; }
+footer { margin-top: 1.75rem; }

@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Welcome to darkstr</title>
+  <link rel="stylesheet" href="first-run.css">
+</head>
+<body>
+  <main class="sheet">
+    <header>
+      <p class="eyebrow">Phase 1 · LibreWolf WebExtension</p>
+      <h1>Welcome to darkstr</h1>
+      <p class="lede">
+        darkstr makes trackers’ data worse and less linkable.
+        It is a <strong>pollution tool</strong>.
+      </p>
+    </header>
+
+    <section class="banner" aria-label="What darkstr is not">
+      <p>It is <strong>not</strong> an anti-detect browser.</p>
+      <p>It is <strong>not</strong> a Cloudflare bypass.</p>
+      <p>It is <strong>not</strong> official LibreWolf.</p>
+    </section>
+
+    <section>
+      <h2>Two modes. XOR. Never stacked.</h2>
+      <p>
+        LibreWolf Resist Fingerprinting (RFP) makes everyone look the same.
+        Duppel’s pollution engine makes a coherent <em>different</em> persona.
+        Running both at once creates lie-detection contradictions and is refused.
+      </p>
+
+      <fieldset class="modes">
+        <legend>Choose a mode</legend>
+        <label class="card">
+          <input type="radio" name="mode" value="homogeneous" checked>
+          <div>
+            <strong>Homogeneous</strong>
+            <span>Stock LibreWolf RFP. You look like other LibreWolf users. darkstr does not apply a Duppel persona.</span>
+          </div>
+        </label>
+        <label class="card">
+          <input type="radio" name="mode" value="pollution">
+          <div>
+            <strong>Pollution</strong>
+            <span>Duppel persona + tracker chaff. RFP must be off. darkstr will refuse Pollution if an RFP probe looks positive.</span>
+          </div>
+        </label>
+      </fieldset>
+    </section>
+
+    <section id="rfpSteps" class="rfp hidden">
+      <h2>Pollution requires RFP off</h2>
+      <ol>
+        <li>Open <code>about:config</code> in this LibreWolf profile.</li>
+        <li>Set <code>privacy.resistFingerprinting</code> to <code>false</code>.</li>
+        <li>Set <code>privacy.fingerprintingProtection</code> to <code>false</code> (do not leave FPP on as a silent stack).</li>
+        <li>Restart LibreWolf, reload this page, then continue.</li>
+      </ol>
+      <p class="note">
+        LibreWolf maintainers warn that customizing RFP metrics makes you unique and hurts the anonymity set.
+        Pollution is a different product: we turn RFP <em>off</em> rather than tweak it.
+      </p>
+    </section>
+
+    <section>
+      <h2>Native-Compatible is independent</h2>
+      <p>
+        Banking, SSO, and high-posture sites can break under a spoofed persona.
+        Native-Compatible restores native identity behavior without changing your mode.
+        It is not a Cloudflare-defeat switch.
+      </p>
+      <label class="row">
+        <input type="checkbox" id="nativeCompatible">
+        Start with Native-Compatible on (you can flip this later in the panel)
+      </label>
+    </section>
+
+    <section>
+      <h2>Site access</h2>
+      <p>
+        Firefox treats host permissions as revocable. Pollution needs access to
+        websites for DNR, scripting, and the later Duppel port.
+      </p>
+      <button type="button" id="grantPerms" class="btn secondary">Grant site access</button>
+      <p id="permStatus" class="status" role="status"></p>
+    </section>
+
+    <footer>
+      <button type="button" id="continue" class="btn primary">Continue</button>
+      <p id="formError" class="error" role="alert"></p>
+      <p class="fineprint">
+        Phase 1 is a Firefox WebExtension on stock LibreWolf.
+        We are not rewriting LibreWolf in Rust in this phase.
+        Brand: <strong>darkstr</strong>. Upstream recipe: LibreWolf.
+      </p>
+    </footer>
+  </main>
+  <script src="first-run.js"></script>
+</body>
+</html>

@@ -1,0 +1,41 @@
+[
+  {
+    "id": 1,
+    "priority": 1,
+    "action": {
+      "type": "modifyHeaders",
+      "requestHeaders": [
+        { "header": "Sec-GPC", "operation": "set", "value": "1" }
+      ]
+    },
+    "condition": {
+      "urlFilter": "*",
+      "resourceTypes": ["main_frame", "sub_frame", "xmlhttprequest"]
+    }
+  },
+  {
+    "id": 2,
+    "priority": 1,
+    "action": {
+      "type": "redirect",
+      "redirect": {
+        "transform": {
+          "queryTransform": {
+            "removeParams": [
+              "utm_source", "utm_medium", "utm_campaign",
+              "utm_term", "utm_content", "utm_id",
+              "fbclid", "gclid", "dclid",
+              "msclkid", "yclid", "twclid",
+              "mc_eid", "_ga", "_gl",
+              "wbraid", "gbraid"
+            ]
+          }
+        }
+      }
+    },
+    "condition": {
+      "urlFilter": "*",
+      "resourceTypes": ["main_frame", "sub_frame"]
+    }
+  }
+]

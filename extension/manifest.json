@@ -1,0 +1,76 @@
+{
+  "manifest_version": 3,
+  "name": "darkstr",
+  "version": "0.1.0",
+  "description": "Pollution tool for LibreWolf. Homogeneous XOR Pollution + independent Native-Compatible. Not anti-detect, not a Cloudflare bypass, not official LibreWolf.",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "darkstr@alex-hinojosa",
+      "strict_min_version": "128.0"
+    }
+  },
+  "permissions": [
+    "storage",
+    "scripting",
+    "tabs",
+    "webNavigation",
+    "declarativeNetRequest",
+    "alarms",
+    "cookies",
+    "privacy"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "optional_host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "scripts": [
+      "lib/prefs.js",
+      "lib/modes.js",
+      "background.js"
+    ]
+  },
+  "action": {
+    "default_title": "darkstr",
+    "default_popup": "popup/popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "sidebar_action": {
+    "default_title": "darkstr",
+    "default_panel": "popup/popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    },
+    "open_at_install": false
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["lib/rfp-probe.js"],
+      "run_at": "document_start",
+      "all_frames": false
+    }
+  ],
+  "declarative_net_request": {
+    "rule_resources": [
+      {
+        "id": "tracking_rules",
+        "enabled": false,
+        "path": "rules/tracking.json"
+      }
+    ]
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "name": "darkstr",
+  "version": "0.1.0-phase1",
+  "private": true,
+  "description": "darkstr Phase 1 — Firefox WebExtension scaffold. Pollution tool, not anti-detect / not Cloudflare bypass. Not official LibreWolf.",
+  "license": "GPL-3.0-only",
+  "scripts": {
+    "test": "node --test tests/xor.test.mjs"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/alex-hinojosa/darkstr.git"
+  }
+}

@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <header>
+    <h1>darkstr</h1>
+    <p class="tag">Pollution tool · not anti-detect · not CF bypass</p>
+  </header>
+
+  <section>
+    <h2>Mode (XOR)</h2>
+    <label class="row"><input type="radio" name="mode" value="homogeneous"> Homogeneous — stock RFP</label>
+    <label class="row"><input type="radio" name="mode" value="pollution"> Pollution — Duppel persona</label>
+    <p id="modeHint" class="hint"></p>
+  </section>
+
+  <section>
+    <h2>Native-Compatible</h2>
+    <label class="row">
+      <input type="checkbox" id="nativeCompatible">
+      Independent of mode. Use for banking / SSO.
+    </label>
+  </section>
+
+  <section id="conflict" class="conflict hidden">
+    RFP looks on while Pollution is selected. Turn
+    <code>privacy.resistFingerprinting</code> off, or switch to Homogeneous.
+    Stacking is refused.
+  </section>
+
+  <section class="meta">
+    <p id="prefsLine" class="mono"></p>
+    <p class="fine">Phase 1 scaffold. Persona bootstrap not injected yet.</p>
+  </section>
+
+  <script src="popup.js"></script>
+</body>
+</html>

@@ -1,0 +1,17 @@
+:root { color-scheme: dark; }
+html, body {
+  margin: 0;
+  width: 320px;
+  background: #141418;
+  color: #f4f4f5;
+  font: 13px/1.45 ui-sans-serif, system-ui, sans-serif;
+}
+header, section { padding: 0.75rem 1rem; border-bottom: 1px solid #2a2a32; }
+h1 { font-size: 1.05rem; margin: 0; }
+h2 { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.06em; color: #a1a1aa; margin: 0 0 0.45rem; }
+.tag, .hint, .fine { color: #a1a1aa; margin: 0.25rem 0 0; }
+.row { display: flex; gap: 0.45rem; align-items: flex-start; margin: 0.35rem 0; }
+.conflict { background: #3b2208; color: #fde68a; border-bottom-color: #7c5a1a; }
+.hidden { display: none; }
+.mono { font-family: ui-monospace, Menlo, monospace; font-size: 11px; word-break: break-all; }
+code { font-family: ui-monospace, Menlo, monospace; }
