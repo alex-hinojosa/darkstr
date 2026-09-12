@@ -79,7 +79,8 @@ Static tracking ruleset follows global `pollutionActive` (mode + global native +
 - Cookie-jar browser UI / per-site cookie allowlist / selective keep
 - Chromium Client Hints SET (Firefox host never selects Chromium personas)
 - Full uBO-parity blocklist (LibreWolf still ships uBO; ours is a slim Pollution companion)
-- Rust crates / LibreWolf fork
+- LibreWolf fork bootstrap (M1+); crate APIs exist under `crates/` (no Gecko FFI yet)
+- WebExt ↔ chrome pref bridge wiring (design: `docs/PREF-BRIDGE.md`)
 
 ## How to read the pin
 

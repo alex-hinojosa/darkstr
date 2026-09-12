@@ -5,8 +5,11 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-description = "darkstr / Duppel chaff / beacon pollution scheduler (Phase 2 stub)"
+description = "darkstr / Duppel chaff / beacon pollution scheduler (Phase 2 control-plane API)"
 publish = false
+
+[dependencies]
+duppel-persona = { path = "../duppel-persona" }
 
 [lib]
 path = "src/lib.rs"

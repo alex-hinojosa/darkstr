@@ -50,7 +50,7 @@ See [docs/PROOF-PIN.md](docs/PROOF-PIN.md).
 - Per-site Native-Compatible map + strict-first-document / next-nav coherence
 - Tracker-cookie purge (Firefox `cookies` API): Domain-list match only — **not** cookie containers
 
-**Still deferred / residuals:** cookie-jar UI / per-site cookie allowlist; full uBO-parity blocklist (LibreWolf still ships uBO); Rust crates; LibreWolf fork.
+**Still deferred / residuals:** cookie-jar UI / per-site cookie allowlist; full uBO-parity blocklist (LibreWolf still ships uBO); LibreWolf fork bootstrap (M1). Rust control-plane crates are past stubs — see [`crates/`](crates/) and [`docs/PREF-BRIDGE.md`](docs/PREF-BRIDGE.md).
 
 ## Install on LibreWolf (temporary add-on)
 
@@ -93,6 +93,7 @@ Expected browser prefs and the forbidden combo: [docs/PROOF-PIN.md](docs/PROOF-P
 ```bash
 npm test
 npm run build
+cd crates && cargo test
 ```
 
 ## Layout
