@@ -27,6 +27,7 @@
   ],
   "background": {
     "scripts": [
+      "lib/sites.js",
       "lib/prefs.js",
       "lib/modes.js",
       "lib/profiles.js",

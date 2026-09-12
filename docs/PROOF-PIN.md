@@ -11,10 +11,16 @@ Stored in `browser.storage.local`.
 |-----|------|--------------|---------|
 | `darkstr.mode` | string | `homogeneous` \| `pollution` | `homogeneous` |
 | `darkstr.nativeCompatible` | boolean | `true` \| `false` | `false` |
+| `darkstr.nativeCompatSites` | object | `{ [etld1]: true }` | `{}` |
+| `darkstr.strictFirstDoc` | boolean | `true` \| `false` | `true` |
 
 XOR: `darkstr.mode` is a single enum. There is no combined value. Illegal strings coerce to `homogeneous`.
 
-`darkstr.nativeCompatible` is **independent** of mode. It does not rewrite `darkstr.mode`.
+`darkstr.nativeCompatible` is **independent** of mode. It does not rewrite `darkstr.mode`. Global escape: when `true`, all Pollution surfaces stay off.
+
+`darkstr.nativeCompatSites` is a **per-site** escape map (eTLD+1 → `true`). Independent of mode and of the global bool. When Pollution is armed globally, sites in this map skip MAIN inject, tab-scoped UA DNR, and chaff. Mode stays `pollution`.
+
+`darkstr.strictFirstDoc` is independent of XOR. When `true` (default), the first navigation for a tab stays native; a main_frame-only session DNR rule arms the **next** navigation’s HTTP UA, then MAIN inject + full tab-scoped DNR run as usual. Does not stack RFP+pollution.
 
 Internal (not a product pin): `darkstr.firstRunDone`, `darkstr.hostPermsOk`, `darkstr.chaosLevel`, `darkstr.stats`.
 
@@ -46,12 +52,15 @@ Extension heuristic: timezone `UTC` ⇒ `rfpConflict`, Pollution surfaces stay o
 
 ## Activation matrix
 
-| mode | nativeCompatible | RFP likely | persona MAIN inject / tab UA DNR / tracking rules / chaff |
-|------|------------------|------------|-----------------------------------------------------------|
-| homogeneous | * | * | off |
-| pollution | false | false | **on** |
-| pollution | true | false | off (native escape) |
-| pollution | * | true | off (`rfp_xor_pollution`) |
+| mode | nativeCompatible (global) | site in nativeCompatSites | RFP likely | persona MAIN inject / tab UA DNR / chaff |
+|------|---------------------------|---------------------------|------------|------------------------------------------|
+| homogeneous | * | * | * | off |
+| pollution | true | * | false | off (global native escape) |
+| pollution | false | yes | false | off for that site only |
+| pollution | false | no | false | **on** (strict-first-doc may delay first nav) |
+| pollution | * | * | true | off (`rfp_xor_pollution`) |
+
+Static tracking ruleset follows global `pollutionActive` (mode + global native + RFP), not the per-site map.
 
 ## What ships in this Phase 1 drop
 
@@ -61,11 +70,11 @@ Extension heuristic: timezone `UTC` ⇒ `rfpConflict`, Pollution surfaces stay o
 - Success-driven tab-scoped User-Agent DNR; Firefox personas **REMOVE** Client Hints (A1)
 - Static DNR ruleset (off until Pollution active): third-party Referer strip, Sec-GPC, tracking-param strip
 - `bridge.js` + `poisoner.js` chaff gated to Pollution only
+- Per-site Native-Compatible map (`darkstr.nativeCompatSites`) with popup add-current / list / remove
+- Strict-first-document / next-nav coherence (`darkstr.strictFirstDoc`, default on)
 
 ## Deferred (still not a Proof fail for this PR)
 
-- Per-site Native-Compatible map (`nativeCompatSites`)
-- Strict-first-document / success-driven full Duppel DNR lifecycle parity
 - Cookie clean UI
 - Chromium Client Hints SET (Firefox host never selects Chromium personas)
 - Tracker blocklist (LibreWolf ships uBO)
@@ -74,18 +83,22 @@ Extension heuristic: timezone `UTC` ⇒ `rfpConflict`, Pollution surfaces stay o
 ## How to read the pin
 
 1. Toolbar badge: `H` = homogeneous, `P` = pollution selected, `RFP` = conflict.
-2. Popup footer prints `darkstr.mode=… · darkstr.nativeCompatible=…`.
+2. Popup footer prints `darkstr.mode=… · darkstr.nativeCompatible=… · sites=N · strictFirstDoc=…`.
 3. With Pollution armed and RFP off, popup shows Current persona (UA / platform / screen / GPU / TZ).
-4. `about:debugging` → Inspect darkstr → Storage → Extension storage / Session storage.
-5. `about:config` for the two `privacy.*` prefs above.
-6. Optional: CreepJS / BrowserLeaks on a Pollution profile — expect coherent Firefox-family persona, not stock RFP UTC letterbox.
+4. Native-Compatible section: global checkbox + **This site** (eTLD+1) + list with Remove.
+5. `about:debugging` → Inspect darkstr → Storage → Extension storage / Session storage.
+6. `about:config` for the two `privacy.*` prefs above.
+7. Optional: CreepJS / BrowserLeaks on a Pollution profile — expect coherent Firefox-family persona, not stock RFP UTC letterbox. With strict-first-doc on, expect native on first nav of a tab, persona after next nav.
 
 ## How Proof should re-test
 
 1. Temporary-load `extension/` on LibreWolf (dedicated profile).
 2. Homogeneous: leave RFP on → badge `H`, no persona panel, DNR ruleset disabled.
 3. Pollution without turning RFP off → badge `RFP`, persona/chaff gated.
-4. Pollution with RFP+FPP false → badge `P`, persona shown, MAIN inject on https navigation, Sec-GPC / utm strip active, chaff queue works on interaction.
-5. Toggle Native-Compatible on while Pollution selected → surfaces off, mode stays `pollution`.
-6. Rotate identity → new UA in panel, tabs reload.
-7. `npm test` for XOR + profile seed determinism.
+4. Pollution with RFP+FPP false → badge `P`, persona shown. With **strictFirstDoc** on: first https nav stays native; second nav gets MAIN inject + tab UA. Sec-GPC / utm strip active when Pollution armed; chaff queue works on interaction.
+5. Toggle global Native-Compatible on while Pollution selected → surfaces off, mode stays `pollution`.
+6. Add current site via **This site** Native-Compatible → that eTLD+1 skips persona/chaff; other sites still polluted; mode stays `pollution`. Remove from list → surfaces return.
+7. Toggle strict-first-doc off → inject on first committed nav (success-driven path without arm delay).
+8. Rotate identity → new UA in panel, tabs reload.
+9. Quiet / Balanced / Loud labels and PM copy unchanged.
+10. `npm test` for XOR + profile seed determinism + eTLD+1 / sites prefs.

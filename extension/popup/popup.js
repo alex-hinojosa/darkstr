@@ -3,6 +3,10 @@
 const B = typeof browser !== "undefined" ? browser : chrome;
 const modeHint = document.getElementById("modeHint");
 const nativeCompatible = document.getElementById("nativeCompatible");
+const nativeCompatSiteToggle = document.getElementById("nativeCompatSiteToggle");
+const nativeCompatSiteLabel = document.getElementById("nativeCompatSiteLabel");
+const nativeCompatSiteList = document.getElementById("nativeCompatSiteList");
+const strictFirstDoc = document.getElementById("strictFirstDoc");
 const conflict = document.getElementById("conflict");
 const prefsLine = document.getElementById("prefsLine");
 const persona = document.getElementById("persona");
@@ -11,6 +15,8 @@ const chaosDesc = document.getElementById("chaosDesc");
 const statsLine = document.getElementById("statsLine");
 const rotateBtn = document.getElementById("rotateBtn");
 const fireBeaconsBtn = document.getElementById("fireBeaconsBtn");
+
+let currentEtld1 = "";
 
 const chaosDescriptions = {
   quiet: "Low-volume coherent chaff, long intervals (8–20 min).",
@@ -37,6 +43,40 @@ function paintProfile(profile) {
     `${profile.hardwareConcurrency || "—"} / ${profile.deviceMemory || "—"} GB`;
 }
 
+function paintSiteList(sitesMap) {
+  const sites = Object.keys(sitesMap || {}).sort();
+  nativeCompatSiteList.innerHTML = "";
+  if (!sites.length) {
+    const li = document.createElement("li");
+    li.className = "hint";
+    li.textContent = "No per-site entries yet.";
+    nativeCompatSiteList.appendChild(li);
+    return;
+  }
+  for (const etld1 of sites) {
+    const li = document.createElement("li");
+    const name = document.createElement("span");
+    name.className = "mono";
+    name.textContent = etld1;
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "btn tiny secondary";
+    btn.textContent = "Remove";
+    btn.dataset.etld1 = etld1;
+    btn.addEventListener("click", async () => {
+      const state = await B.runtime.sendMessage({
+        type: "removeNativeCompatSite",
+        etld1,
+      });
+      paint(state);
+      await refreshSiteToggle();
+    });
+    li.appendChild(name);
+    li.appendChild(btn);
+    nativeCompatSiteList.appendChild(li);
+  }
+}
+
 function paint(state) {
   if (!state || !state.prefs) return;
   const mode = state.prefs["darkstr.mode"];
@@ -44,6 +84,7 @@ function paint(state) {
     el.checked = el.value === mode;
   });
   nativeCompatible.checked = state.prefs["darkstr.nativeCompatible"] === true;
+  strictFirstDoc.checked = state.prefs["darkstr.strictFirstDoc"] !== false;
   const act = state.activation || {};
   conflict.classList.toggle("hidden", !act.rfpConflict);
 
@@ -59,11 +100,18 @@ function paint(state) {
         ? "Pollution armed. MAIN-world persona inject + chaff run on http(s) pages."
         : "Homogeneous. LibreWolf RFP owns the fingerprint path. Extension surfaces off.";
 
+  const siteCount = Object.keys(state.prefs["darkstr.nativeCompatSites"] || {}).length;
   prefsLine.textContent =
     "darkstr.mode=" +
     mode +
     " · darkstr.nativeCompatible=" +
-    String(state.prefs["darkstr.nativeCompatible"] === true);
+    String(state.prefs["darkstr.nativeCompatible"] === true) +
+    " · sites=" +
+    siteCount +
+    " · strictFirstDoc=" +
+    String(state.prefs["darkstr.strictFirstDoc"] !== false);
+
+  paintSiteList(state.prefs["darkstr.nativeCompatSites"] || state.nativeCompatSites);
 
   if (armed && state.profile) paintProfile(state.profile);
 
@@ -81,9 +129,40 @@ function paint(state) {
   }
 }
 
+async function refreshSiteToggle() {
+  try {
+    const tabs = await B.tabs.query({ active: true, currentWindow: true });
+    const tab = tabs && tabs[0];
+    let hostname = "";
+    if (tab && tab.url && /^https?:/i.test(tab.url)) {
+      hostname = new URL(tab.url).hostname;
+    }
+    if (!hostname) {
+      currentEtld1 = "";
+      nativeCompatSiteLabel.textContent = "(no http(s) tab)";
+      nativeCompatSiteToggle.checked = false;
+      nativeCompatSiteToggle.disabled = true;
+      return;
+    }
+    const resp = await B.runtime.sendMessage({
+      type: "getNativeCompatSite",
+      hostname,
+    });
+    currentEtld1 = (resp && resp.etld1) || hostname;
+    nativeCompatSiteLabel.textContent = currentEtld1;
+    nativeCompatSiteToggle.disabled = false;
+    nativeCompatSiteToggle.checked = !!(resp && resp.enabled);
+  } catch (_) {
+    currentEtld1 = "";
+    nativeCompatSiteLabel.textContent = "—";
+    nativeCompatSiteToggle.disabled = true;
+  }
+}
+
 async function refresh() {
   const state = await B.runtime.sendMessage({ type: "getState" });
   paint(state);
+  await refreshSiteToggle();
 }
 
 document.querySelectorAll('input[name="mode"]').forEach((el) => {
@@ -98,6 +177,28 @@ nativeCompatible.addEventListener("change", async () => {
   const state = await B.runtime.sendMessage({
     type: "setNativeCompatible",
     enabled: nativeCompatible.checked,
+  });
+  paint(state);
+});
+
+nativeCompatSiteToggle.addEventListener("change", async () => {
+  if (!currentEtld1) {
+    nativeCompatSiteToggle.checked = false;
+    return;
+  }
+  const state = await B.runtime.sendMessage({
+    type: "setNativeCompatSite",
+    hostname: currentEtld1,
+    enabled: nativeCompatSiteToggle.checked,
+  });
+  paint(state);
+  await refreshSiteToggle();
+});
+
+strictFirstDoc.addEventListener("change", async () => {
+  const state = await B.runtime.sendMessage({
+    type: "setStrictFirstDoc",
+    enabled: strictFirstDoc.checked,
   });
   paint(state);
 });

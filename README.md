@@ -19,12 +19,19 @@ Chrome Duppel stays at https://github.com/alex-hinojosa/duppel. This tree is the
 | **Homogeneous** | Stock LibreWolf RFP. You look like other LibreWolf users. darkstr does not apply a Duppel persona. |
 | **Pollution** | Duppel persona path (MAIN-world bootstrap + chaff + slim DNR). RFP **must** be off. Stacking RFP + Pollution is refused. |
 
-**Native-Compatible** is independent (`darkstr.nativeCompatible` bool). It restores native identity for banking / SSO without changing the mode enum. It is not a Cloudflare-defeat switch.
+**Native-Compatible** is independent of mode:
+
+- Global: `darkstr.nativeCompatible` bool — restores native identity for banking / SSO without changing the mode enum. Not a Cloudflare-defeat switch.
+- Per-site: `darkstr.nativeCompatSites` map (eTLD+1) — same escape for individual sites while Pollution stays selected elsewhere.
+
+**Strict first-document** (`darkstr.strictFirstDoc`, default on): first nav stays native; next nav gets persona UA on main_frame then MAIN inject. Independent of XOR.
 
 Provisional prefs (extension storage, Proof pin):
 
 - `darkstr.mode` = `homogeneous` \| `pollution`
 - `darkstr.nativeCompatible` = `bool`
+- `darkstr.nativeCompatSites` = `{ [etld1]: true }`
+- `darkstr.strictFirstDoc` = `bool` (default `true`)
 
 See [docs/PROOF-PIN.md](docs/PROOF-PIN.md).
 
@@ -37,9 +44,10 @@ See [docs/PROOF-PIN.md](docs/PROOF-PIN.md).
 - `bridge.js` + `poisoner.js` chaff **only** when Pollution is actually active
 - Slim DNR: Sec-GPC, tracking-param strip, third-party Referer strip — enabled only when Pollution is active
 - Success-driven tab-scoped User-Agent DNR; Firefox personas **REMOVE** Client Hints (aligns with Duppel A1)
-- Popup/sidebar: mode radios, Native-Compatible, persona inspector, chaff controls
+- Popup/sidebar: mode radios, Native-Compatible (global + per-site list), strict next-nav, persona inspector, Quiet/Balanced/Loud chaff
+- Per-site Native-Compatible map + strict-first-document / next-nav coherence
 
-**Still deferred:** per-site Native-Compatible map, cookie clean UI, strict-first-document DNR, tracker blocklist (uBO), Rust crates, LibreWolf fork.
+**Still deferred:** cookie clean UI, tracker blocklist (uBO), Rust crates, LibreWolf fork.
 
 ## Install on LibreWolf (temporary add-on)
 
@@ -76,7 +84,7 @@ Homogeneous: leave RFP on (LibreWolf default).
 
 Package path: **`extension/`**
 
-Expected keys: `darkstr.mode`, `darkstr.nativeCompatible`.  
+Expected keys: `darkstr.mode`, `darkstr.nativeCompatible`, `darkstr.nativeCompatSites`, `darkstr.strictFirstDoc`.  
 Expected browser prefs and the forbidden combo: [docs/PROOF-PIN.md](docs/PROOF-PIN.md).
 
 ```bash
