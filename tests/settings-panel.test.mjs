@@ -18,7 +18,7 @@ const manifest = JSON.parse(
   readFileSync(join(root, "extension/manifest.json"), "utf8")
 );
 
-test("options_ui points at chrome-prefs settings panel", () => {
+test("options_ui points at browser prefs settings panel", () => {
   assert.equal(manifest.options_ui.page, "settings/settings.html");
   assert.equal(manifest.options_ui.open_in_tab, true);
 });
@@ -44,6 +44,8 @@ test("settings panel lists PREF-BRIDGE chrome / about:config names", () => {
   assert.match(settingsHtml, /about:config/);
   assert.match(settingsHtml, /privacy\.resistFingerprinting/);
   assert.match(settingsHtml, /privacy\.fingerprintingProtection/);
+  assert.match(settingsHtml, /domain map/);
+  assert.doesNotMatch(settingsHtml, /\{\s*\[etld1\]:\s*true\s*\}/);
 });
 
 test("XOR implications: Pollution kills RFP/FPP; Homogeneous stock RFP; no metric customization", () => {
@@ -52,6 +54,8 @@ test("XOR implications: Pollution kills RFP/FPP; Homogeneous stock RFP; no metri
   assert.match(settingsJs, /must be false/i);
   assert.match(settingsJs, /No RFP metric customization/i);
   assert.match(settingsJs, /stock LibreWolf RFP/i);
+  assert.match(settingsJs, /Persona and chaff stay idle/);
+  assert.doesNotMatch(settingsJs, /chaff crates/);
 });
 
 test("PM-approved positioning copy (pollution, not Cloudflare bypass)", () => {
@@ -69,9 +73,9 @@ test("settings panel points at patches apply script for fork builds", () => {
   assert.match(settingsHtml, /patches\/README\.md/);
 });
 
-test("popup links to chrome-prefs panel and keeps Quiet/Balanced/Loud", () => {
+test("popup links to browser prefs panel and keeps Quiet/Balanced/Loud", () => {
   assert.match(popupHtml, /openSettingsBtn/);
-  assert.match(popupHtml, /Open chrome-prefs panel/);
+  assert.match(popupHtml, /Open browser prefs panel/);
   assert.match(popupHtml, /data-level="quiet"/);
   assert.match(popupHtml, /data-level="balanced"/);
   assert.match(popupHtml, /data-level="loud"/);

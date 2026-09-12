@@ -28,7 +28,7 @@ function xorCopy(mode) {
       "Stock LibreWolf RFP anonymity set. Expect " +
       "<code>privacy.resistFingerprinting</code> <strong>true</strong>; leave FPP on LibreWolf defaults.<br>" +
       "<strong>No RFP metric customization</strong> — do not tweak letterboxing / spoof RFP surfaces. " +
-      "Persona and chaff crates stay idle.",
+      "Persona and chaff stay idle.",
   };
 }
 
