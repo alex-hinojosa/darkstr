@@ -42,12 +42,13 @@ See [docs/PROOF-PIN.md](docs/PROOF-PIN.md).
 - Real persona generation (`extension/lib/profiles.js`), Firefox + host-OS filtered (Linux included)
 - MAIN-world anti-fingerprint bootstrap via `scripting.executeScript({ world: "MAIN" })` (Firefox 128+)
 - `bridge.js` + `poisoner.js` chaff **only** when Pollution is actually active
-- Slim DNR: Sec-GPC, tracking-param strip, third-party Referer strip — enabled only when Pollution is active
+- Slim DNR: Sec-GPC, tracking-param strip, third-party Referer strip, plus a chaff-safe tracker **block** list — enabled only when Pollution is active
 - Success-driven tab-scoped User-Agent DNR; Firefox personas **REMOVE** Client Hints (aligns with Duppel A1)
-- Popup/sidebar: mode radios, Native-Compatible (global + per-site list), strict next-nav, persona inspector, Quiet/Balanced/Loud chaff
+- Popup/sidebar: mode radios, Native-Compatible (global + per-site list), strict next-nav, persona inspector, Quiet/Balanced/Loud chaff, tracker-cookie purge
 - Per-site Native-Compatible map + strict-first-document / next-nav coherence
+- Tracker-cookie purge (Firefox `cookies` API): Domain-list match only — **not** cookie containers
 
-**Still deferred:** cookie clean UI, tracker blocklist (uBO), Rust crates, LibreWolf fork.
+**Still deferred / residuals:** cookie-jar UI / per-site cookie allowlist; full uBO-parity blocklist (LibreWolf still ships uBO); Rust crates; LibreWolf fork.
 
 ## Install on LibreWolf (temporary add-on)
 
@@ -107,7 +108,8 @@ extension/                 load this in LibreWolf
   lib/profiles.js          persona generation (Duppel-aligned)
   lib/rfp-probe.js         UTC-timezone heuristic
   popup/                   toolbar + sidebar panel
-  rules/tracking.json      slim DNR (off until Pollution is active)
+  rules/tracking.json      slim DNR + chaff-safe tracker blocks (off until Pollution)
+  lib/tracker-cookies.js   known-tracker Domain list + purge helpers
   src/content/anti-fingerprint/   bootstrap source (esbuild)
 docs/
   PHASE1-CONSTRAINTS.md

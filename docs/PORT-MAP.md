@@ -17,10 +17,10 @@ Chrome surfaces today: `background.js`, `bridge.js`, `anti-fingerprint-bootstrap
 | MAIN-world bootstrap | `executeScript({ world: "MAIN" })` from built `anti-fingerprint-bootstrap.js` | **Shipped** |
 | `bridge.js` | ISOLATED content script; chaff queue | **Shipped** (pollution-gated; per-site aware) |
 | `poisoner.js` + alarms | Chaff scheduler | **Shipped** (pollution-gated) |
-| `rules/tracking.json` | GPC + tracking-param strip + 3p Referer strip; no Chrome blocklist / no static CH strip | **Shipped** |
+| `rules/tracking.json` | GPC + tracking-param strip + 3p Referer strip + slim tracker **block** list; no `ping`; no bare `facebook.com`; no static CH strip | **Shipped** |
 | Tab-scoped UA DNR | Success-driven after MAIN inject; Firefox personas REMOVE CH (A1) | **Shipped** |
-| Popup / sidebar | Mode radios + Native-Compatible (global + per-site) + strict-next-nav + persona + Quiet/Balanced/Loud | **Shipped** |
-| `cookies` clean | — | **Deferred** |
+| Popup / sidebar | Mode radios + Native-Compatible (global + per-site) + strict-next-nav + persona + Quiet/Balanced/Loud + tracker-cookie purge | **Shipped** |
+| `cookies` clean | Tracker Domain-list purge UI + 15‑min alarm (`lib/tracker-cookies.js`); not containers; residuals: jar UI / allowlist | **Shipped** (residuals documented) |
 | Client Hints SET (Chromium) | N/A on Firefox host; REMOVE path shipped | **Depends on host** |
 | Playwright / CreepJS matrix | LibreWolf-headed | **Proof** |
 

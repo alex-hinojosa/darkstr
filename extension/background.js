@@ -3,11 +3,12 @@
  *
  * Owns XOR mode prefs, session persona seed, MAIN-world bootstrap inject,
  * success-driven tab-scoped UA/CH DNR, per-site Native-Compatible,
- * strict-first-document next-nav arming, and pollution-gated chaff.
+ * strict-first-document next-nav arming, pollution-gated chaff, and
+ * tracker-cookie purge (Firefox cookies API — not containers).
  *
  * Scripts loaded via manifest background.scripts (no importScripts):
- *   lib/sites.js, lib/prefs.js, lib/modes.js, lib/profiles.js, poisoner.js,
- *   anti-fingerprint-bootstrap.js, background.js
+ *   lib/sites.js, lib/tracker-cookies.js, lib/prefs.js, lib/modes.js,
+ *   lib/profiles.js, poisoner.js, anti-fingerprint-bootstrap.js, background.js
  */
 "use strict";
 
@@ -18,6 +19,7 @@ const STRICT_ARM_BASE = 9100;
 const STRICT_ARM_MAX = 9899;
 const CHAFF_ALARM = "firePoisonBeacons";
 const ROTATE_ALARM = "rotateIdentity";
+const COOKIE_ALARM = "cleanTrackerCookies";
 
 const PERSONA_STATE = {
   sessionSeed: 0,
@@ -29,6 +31,7 @@ const PERSONA_STATE = {
     fakeBeaconsFired: 0,
     identityRotations: 0,
     domChaffApplied: 0,
+    cookiesCleaned: 0,
   },
 };
 
@@ -366,6 +369,68 @@ async function revokeBootstrap(tabId, { keepStrictArm = false } = {}) {
   }
 }
 
+
+async function hostPermissionsGranted() {
+  try {
+    return await B.permissions.contains({ origins: ["<all_urls>"] });
+  } catch (_) {
+    return false;
+  }
+}
+
+/**
+ * Purge cookies whose Domain matches the static known-tracker list.
+ * Honest scope: list match only. Not cookie containers. Not a first-party wipe.
+ * Requires host access; callers should surface permission errors to the UI.
+ */
+async function cleanTrackerCookies() {
+  const granted = await hostPermissionsGranted();
+  if (!granted) {
+    return { cleaned: 0, error: "host_permissions_required", scanned: 0 };
+  }
+  if (typeof selectTrackerCookies !== "function" || typeof cookieRemoveUrl !== "function") {
+    return { cleaned: 0, error: "tracker_cookies_lib_missing", scanned: 0 };
+  }
+  try {
+    const cookies = await B.cookies.getAll({});
+    const targets = selectTrackerCookies(cookies || []);
+    let cleaned = 0;
+    for (const cookie of targets) {
+      const url = cookieRemoveUrl(cookie);
+      if (!url || !cookie.name) continue;
+      try {
+        const removed = await B.cookies.remove({ url, name: cookie.name });
+        if (removed) cleaned += 1;
+      } catch (_) {
+        /* best-effort per cookie */
+      }
+    }
+    if (cleaned > 0) {
+      PERSONA_STATE.stats.cookiesCleaned =
+        (PERSONA_STATE.stats.cookiesCleaned || 0) + cleaned;
+      await persistPersonaStats();
+    }
+    return { cleaned, scanned: (cookies || []).length, matched: targets.length };
+  } catch (err) {
+    return {
+      cleaned: 0,
+      error: String(err && err.message ? err.message : err),
+      scanned: 0,
+    };
+  }
+}
+
+function scheduleCookieClean() {
+  // Independent of XOR: tracker-cookie purge helps in both modes when hosts are granted.
+  B.alarms.create(COOKIE_ALARM, { periodInMinutes: 15 });
+}
+
+async function clearCookieCleanAlarm() {
+  try {
+    await B.alarms.clear(COOKIE_ALARM);
+  } catch (_) {}
+}
+
 function scheduleChaff() {
   if (!pollutionSurfacesArmed()) {
     B.alarms.clear(CHAFF_ALARM).catch(() => {});
@@ -466,6 +531,13 @@ async function applyActivation() {
       await B.alarms.clear(CHAFF_ALARM);
       await B.alarms.clear(ROTATE_ALARM);
     } catch (_) {}
+  }
+
+  // Cookie purge alarm is XOR-independent; only needs host access.
+  if (await hostPermissionsGranted()) {
+    scheduleCookieClean();
+  } else {
+    await clearCookieCleanAlarm();
   }
 
   try {
@@ -594,6 +666,10 @@ B.tabs.onRemoved.addListener((tabId) => {
 });
 
 B.alarms.onAlarm.addListener(async (alarm) => {
+  if (alarm.name === COOKIE_ALARM) {
+    await cleanTrackerCookies();
+    return;
+  }
   if (!pollutionSurfacesArmed()) return;
   if (alarm.name === CHAFF_ALARM) {
     await queueChaffToActiveTab();
@@ -818,6 +894,19 @@ B.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         const disabled =
           !pollutionSurfacesArmed() || siteIsNativeCompat(hostname);
         reply({ ok: true, disabled });
+        return;
+      }
+
+      case "cleanCookiesNow": {
+        const result = await cleanTrackerCookies();
+        reply({
+          ok: !result.error,
+          cleaned: result.cleaned || 0,
+          scanned: result.scanned || 0,
+          matched: result.matched || 0,
+          error: result.error || null,
+          ...publicState(),
+        });
         return;
       }
 
