@@ -24,9 +24,18 @@ Chrome surfaces today: `background.js`, `bridge.js`, `anti-fingerprint-bootstrap
 | Client Hints SET (Chromium) | N/A on Firefox host; REMOVE path shipped | **Depends on host** |
 | Playwright / CreepJS matrix | LibreWolf-headed | **Proof** |
 
-## Phase 2 — Rust crates + LibreWolf-based fork (not this drop)
+## Phase 2 — Rust crates + LibreWolf-based fork
 
-Unchanged from prior scaffold: `duppel-persona`, `duppel-chaff`, `duppel-coherence`, necko UA, in-engine canvas/WebGL, DocShell strict-nav, auto-RFP-off, fork distribution.
+Plan: [`PHASE-2-PLAN.md`](PHASE-2-PLAN.md). Crates stubs: [`../crates/`](../crates/).
+
+| Item | Status |
+|------|--------|
+| `duppel-persona` / `duppel-chaff` / `duppel-coherence` stubs | **Scaffolded** (no Gecko FFI yet) |
+| Pref bridge WebExt → chrome (`darkstr.mode` / `darkstr.nativeCompatible`) | **Planned** |
+| Private LibreWolf-based fork bootstrap + CI | **Planned** |
+| Auto RFP/FPP off on Pollution | **Planned** (fork only) |
+| Native UA/CH + DocShell strict-nav + in-engine noise | **Planned** (M3→Phase 3) |
+| Servo / Ladybird | **Track D research only** — not ship path |
 
 ## Explicit non-ports
 

@@ -1,0 +1,18 @@
+# darkstr Phase 2 — Rust control-plane workspace (stubs).
+# GPL-3.0-only. Not official LibreWolf.
+# These crates are the future source of truth for persona / chaff / coherence.
+# They are NOT a Gecko rewrite. Wiring into a LibreWolf-based fork is Phase 2+.
+
+[workspace]
+resolver = "2"
+members = [
+    "duppel-persona",
+    "duppel-chaff",
+    "duppel-coherence",
+]
+
+[workspace.package]
+edition = "2021"
+license = "GPL-3.0-only"
+repository = "https://github.com/alex-hinojosa/darkstr"
+authors = ["Alexander Hinojosa"]
