@@ -1,0 +1,14 @@
+# STUB — not a real unified diff. Marker comments / empty hooks only until M3+.
+#
+# Intent — document call sites (see docs/GECKO-HOOKS.md §2):
+#   nsHttp / nsHttpHandler     -> User-Agent + Client-Hints REMOVE (Firefox personas)
+#   Navigator DOM bindings     -> platform / HW from same persona seed
+#   DocShell navigation        -> darkstr.strictFirstDoc first-nav vs next-nav
+#   Canvas / WebGL / Audio     -> later (M4+); seed from PersonaSnapshot
+#
+# Glue reads cached snapshot from duppel-persona only when pollution_active.
+# WebExt MAIN inject disabled (feature flag) when native path is on.
+#
+# Out of scope for this stub: full canvas pipeline, TLS fingerprint games.
+#
+# Brand: darkstr — not official LibreWolf.

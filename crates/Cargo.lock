@@ -3,6 +3,13 @@
 version = 4
 
 [[package]]
+name = "duppel-bridge"
+version = "0.1.0"
+dependencies = [
+ "duppel-persona",
+]
+
+[[package]]
 name = "duppel-chaff"
 version = "0.0.0"
 dependencies = [

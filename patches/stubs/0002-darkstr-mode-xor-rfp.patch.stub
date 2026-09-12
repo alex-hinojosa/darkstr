@@ -1,0 +1,18 @@
+# STUB — not a real unified diff. Replace when chrome pref observers land (M2).
+#
+# Intent:
+#   Pref observer on darkstr.mode / darkstr.nativeCompatible:
+#     Pollution  -> privacy.resistFingerprinting = false
+#                   privacy.fingerprintingProtection = false
+#                   enable duppel-persona / duppel-chaff path (unless nativeCompatible)
+#     Homogeneous -> restore LibreWolf stock RFP/FPP expectations
+#                    idle persona/chaff crates
+#                    DO NOT customize RFP metrics / letterboxing tables
+#
+# Call into Rust: duppel_bridge::PrefsApplicator::apply_mode_effects
+# Mirror:         duppel_persona::mode_pref_effects
+#
+# Forbidden (release-fail): darkstr.mode=pollution with RFP still true via prefs path.
+# Proof: docs/PROOF-XOR-CHECKLIST.md
+#
+# Brand: darkstr — not official LibreWolf. No Cloudflare/TLS claims.

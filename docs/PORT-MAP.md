@@ -33,8 +33,10 @@ Plan: [`PHASE-2-PLAN.md`](PHASE-2-PLAN.md). Crates stubs: [`../crates/`](../crat
 | `duppel-persona` / `duppel-chaff` / `duppel-coherence` APIs | **M0.5** — real types/seed/schedule (no Gecko FFI yet) |
 | Pref bridge design (`docs/PREF-BRIDGE.md`, `darkstr.cfg.example`) | **Documented** — wiring is M2 |
 | Proof XOR checklist (`docs/PROOF-XOR-CHECKLIST.md`) | **Documented** |
+| Gecko hook map (`docs/GECKO-HOOKS.md`) + `patches/` stubs | **M0.75 sketch** — no Mozilla vendor |
+| `duppel-bridge` prefs applicator trait | **M0.75** — XPCOM glue later |
 | Private LibreWolf-based fork bootstrap + CI | **Planned** (M1) |
-| Auto RFP/FPP off on Pollution | **Spec'd** in bridge doc; **fork-only** wiring M2 |
+| Auto RFP/FPP off on Pollution | **Spec'd** in bridge/hooks docs; **fork-only** wiring M2 |
 | Native UA/CH + DocShell strict-nav + in-engine noise | **Planned** (M3→Phase 3) |
 | Servo / Ladybird | **Track D research only** — not ship path |
 
