@@ -55,7 +55,7 @@ function resolveActivation(input) {
     rfpConflict,
     pollutionActive,
     homogeneousActive,
-    // Persona MAIN-world inject (Duppel bootstrap) — Phase 1 stub gate only.
+    // Persona MAIN-world inject (Duppel bootstrap) — gated; wired in background.js.
     allowPersonaInject: pollutionActive,
     allowDnrTrackingRules: pollutionActive,
     allowChaff: pollutionActive,
