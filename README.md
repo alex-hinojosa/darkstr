@@ -97,6 +97,8 @@ npm run build
 cd crates && cargo test
 ```
 
+CI on push/PR to `main` runs the same `npm test` and `cd crates && cargo test` jobs (GitHub Actions). Contribution norms (small PRs, Proof XOR gate, no RFP+Pollution stack, PM copy for UI, don’t retag casually): [CONTRIBUTING.md](CONTRIBUTING.md).
+
 ## Layout
 
 ```
@@ -128,6 +130,8 @@ crates/                    Phase 2 Rust control plane (+ duppel-bridge)
 patches/                   Thin LibreWolf apply stubs (no browser vendor)
 tests/
 esbuild.config.mjs
+CONTRIBUTING.md
+.github/workflows/         CI (npm test + cargo test)
 ```
 
 ## License
