@@ -117,9 +117,13 @@ extension/                 load this in LibreWolf
 docs/
   PHASE1-CONSTRAINTS.md
   PHASE-2-PLAN.md          Phase 2 fork + Rust plan
+  PREF-BRIDGE.md           WebExt ↔ chrome prefs
+  GECKO-HOOKS.md           nsHttp / DocShell / canvas call-ins
   PORT-MAP.md
   PROOF-PIN.md
-crates/                    Phase 2 Rust stubs (persona / chaff / coherence)
+  PROOF-XOR-CHECKLIST.md
+crates/                    Phase 2 Rust control plane (+ duppel-bridge)
+patches/                   Thin LibreWolf apply stubs (no browser vendor)
 tests/
 esbuild.config.mjs
 ```

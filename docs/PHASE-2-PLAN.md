@@ -77,6 +77,7 @@ crates/
   duppel-persona/            persona families, seed/rotation, validators
   duppel-chaff/              beacon schedules, endpoints, pollution metrics
   duppel-coherence/          HTTP↔JS assertion harness (Proof QA)
+  duppel-bridge/             prefs applicator trait + hook-site enums (XPCOM later)
 ```
 
 ### `duppel-persona`
@@ -193,9 +194,10 @@ When → `homogeneous`:
 | Path | Role |
 |------|------|
 | `extension/` | Phase 1+ companion WebExt (UI, bridge) |
-| `crates/` | Rust control plane |
-| `docs/` | Plans, Proof pins, constraints |
-| `fork/` or separate private repo | LibreWolf-based tree / patches (may stay private initially) |
+| `crates/` | Rust control plane (+ `duppel-bridge` applicator trait) |
+| `docs/` | Plans, Proof pins, Gecko hook map, constraints |
+| `patches/` | Thin patch stubs + apply script (no browser vendor) |
+| `fork/` or separate private repo | LibreWolf-based tree / real patches (may stay private initially) |
 
 This Phase 2 plan PR scaffolds **docs + crates only**. Full Gecko patch tree can live in a private fork repo to keep `darkstr` public surface reviewable.
 
@@ -244,6 +246,15 @@ Pre-M1 work that does **not** require cloning Mozilla/LibreWolf:
 - [x] Expand Rust crates beyond stubs: persona seed/snapshot + chaff schedule types/APIs (still no Gecko link)
 - [x] Document Pollution auto-kill RFP/FPP and Homogeneous stock RFP restore (no metric customization)
 - [x] Proof XOR checklist for future wiring PRs (`docs/PROOF-XOR-CHECKLIST.md`)
+- [x] PR opened to `alex-hinojosa/darkstr` (PR #6)
+
+### M0.75 — Gecko hook map + patch stubs + prefs applicator (no full fork tree)
+
+Still **no** Mozilla/LibreWolf vendor:
+
+- [x] `docs/GECKO-HOOKS.md` — pref apply, XOR RFP, DocShell / nsHttp / canvas call-ins
+- [x] `patches/` stubs + apply script README (real diffs wait for M1 private tree)
+- [x] `duppel-bridge` prefs applicator trait for future XPCOM glue
 - [ ] PR opened to `alex-hinojosa/darkstr`
 
 ### M1 — Fork bootstrap (4–6 weeks)

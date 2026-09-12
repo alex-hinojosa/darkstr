@@ -1,0 +1,14 @@
+# STUB — not a real unified diff. Replace with a patch against a pinned LibreWolf/Firefox train (M1).
+#
+# Intent:
+#   - Ship darkstr.cfg (or browser/app/profile/darkstr.js) defaults:
+#       defaultPref("darkstr.mode", "homogeneous");
+#       defaultPref("darkstr.nativeCompatible", false);
+#       defaultPref("darkstr.strictFirstDoc", true);
+#   - Optionally declare the same keys in StaticPrefList.yaml / all.js.
+#   - Layer on librewolf.cfg; do not strip LibreWolf Homogeneous RFP defaults.
+#
+# See: docs/GECKO-HOOKS.md §1, docs/darkstr.cfg.example, docs/PREF-BRIDGE.md
+#
+# Brand: darkstr — not official LibreWolf.
+# License: darkstr additions GPL-3.0-only; Gecko file changes remain MPL-2.0.

@@ -1,0 +1,42 @@
+# darkstr patches sketch (LibreWolf-based fork)
+
+**Not** a Mozilla or LibreWolf source tree. **Not** official LibreWolf branding.  
+These stubs document *how* a real bsys6 / LibreWolf recipe would layer darkstr prefs and hooks. Full patch bodies against a pinned Firefox train live in the private fork (M1+).
+
+| Path | Role |
+|------|------|
+| [`stubs/darkstr.cfg`](stubs/darkstr.cfg) | Chrome pref defaults (`darkstr.mode`, …) — same as `docs/darkstr.cfg.example` |
+| [`stubs/0001-darkstr-prefs-defaults.patch.stub`](stubs/0001-darkstr-prefs-defaults.patch.stub) | Prefs / cfg wiring sketch |
+| [`stubs/0002-darkstr-mode-xor-rfp.patch.stub`](stubs/0002-darkstr-mode-xor-rfp.patch.stub) | Pollution kills RFP/FPP; Homogeneous restores stock RFP |
+| [`stubs/0003-darkstr-hook-sites.patch.stub`](stubs/0003-darkstr-hook-sites.patch.stub) | Call-site comments for nsHttp / DocShell / canvas (no logic yet) |
+| [`scripts/apply-darkstr-patches.sh`](scripts/apply-darkstr-patches.sh) | Example apply order for a real tree |
+
+Design pin: [`../docs/GECKO-HOOKS.md`](../docs/GECKO-HOOKS.md). Bridge: [`../docs/PREF-BRIDGE.md`](../docs/PREF-BRIDGE.md).
+
+## Intended apply flow (real fork)
+
+```bash
+# On a machine that already has the LibreWolf/Firefox source + darkstr overlay:
+export DARKSTR_GECKO_ROOT=/path/to/librewolf-based-tree
+./patches/scripts/apply-darkstr-patches.sh
+```
+
+The script:
+
+1. Refuses to run if `DARKSTR_GECKO_ROOT` is unset or missing (safe no-op outside a fork checkout).
+2. Copies `stubs/darkstr.cfg` into the product cfg location (path configurable).
+3. Applies numbered stubs **when** they are replaced with real unified diffs against the pinned train.
+
+Until M1, stubs end in `.patch.stub` so `patch(1)` is not accidentally run against an empty tree.
+
+## Rules
+
+- Homogeneous: stock LibreWolf RFP expectations — **no** RFP metric customization in patches.
+- Pollution: auto-set `privacy.resistFingerprinting` and `privacy.fingerprintingProtection` to `false`.
+- Pref names: `darkstr.mode`, `darkstr.nativeCompatible` only (Proof pin).
+- GPL-3.0 for darkstr glue; respect MPL for upstream Gecko files.
+- No Cloudflare / TLS / anti-detect marketing in patch commit messages.
+
+## Branding
+
+Product name is **darkstr**. Do not ship these patches as “LibreWolf official.” Change about: / icons / name in the private fork branding pass (M1), not by claiming upstream identity.

@@ -112,6 +112,8 @@ Native-Compatible is for banking / SSO — **not** a Cloudflare-defeat switch.
 | On Homogeneous: restore stock RFP/FPP | Builder (M2) | No metric patches |
 | WebExt mirror sync | Builder (M2) | storage ↔ chrome; fork-only privileged API |
 | Disable WebExt MAIN inject when native path on | Builder (M3+) | Feature flag |
+| Gecko call sites (nsHttp / DocShell / canvas) | Builder (M3+) | [`GECKO-HOOKS.md`](GECKO-HOOKS.md); stubs in [`../patches/`](../patches/) |
+| `PrefsApplicator` XPCOM adapter | Builder (M2+) | `duppel_bridge` trait; recording mock for CI |
 
 ---
 
