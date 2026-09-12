@@ -23,6 +23,21 @@
       <input type="checkbox" id="nativeCompatible">
       Independent of mode. Restores native identity for banking / SSO. Not a Cloudflare-defeat switch.
     </label>
+    <label class="row site-row">
+      <input type="checkbox" id="nativeCompatSiteToggle">
+      This site: <span id="nativeCompatSiteLabel" class="mono">—</span>
+    </label>
+    <p class="hint">Per-site map (eTLD+1). Persists. Skips persona / tab UA / chaff for that site only.</p>
+    <ul id="nativeCompatSiteList" class="site-list"></ul>
+  </section>
+
+  <section>
+    <h2>Strict next-nav</h2>
+    <label class="row">
+      <input type="checkbox" id="strictFirstDoc" checked>
+      Strict first-document: first nav stays native; next nav gets persona UA on main_frame then MAIN inject.
+    </label>
+    <p class="hint">Coherence aid where Firefox DNR allows. Does not change XOR mode.</p>
   </section>
 
   <section id="conflict" class="conflict hidden">

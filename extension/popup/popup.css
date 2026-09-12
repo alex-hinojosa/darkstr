@@ -40,3 +40,24 @@ code { font-family: ui-monospace, Menlo, monospace; }
   cursor: pointer;
 }
 .chaos-btn.active { border-color: #2ec4b6; color: #2ec4b6; }
+.site-row { flex-wrap: wrap; }
+.site-list {
+  list-style: none;
+  margin: 0.4rem 0 0;
+  padding: 0;
+  max-height: 7rem;
+  overflow: auto;
+}
+.site-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin: 0.25rem 0;
+}
+.btn.tiny {
+  margin-top: 0;
+  padding: 0.2rem 0.45rem;
+  font-size: 11px;
+  font-weight: 600;
+}

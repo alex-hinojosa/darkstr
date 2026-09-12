@@ -2,10 +2,11 @@
  * darkstr Phase 1 background (Firefox event page — not a Chrome service worker).
  *
  * Owns XOR mode prefs, session persona seed, MAIN-world bootstrap inject,
- * success-driven tab-scoped UA/CH DNR, and pollution-gated chaff.
+ * success-driven tab-scoped UA/CH DNR, per-site Native-Compatible,
+ * strict-first-document next-nav arming, and pollution-gated chaff.
  *
  * Scripts loaded via manifest background.scripts (no importScripts):
- *   lib/prefs.js, lib/modes.js, lib/profiles.js, poisoner.js,
+ *   lib/sites.js, lib/prefs.js, lib/modes.js, lib/profiles.js, poisoner.js,
  *   anti-fingerprint-bootstrap.js, background.js
  */
 "use strict";
@@ -13,6 +14,8 @@
 const B = typeof browser !== "undefined" ? browser : chrome;
 
 const UA_SESSION_RULE_ID = 9001;
+const STRICT_ARM_BASE = 9100;
+const STRICT_ARM_MAX = 9899;
 const CHAFF_ALARM = "firePoisonBeacons";
 const ROTATE_ALARM = "rotateIdentity";
 
@@ -28,6 +31,10 @@ const PERSONA_STATE = {
     domChaffApplied: 0,
   },
 };
+
+/** @type {Map<number, number>} tabId -> session DNR rule id for strict arm */
+const armedTabs = new Map();
+let nextStrictArmRuleId = STRICT_ARM_BASE;
 
 const STATE = {
   prefs: normalizeDarkstrPrefs(DARKSTR_DEFAULTS),
@@ -66,6 +73,18 @@ async function persistPersonaStats() {
   await B.storage.local.set({ "darkstr.stats": PERSONA_STATE.stats });
 }
 
+function nativeCompatSites() {
+  return STATE.prefs[DARKSTR_PREF.NATIVE_COMPAT_SITES] || Object.create(null);
+}
+
+function strictFirstDocEnabled() {
+  return STATE.prefs[DARKSTR_PREF.STRICT_FIRST_DOC] !== false;
+}
+
+function siteIsNativeCompat(urlOrHost) {
+  return isNativeCompatSite(nativeCompatSites(), urlOrHost);
+}
+
 async function probeActiveTabRfp() {
   try {
     const tabs = await B.tabs.query({ active: true, currentWindow: true });
@@ -93,6 +112,11 @@ function pollutionSurfacesArmed() {
   return !!(STATE.activation && STATE.activation.pollutionActive);
 }
 
+/** Global Pollution armed AND this URL is not on the per-site native-compat map. */
+function pollutionActiveForUrl(url) {
+  return pollutionSurfacesArmed() && !siteIsNativeCompat(url);
+}
+
 async function ensureSessionPersona() {
   if (PERSONA_STATE.sessionSeed && PERSONA_STATE.profile) {
     return PERSONA_STATE.profile;
@@ -118,6 +142,79 @@ async function ensureSessionPersona() {
   return rotateIdentity(false);
 }
 
+async function clearAllStrictArmRules() {
+  const ids = [...armedTabs.values()];
+  armedTabs.clear();
+  if (!ids.length) return;
+  try {
+    await B.declarativeNetRequest.updateSessionRules({
+      removeRuleIds: ids,
+    });
+  } catch (_) {}
+}
+
+async function clearStrictArmForTab(tabId) {
+  const ruleId = armedTabs.get(tabId);
+  if (ruleId == null) return;
+  armedTabs.delete(tabId);
+  try {
+    await B.declarativeNetRequest.updateSessionRules({
+      removeRuleIds: [ruleId],
+    });
+  } catch (_) {}
+}
+
+function allocStrictArmRuleId() {
+  // Prefer unused ids in the pool; wrap if needed.
+  for (let i = 0; i < STRICT_ARM_MAX - STRICT_ARM_BASE + 1; i++) {
+    const id = nextStrictArmRuleId;
+    nextStrictArmRuleId += 1;
+    if (nextStrictArmRuleId > STRICT_ARM_MAX) nextStrictArmRuleId = STRICT_ARM_BASE;
+    let inUse = false;
+    for (const used of armedTabs.values()) {
+      if (used === id) {
+        inUse = true;
+        break;
+      }
+    }
+    if (!inUse) return id;
+  }
+  return STRICT_ARM_BASE;
+}
+
+async function armStrictNextNav(tabId) {
+  if (!PERSONA_STATE.profile) return;
+  const requestHeaders = buildPersonaRequestHeaders(PERSONA_STATE.profile);
+  if (!requestHeaders.length) return;
+
+  await clearStrictArmForTab(tabId);
+  const ruleId = allocStrictArmRuleId();
+  armedTabs.set(tabId, ruleId);
+  try {
+    await B.declarativeNetRequest.updateSessionRules({
+      removeRuleIds: [ruleId],
+      addRules: [
+        {
+          id: ruleId,
+          priority: 3,
+          action: {
+            type: "modifyHeaders",
+            requestHeaders,
+          },
+          condition: {
+            urlFilter: "*",
+            tabIds: [tabId],
+            resourceTypes: ["main_frame"],
+          },
+        },
+      ],
+    });
+  } catch (err) {
+    armedTabs.delete(tabId);
+    console.warn("darkstr strict-arm DNR failed:", err && err.message);
+  }
+}
+
 async function rotateIdentity(reloadTabs) {
   const seed = generateSessionSeed();
   const profile = generateProfile(seed);
@@ -125,6 +222,7 @@ async function rotateIdentity(reloadTabs) {
   PERSONA_STATE.profile = profile;
   PERSONA_STATE.bootstrappedTabs.clear();
   PERSONA_STATE.bootstrappedDocs.clear();
+  await clearAllStrictArmRules();
   PERSONA_STATE.stats.identityRotations += 1;
   if (typeof POISONER !== "undefined") {
     POISONER.selectPersona();
@@ -141,9 +239,7 @@ async function rotateIdentity(reloadTabs) {
     try {
       const tabs = await B.tabs.query({ url: ["http://*/*", "https://*/*"] });
       await Promise.all(
-        (tabs || []).map((t) =>
-          B.tabs.reload(t.id).catch(() => {})
-        )
+        (tabs || []).map((t) => B.tabs.reload(t.id).catch(() => {}))
       );
     } catch (_) {}
   }
@@ -173,9 +269,17 @@ async function updateTabScopedUaDnr() {
     await clearTabScopedUaDnr();
     return;
   }
+  // Full session rule replaces any strict-arm rules for these bootstrapped tabs.
+  const armIdsToClear = [];
+  for (const tabId of tabIds) {
+    if (armedTabs.has(tabId)) {
+      armIdsToClear.push(armedTabs.get(tabId));
+      armedTabs.delete(tabId);
+    }
+  }
   try {
     await B.declarativeNetRequest.updateSessionRules({
-      removeRuleIds: [UA_SESSION_RULE_ID],
+      removeRuleIds: [UA_SESSION_RULE_ID, ...armIdsToClear],
       addRules: [
         {
           id: UA_SESSION_RULE_ID,
@@ -218,7 +322,7 @@ function isInjectableUrl(url) {
 }
 
 async function injectPersona(tabId, url) {
-  if (!pollutionSurfacesArmed()) return;
+  if (!pollutionActiveForUrl(url)) return;
   if (!PERSONA_STATE.sessionSeed) await ensureSessionPersona();
   if (!PERSONA_STATE.sessionSeed || !PERSONA_STATE.profile) return;
   if (!isInjectableUrl(url)) return;
@@ -240,6 +344,7 @@ async function injectPersona(tabId, url) {
     });
     PERSONA_STATE.bootstrappedDocs.add(docKey);
     PERSONA_STATE.bootstrappedTabs.add(tabId);
+    await clearStrictArmForTab(tabId);
     await updateTabScopedUaDnr();
   } catch (err) {
     PERSONA_STATE.bootstrappedTabs.delete(tabId);
@@ -248,13 +353,17 @@ async function injectPersona(tabId, url) {
   }
 }
 
-async function revokeBootstrap(tabId) {
+async function revokeBootstrap(tabId, { keepStrictArm = false } = {}) {
   if (!PERSONA_STATE.bootstrappedTabs.has(tabId)) return;
   PERSONA_STATE.bootstrappedTabs.delete(tabId);
   for (const key of [...PERSONA_STATE.bootstrappedDocs]) {
     if (key.startsWith(`${tabId}:`)) PERSONA_STATE.bootstrappedDocs.delete(key);
   }
-  await updateTabScopedUaDnr();
+  if (!keepStrictArm) {
+    await updateTabScopedUaDnr();
+  } else {
+    await updateTabScopedUaDnr();
+  }
 }
 
 function scheduleChaff() {
@@ -282,6 +391,9 @@ async function queueChaffToActiveTab() {
     const tabs = await B.tabs.query({ active: true, lastFocusedWindow: true });
     const tab = tabs && tabs[0];
     if (!tab || tab.id == null || !isInjectableUrl(tab.url)) {
+      return { queued: 0 };
+    }
+    if (siteIsNativeCompat(tab.url)) {
       return { queued: 0 };
     }
     await B.tabs.sendMessage(tab.id, {
@@ -348,6 +460,7 @@ async function applyActivation() {
   } else {
     PERSONA_STATE.bootstrappedTabs.clear();
     PERSONA_STATE.bootstrappedDocs.clear();
+    await clearAllStrictArmRules();
     await clearTabScopedUaDnr();
     try {
       await B.alarms.clear(CHAFF_ALARM);
@@ -375,7 +488,7 @@ async function applyActivation() {
   return STATE.activation;
 }
 
-function publicState() {
+function publicState(extra) {
   return {
     prefs: STATE.prefs,
     activation: STATE.activation,
@@ -384,37 +497,99 @@ function publicState() {
     chaosLevel: PERSONA_STATE.chaosLevel,
     stats: PERSONA_STATE.stats,
     host: typeof DARKSTR_HOST !== "undefined" ? DARKSTR_HOST : null,
+    nativeCompatSites: { ...nativeCompatSites() },
+    strictFirstDoc: strictFirstDocEnabled(),
     product: {
       name: "darkstr",
       phase: "1",
       positioning:
         "Pollution tool. Not an anti-detect browser. Not a Cloudflare bypass. Not official LibreWolf.",
     },
+    ...(extra || {}),
   };
 }
 
-// === Navigation: success-driven MAIN inject ===
+async function clearPersonaForEtld1(etld1) {
+  const tabs = await B.tabs.query({});
+  const affected = [];
+  for (const tab of tabs || []) {
+    if (!tab.url || tab.id == null) continue;
+    try {
+      if (getETLD1(new URL(tab.url).hostname) === etld1) {
+        affected.push(tab);
+        PERSONA_STATE.bootstrappedTabs.delete(tab.id);
+        await clearStrictArmForTab(tab.id);
+        for (const key of [...PERSONA_STATE.bootstrappedDocs]) {
+          if (key.startsWith(`${tab.id}:`)) {
+            PERSONA_STATE.bootstrappedDocs.delete(key);
+          }
+        }
+      }
+    } catch (_) {}
+  }
+  await updateTabScopedUaDnr();
+  return affected;
+}
+
+// === Navigation: success-driven MAIN inject + strict-first-doc ===
 B.webNavigation.onBeforeNavigate.addListener(async (details) => {
   if (details.frameId !== 0) return;
+  // Strict mode: armed tab keeps main_frame-only DNR through this next nav.
+  if (strictFirstDocEnabled() && armedTabs.has(details.tabId)) {
+    return;
+  }
   await revokeBootstrap(details.tabId);
 });
 
 B.webNavigation.onCommitted.addListener((details) => {
   if (details.frameId !== 0) return;
+  const tabId = details.tabId;
+  const url = details.url;
+
   for (const key of [...PERSONA_STATE.bootstrappedDocs]) {
-    if (key.startsWith(`${details.tabId}:`)) {
+    if (key.startsWith(`${tabId}:`)) {
       PERSONA_STATE.bootstrappedDocs.delete(key);
     }
   }
-  if (PERSONA_STATE.bootstrappedTabs.has(details.tabId)) {
-    PERSONA_STATE.bootstrappedTabs.delete(details.tabId);
+
+  // Skip DNR revoke for armed strict tabs (DNR must persist through nav 2).
+  if (
+    PERSONA_STATE.bootstrappedTabs.has(tabId) &&
+    !(strictFirstDocEnabled() && armedTabs.has(tabId))
+  ) {
+    PERSONA_STATE.bootstrappedTabs.delete(tabId);
     updateTabScopedUaDnr();
   }
+
   if (!pollutionSurfacesArmed()) return;
-  injectPersona(details.tabId, details.url);
+  if (!isInjectableUrl(url)) return;
+  if (siteIsNativeCompat(url)) return;
+
+  // Strict-first-doc: first navigation stays all-native (no MAIN inject).
+  // Install main_frame-only DNR so the NEXT navigation's HTTP uses persona UA.
+  if (strictFirstDocEnabled() && !armedTabs.has(tabId) && !PERSONA_STATE.bootstrappedTabs.has(tabId)) {
+    (async () => {
+      if (!PERSONA_STATE.profile) await ensureSessionPersona();
+      await armStrictNextNav(tabId);
+    })().catch((err) => {
+      console.warn("darkstr strict arm skipped:", err && err.message);
+    });
+    return;
+  }
+
+  injectPersona(tabId, url);
+});
+
+B.tabs.onUpdated.addListener((tabId, changeInfo) => {
+  if (changeInfo.status !== "loading") return;
+  if (strictFirstDocEnabled() && armedTabs.has(tabId)) return;
+  if (PERSONA_STATE.bootstrappedTabs.has(tabId)) {
+    revokeBootstrap(tabId);
+  }
 });
 
 B.tabs.onRemoved.addListener((tabId) => {
+  clearStrictArmForTab(tabId);
   revokeBootstrap(tabId);
 });
 
@@ -484,6 +659,77 @@ B.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           [DARKSTR_PREF.NATIVE_COMPATIBLE]: msg.enabled === true,
         });
         reply({ ok: true, ...publicState() });
+        return;
+      }
+
+      case "setStrictFirstDoc": {
+        await savePrefs({
+          [DARKSTR_PREF.STRICT_FIRST_DOC]: msg.enabled === true,
+        });
+        await clearAllStrictArmRules();
+        reply({ ok: true, ...publicState() });
+        return;
+      }
+
+      case "setNativeCompatSite": {
+        const hostname = String(msg.hostname || "");
+        const etld1 = getETLD1(hostname);
+        if (!etld1) {
+          reply({ ok: false, error: "bad_hostname" });
+          return;
+        }
+        const sites = { ...nativeCompatSites() };
+        if (msg.enabled === true) {
+          sites[etld1] = true;
+        } else {
+          delete sites[etld1];
+        }
+        await savePrefs({ [DARKSTR_PREF.NATIVE_COMPAT_SITES]: sites });
+        const affected = await clearPersonaForEtld1(etld1);
+        reply({ ok: true, etld1, ...publicState() });
+        setTimeout(() => {
+          for (const tab of affected) {
+            if (tab.id != null) B.tabs.reload(tab.id).catch(() => {});
+          }
+        }, 300);
+        return;
+      }
+
+      case "getNativeCompatSite": {
+        const hostname = String(msg.hostname || "");
+        const etld1 = getETLD1(hostname);
+        reply({
+          ok: true,
+          etld1,
+          enabled: !!(etld1 && nativeCompatSites()[etld1]),
+        });
+        return;
+      }
+
+      case "listNativeCompatSites": {
+        reply({
+          ok: true,
+          sites: Object.keys(nativeCompatSites()).sort(),
+        });
+        return;
+      }
+
+      case "removeNativeCompatSite": {
+        const etld1 = String(msg.etld1 || "");
+        if (!etld1) {
+          reply({ ok: false, error: "bad_etld1" });
+          return;
+        }
+        const sites = { ...nativeCompatSites() };
+        delete sites[etld1];
+        await savePrefs({ [DARKSTR_PREF.NATIVE_COMPAT_SITES]: sites });
+        const affected = await clearPersonaForEtld1(etld1);
+        reply({ ok: true, etld1, ...publicState() });
+        setTimeout(() => {
+          for (const tab of affected) {
+            if (tab.id != null) B.tabs.reload(tab.id).catch(() => {});
+          }
+        }, 300);
         return;
       }
 
@@ -566,9 +812,12 @@ B.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       }
 
       case "checkSiteOverride": {
-        // Phase 1: global Native-Compatible only — no per-host map yet.
-        // bridge.js still asks; reply is a no-op acknowledge.
-        reply({ ok: true, disabled: !pollutionSurfacesArmed() });
+        // Disabled when Pollution inactive globally OR this hostname is
+        // on the per-site Native-Compatible map (or global escape is on).
+        const hostname = msg.hostname || "";
+        const disabled =
+          !pollutionSurfacesArmed() || siteIsNativeCompat(hostname);
+        reply({ ok: true, disabled });
         return;
       }
 
