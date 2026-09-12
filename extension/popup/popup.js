@@ -17,6 +17,8 @@ const rotateBtn = document.getElementById("rotateBtn");
 const fireBeaconsBtn = document.getElementById("fireBeaconsBtn");
 const cleanCookiesBtn = document.getElementById("cleanCookiesBtn");
 const cookieCleanHint = document.getElementById("cookieCleanHint");
+const xorBrief = document.getElementById("xorBrief");
+const openSettingsBtn = document.getElementById("openSettingsBtn");
 
 let currentEtld1 = "";
 
@@ -101,6 +103,13 @@ function paint(state) {
       : mode === "pollution"
         ? "Pollution armed. MAIN-world persona inject + chaff run on http(s) pages."
         : "Homogeneous. LibreWolf RFP owns the fingerprint path. Extension surfaces off.";
+
+  if (xorBrief) {
+    xorBrief.textContent =
+      mode === "pollution"
+        ? "Pollution → RFP/FPP must be off (fork auto; stock: about:config). No RFP stack."
+        : "Homogeneous → stock RFP; no metric customization; persona/chaff idle.";
+  }
 
   const siteCount = Object.keys(state.prefs["darkstr.nativeCompatSites"] || {}).length;
   prefsLine.textContent =
@@ -268,6 +277,20 @@ cleanCookiesBtn.addEventListener("click", async () => {
   }
   cleanCookiesBtn.disabled = false;
 });
+
+
+if (openSettingsBtn) {
+  openSettingsBtn.addEventListener("click", () => {
+    const url = B.runtime.getURL("settings/settings.html");
+    if (B.runtime.openOptionsPage) {
+      B.runtime.openOptionsPage().catch(() => {
+        B.tabs.create({ url });
+      });
+    } else {
+      B.tabs.create({ url });
+    }
+  });
+}
 
 refresh();
 setInterval(refresh, 2500);

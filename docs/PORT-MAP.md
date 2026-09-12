@@ -20,6 +20,7 @@ Chrome surfaces today: `background.js`, `bridge.js`, `anti-fingerprint-bootstrap
 | `rules/tracking.json` | GPC + tracking-param strip + 3p Referer strip + slim tracker **block** list; no `ping`; no bare `facebook.com`; no static CH strip | **Shipped** |
 | Tab-scoped UA DNR | Success-driven after MAIN inject; Firefox personas REMOVE CH (A1) | **Shipped** |
 | Popup / sidebar | Mode radios + Native-Compatible (global + per-site) + strict-next-nav + persona + Quiet/Balanced/Loud + tracker-cookie purge | **Shipped** |
+| Settings / chrome-prefs panel | `extension/settings/` + `options_ui`; PREF-BRIDGE key table; XOR implications; patches apply pointer | **Shipped** (UI mirror; no Gecko) |
 | `cookies` clean | Tracker Domain-list purge UI + 15‑min alarm (`lib/tracker-cookies.js`); not containers; residuals: jar UI / allowlist | **Shipped** (residuals documented) |
 | Client Hints SET (Chromium) | N/A on Firefox host; REMOVE path shipped | **Depends on host** |
 | Playwright / CreepJS matrix | LibreWolf-headed | **Proof** |
@@ -32,6 +33,7 @@ Plan: [`PHASE-2-PLAN.md`](PHASE-2-PLAN.md). Crates stubs: [`../crates/`](../crat
 |------|--------|
 | `duppel-persona` / `duppel-chaff` / `duppel-coherence` APIs | **M0.5** — real types/seed/schedule (no Gecko FFI yet) |
 | Pref bridge design (`docs/PREF-BRIDGE.md`, `darkstr.cfg.example`) | **Documented** — wiring is M2 |
+| WebExt chrome-prefs settings panel | **Shipped** — storage mirror + Proof education; chrome write still M2 |
 | Proof XOR checklist (`docs/PROOF-XOR-CHECKLIST.md`) | **Documented** |
 | Gecko hook map (`docs/GECKO-HOOKS.md`) + `patches/` stubs | **M0.75 sketch** — no Mozilla vendor |
 | `duppel-bridge` prefs applicator trait | **M0.75** — XPCOM glue later |

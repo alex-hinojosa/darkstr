@@ -49,6 +49,7 @@ Copy this checklist into the PR body (or link it) and check each applicable box.
 
 - [ ] Document that auto-RFP kill is **fork-only**; stock path still requires manual about:config.
 - [ ] Phase 1 UTC / RFP probe heuristic still gates surfaces on stock LibreWolf.
+- [ ] Settings / chrome-prefs panel (if touched) still documents fork-only auto-RFP and PREF-BRIDGE key names.
 
 ---
 

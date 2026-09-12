@@ -1,0 +1,92 @@
+:root { color-scheme: dark; }
+html, body {
+  margin: 0;
+  max-width: 44rem;
+  background: #141418;
+  color: #f4f4f5;
+  font: 14px/1.5 ui-sans-serif, system-ui, sans-serif;
+}
+header, section { padding: 1rem 1.25rem; border-bottom: 1px solid #2a2a32; }
+h1 { font-size: 1.25rem; margin: 0; }
+h2 {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #a1a1aa;
+  margin: 0 0 0.5rem;
+}
+.subh {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #71717a;
+  margin: 0.75rem 0 0.35rem;
+}
+.eyebrow { color: #2ec4b6; margin: 0 0 0.35rem; font-size: 0.8rem; }
+.tag, .hint, .fine { color: #a1a1aa; margin: 0.35rem 0 0; }
+.row { display: flex; gap: 0.5rem; align-items: flex-start; margin: 0.4rem 0; }
+.mono, code, pre {
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 12px;
+}
+.mono { word-break: break-all; }
+.bridge-note { background: #1a1a22; }
+.xor-box {
+  margin-top: 0.65rem;
+  padding: 0.65rem 0.75rem;
+  border-radius: 8px;
+  border: 1px solid #3f3f46;
+  background: #1c1c22;
+  color: #e4e4e7;
+  font-size: 13px;
+}
+.xor-box.pollution { border-color: #b45309; background: #2a1c0c; color: #fde68a; }
+.xor-box.homogeneous { border-color: #2ec4b6; background: #0f1f1d; color: #99f6e4; }
+.pref-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 0.5rem;
+  font-size: 12px;
+}
+.pref-table th, .pref-table td {
+  text-align: left;
+  padding: 0.4rem 0.45rem;
+  border-bottom: 1px solid #2a2a32;
+  vertical-align: top;
+}
+.pref-table th { color: #a1a1aa; font-weight: 600; }
+.apply {
+  margin: 0.5rem 0 0;
+  padding: 0.65rem 0.75rem;
+  background: #0b0b0e;
+  border: 1px solid #2a2a32;
+  border-radius: 8px;
+  overflow-x: auto;
+  white-space: pre;
+  color: #d4d4d8;
+}
+.site-list {
+  list-style: none;
+  margin: 0.35rem 0 0;
+  padding: 0;
+  max-height: 10rem;
+  overflow: auto;
+}
+.site-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin: 0.25rem 0;
+}
+.btn {
+  background: #2a2a32;
+  color: #f4f4f5;
+  border: 0;
+  border-radius: 6px;
+  padding: 0.2rem 0.45rem;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.meta { border-bottom: 0; }

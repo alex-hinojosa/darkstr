@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>darkstr · Chrome prefs</title>
+  <link rel="stylesheet" href="settings.css">
+</head>
+<body>
+  <header>
+    <p class="eyebrow">Phase 2-aligned · WebExt mirror of chrome prefs</p>
+    <h1>darkstr settings</h1>
+    <p class="tag">Pollution tool · not anti-detect · not Cloudflare bypass · not official LibreWolf</p>
+  </header>
+
+  <section class="bridge-note">
+    <p>
+      Same semantic prefs as Proof pin / <code>docs/PREF-BRIDGE.md</code>.
+      On <strong>stock LibreWolf</strong>, values live in extension storage (this UI).
+      On the <strong>darkstr fork</strong>, chrome / <code>about:config</code> becomes authoritative; this panel stays the companion mirror.
+    </p>
+  </section>
+
+  <section>
+    <h2>Mode (XOR)</h2>
+    <label class="row"><input type="radio" name="mode" value="homogeneous"> Homogeneous — stock LibreWolf RFP</label>
+    <label class="row"><input type="radio" name="mode" value="pollution"> Pollution — Duppel persona + chaff (RFP off)</label>
+    <p id="modeHint" class="hint"></p>
+    <div id="xorImplications" class="xor-box" role="status" aria-live="polite"></div>
+  </section>
+
+  <section>
+    <h2>Native-Compatible</h2>
+    <label class="row">
+      <input type="checkbox" id="nativeCompatible">
+      Independent of mode. Restores native identity for banking / SSO. Not a Cloudflare-defeat switch.
+    </label>
+    <h3 class="subh">Per-site list</h3>
+    <p id="siteSummary" class="hint">sites=0</p>
+    <ul id="nativeCompatSiteList" class="site-list"></ul>
+    <p class="hint">Add / remove sites from the toolbar popup on an http(s) tab. Summary here is read for Proof.</p>
+  </section>
+
+  <section>
+    <h2>Delay persona one page</h2>
+    <label class="row">
+      <input type="checkbox" id="strictFirstDoc" checked>
+      First page stays native; persona starts on the next page.
+    </label>
+    <p class="hint">Maps to <code>darkstr.strictFirstDoc</code>. Helps sites that break when the persona starts too early. Does not change mode.</p>
+  </section>
+
+  <section>
+    <h2>Chrome / about:config names (read-only)</h2>
+    <p class="hint">Phase 1 stores these in <code>browser.storage.local</code>. Fork builds use the same keys under chrome prefs.</p>
+    <table class="pref-table">
+      <thead>
+        <tr><th>Key</th><th>Type</th><th>Legal / default</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>darkstr.mode</code></td>
+          <td>string</td>
+          <td><code>homogeneous</code> \| <code>pollution</code> · default <code>homogeneous</code></td>
+        </tr>
+        <tr>
+          <td><code>darkstr.nativeCompatible</code></td>
+          <td>bool</td>
+          <td>default <code>false</code></td>
+        </tr>
+        <tr>
+          <td><code>darkstr.nativeCompatSites</code></td>
+          <td>JSON object</td>
+          <td><code>{ [etld1]: true }</code> · default <code>{}</code></td>
+        </tr>
+        <tr>
+          <td><code>darkstr.strictFirstDoc</code></td>
+          <td>bool</td>
+          <td>default <code>true</code> (“Delay persona one page”)</td>
+        </tr>
+      </tbody>
+    </table>
+    <p class="hint">
+      Related browser prefs (user / fork-managed, not rewritten by the stock WebExt):
+      <code>privacy.resistFingerprinting</code>,
+      <code>privacy.fingerprintingProtection</code>.
+    </p>
+  </section>
+
+  <section>
+    <h2>Fork builds · patches apply</h2>
+    <p class="hint">
+      No Gecko tree is required to use this panel. For LibreWolf-based fork builds, apply stubs with:
+    </p>
+    <pre class="mono apply">export DARKSTR_GECKO_ROOT=/path/to/librewolf-based-tree
+./patches/scripts/apply-darkstr-patches.sh</pre>
+    <p class="hint">
+      Docs: <span class="mono">patches/README.md</span> ·
+      <span class="mono">docs/PREF-BRIDGE.md</span> ·
+      <span class="mono">docs/GECKO-HOOKS.md</span> ·
+      <span class="mono">docs/darkstr.cfg.example</span>
+    </p>
+    <p class="hint">
+      Homogeneous patches must not customize RFP metrics. Pollution auto-kills RFP/FPP only in the fork (M2+).
+    </p>
+  </section>
+
+  <section class="meta">
+    <p id="prefsLine" class="mono"></p>
+    <p class="fine">Chaff intensity (Quiet / Balanced / Loud) stays in the toolbar popup when Pollution is armed.</p>
+  </section>
+
+  <script src="settings.js"></script>
+</body>
+</html>

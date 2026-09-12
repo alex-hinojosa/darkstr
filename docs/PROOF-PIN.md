@@ -1,4 +1,4 @@
-# Proof pin — darkstr Phase 1
+# Proof pin — darkstr Phase 1 (+ Phase 2 chrome-prefs panel)
 
 **Package path (load this in LibreWolf):** `extension/`  
 Repo: `https://github.com/alex-hinojosa/darkstr` → `extension/`
@@ -65,6 +65,7 @@ Static tracking ruleset follows global `pollutionActive` (mode + global native +
 ## What ships in this Phase 1 drop
 
 - XOR prefs + first-run + popup/sidebar with Product Manager copy
+- Phase 2-aligned **chrome-prefs settings panel** (`extension/settings/`, also `options_ui`): edits `darkstr.mode` / Native-Compatible / Delay persona one page; per-site list summary; read-only chrome/`about:config` names from PREF-BRIDGE; XOR implications (Pollution→RFP/FPP off; Homogeneous→stock RFP, no metric customization); pointer to `patches/scripts/apply-darkstr-patches.sh` — **no Gecko tree required**
 - Real persona generation (`lib/profiles.js`) filtered to Firefox + host OS (includes Linux)
 - MAIN-world anti-fingerprint bootstrap via `scripting.executeScript({ world: "MAIN" })` (FF 128+)
 - Success-driven tab-scoped User-Agent DNR; Firefox personas **REMOVE** Client Hints (A1)
@@ -80,12 +81,13 @@ Static tracking ruleset follows global `pollutionActive` (mode + global native +
 - Chromium Client Hints SET (Firefox host never selects Chromium personas)
 - Full uBO-parity blocklist (LibreWolf still ships uBO; ours is a slim Pollution companion)
 - LibreWolf fork bootstrap (M1+); crate APIs exist under `crates/` (no Gecko FFI yet)
-- WebExt ↔ chrome pref bridge wiring (design: `docs/PREF-BRIDGE.md`)
+- WebExt ↔ chrome pref bridge wiring (design: `docs/PREF-BRIDGE.md`; UI mirror panel ships; chrome write is fork M2)
 
 ## How to read the pin
 
 1. Toolbar badge: `H` = homogeneous, `P` = pollution selected, `RFP` = conflict.
 2. Popup footer prints `darkstr.mode=… · darkstr.nativeCompatible=… · sites=N · strictFirstDoc=…`.
+2b. **Chrome-prefs panel** (toolbar → Open chrome-prefs panel, or extension Options): same semantic prefs; XOR implications box; read-only chrome key table; fork apply script note. Quiet/Balanced/Loud remain on the toolbar popup when Pollution is armed.
 3. With Pollution armed and RFP off, popup shows Current persona (UA / platform / screen / GPU / TZ).
 4. Native-Compatible section: global checkbox + **This site** (eTLD+1) + list with Remove.
 5. Tracker cookies section: **Purge tracker cookies** + Domain-list-only hint (no containering).
@@ -104,5 +106,6 @@ Static tracking ruleset follows global `pollutionActive` (mode + global native +
 7. Toggle strict-first-doc off → inject on first committed nav (success-driven path without arm delay).
 8. Rotate identity → new UA in panel, tabs reload.
 9. Quiet / Balanced / Loud labels and PM copy unchanged.
+9b. Open chrome-prefs panel: mode radios + Native-Compatible + Delay persona one page match popup; XOR box shows Pollution→RFP/FPP off vs Homogeneous→stock RFP / no metric customization; chrome key table lists `darkstr.*` names; patches apply pointer present; copy stays pollution framing (not Cloudflare bypass / not official LibreWolf).
 10. Tracker cookies: with site access, **Purge tracker cookies** removes Domain-matched known-tracker cookies only; counter bumps `cookiesCleaned`. Without site access → honest error hint. Wording must not claim containers.
 11. `npm test` for XOR + profile seed determinism + eTLD+1 / sites prefs + tracker-cookie filter + DNR chaff guardrail.

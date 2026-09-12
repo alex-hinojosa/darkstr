@@ -29,7 +29,7 @@ Internal / may stay storage longer: `darkstr.chaosLevel`, session seed/profile, 
 ## 2. Authority and sync
 
 ```
-WebExt UI (popup / sidebar / first-run)
+WebExt UI (popup / sidebar / first-run / settings chrome-prefs panel)
         │  write / read mirror
         ▼
 browser.storage.local  ←→  bridge  ←→  chrome prefs (authoritative in fork)
@@ -116,6 +116,18 @@ Native-Compatible is for banking / SSO — **not** a Cloudflare-defeat switch.
 | `PrefsApplicator` XPCOM adapter | Builder (M2+) | `duppel_bridge` trait; recording mock for CI |
 
 ---
+
+
+## 6b. Settings / chrome-prefs panel (WebExt, no Gecko tree)
+
+Phase 2-aligned UI lives at `extension/settings/` (also Firefox `options_ui`). It:
+
+- Shows/edits the same semantic prefs as the popup (`darkstr.mode` XOR radios, Native-Compatible, Delay persona one page / `strictFirstDoc`, per-site list summary).
+- Surfaces XOR implications in copy: Pollution → RFP/FPP must be off; Homogeneous → stock RFP; **no metric customization**.
+- Lists chrome / `about:config` key names from this document (read-only education for Proof + PM).
+- Points at `patches/scripts/apply-darkstr-patches.sh` for fork builds.
+
+It does **not** write `privacy.*` on stock LibreWolf. Chrome authority remains fork M2+.
 
 ## 7. Proof hooks
 
