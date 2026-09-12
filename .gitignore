@@ -3,3 +3,7 @@ node_modules/
 *.log
 .idea/
 .vscode/
+
+# Rust (Phase 2 crates)
+crates/target/
+target/

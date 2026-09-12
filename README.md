@@ -9,6 +9,8 @@ It is **not** a Cloudflare bypass.
 It is **not** official LibreWolf.
 
 We are **not** rewriting LibreWolf in Rust in Phase 1.
+Phase 2: private LibreWolf-based fork + Rust crates behind prefs — see [docs/PHASE-2-PLAN.md](docs/PHASE-2-PLAN.md).
+Servo/Ladybird = research-only Track D.
 
 Chrome Duppel stays at https://github.com/alex-hinojosa/duppel. This tree is the Firefox companion + future fork home.
 
@@ -113,8 +115,10 @@ extension/                 load this in LibreWolf
   src/content/anti-fingerprint/   bootstrap source (esbuild)
 docs/
   PHASE1-CONSTRAINTS.md
+  PHASE-2-PLAN.md          Phase 2 fork + Rust plan
   PORT-MAP.md
   PROOF-PIN.md
+crates/                    Phase 2 Rust stubs (persona / chaff / coherence)
 tests/
 esbuild.config.mjs
 ```
