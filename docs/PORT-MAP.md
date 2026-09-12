@@ -30,10 +30,11 @@ Plan: [`PHASE-2-PLAN.md`](PHASE-2-PLAN.md). Crates stubs: [`../crates/`](../crat
 
 | Item | Status |
 |------|--------|
-| `duppel-persona` / `duppel-chaff` / `duppel-coherence` stubs | **Scaffolded** (no Gecko FFI yet) |
-| Pref bridge WebExt → chrome (`darkstr.mode` / `darkstr.nativeCompatible`) | **Planned** |
-| Private LibreWolf-based fork bootstrap + CI | **Planned** |
-| Auto RFP/FPP off on Pollution | **Planned** (fork only) |
+| `duppel-persona` / `duppel-chaff` / `duppel-coherence` APIs | **M0.5** — real types/seed/schedule (no Gecko FFI yet) |
+| Pref bridge design (`docs/PREF-BRIDGE.md`, `darkstr.cfg.example`) | **Documented** — wiring is M2 |
+| Proof XOR checklist (`docs/PROOF-XOR-CHECKLIST.md`) | **Documented** |
+| Private LibreWolf-based fork bootstrap + CI | **Planned** (M1) |
+| Auto RFP/FPP off on Pollution | **Spec'd** in bridge doc; **fork-only** wiring M2 |
 | Native UA/CH + DocShell strict-nav + in-engine noise | **Planned** (M3→Phase 3) |
 | Servo / Ladybird | **Track D research only** — not ship path |
 

@@ -229,18 +229,28 @@ This Phase 2 plan PR scaffolds **docs + crates only**. Full Gecko patch tree can
 
 ## 7. Milestones
 
-### M0 — Plan + stubs (this PR)
+### M0 — Plan + stubs (merged, PR #5)
 
 - [x] `docs/PHASE-2-PLAN.md`
 - [x] Empty `crates/` workspace: persona, chaff, coherence + READMEs
 - [x] `cargo test` green on stubs
+- [x] PR opened to `alex-hinojosa/darkstr`
+
+### M0.5 — Crate APIs + bridge design (no full fork tree)
+
+Pre-M1 work that does **not** require cloning Mozilla/LibreWolf:
+
+- [x] Formalize WebExt ↔ chrome pref bridge (`docs/PREF-BRIDGE.md`, `docs/darkstr.cfg.example`)
+- [x] Expand Rust crates beyond stubs: persona seed/snapshot + chaff schedule types/APIs (still no Gecko link)
+- [x] Document Pollution auto-kill RFP/FPP and Homogeneous stock RFP restore (no metric customization)
+- [x] Proof XOR checklist for future wiring PRs (`docs/PROOF-XOR-CHECKLIST.md`)
 - [ ] PR opened to `alex-hinojosa/darkstr`
 
 ### M1 — Fork bootstrap (4–6 weeks)
 
 - Private LibreWolf-based tree builds on Linux CI (Docker).
 - Branding: darkstr name/icons/about; Homogeneous default.
-- `darkstr.cfg` ships `darkstr.mode` / `darkstr.nativeCompatible`.
+- `darkstr.cfg` ships `darkstr.mode` / `darkstr.nativeCompatible` (example already in `docs/darkstr.cfg.example`).
 - No Duppel spoof yet — prove merge train + artifact pipeline (Linux; macOS cross later).
 
 ### M2 — Pref bridge + XOR auto-RFP

@@ -1,0 +1,17 @@
+// darkstr.cfg.example — chrome pref defaults for the future LibreWolf-based fork.
+// NOT loaded by Phase 1 WebExt. Thin patch doc only (no full Mozilla/LibreWolf tree).
+// Brand: darkstr — not official LibreWolf.
+//
+// Ship as darkstr.cfg layered on LibreWolf's librewolf.cfg baseline (M1+).
+// Pref names MUST match Phase 1 Proof pin / docs/PREF-BRIDGE.md.
+
+defaultPref("darkstr.mode", "homogeneous");
+defaultPref("darkstr.nativeCompatible", false);
+defaultPref("darkstr.strictFirstDoc", true);
+// darkstr.nativeCompatSites: start empty; JSON/object pref or profile file TBD in M2.
+
+// Homogeneous default expects stock LibreWolf RFP. Do not customize RFP metrics here.
+// When the user (or UI) sets darkstr.mode=pollution, fork code MUST force:
+//   privacy.resistFingerprinting = false
+//   privacy.fingerprintingProtection = false
+// When returning to homogeneous, restore LibreWolf stock RFP/FPP expectations.

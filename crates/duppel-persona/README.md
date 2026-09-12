@@ -1,8 +1,14 @@
 # duppel-persona
 
-**Status:** Phase 2 stub (empty control-plane crate).
+**Status:** Phase 2 M0.5 control-plane API (no Gecko FFI).
 
-Rust source of truth for darkstr **Pollution** personas: families, seed/rotation, and coherence checks before surfaces leave the process.
+Rust source of truth for darkstr **Pollution** personas: families, seed/rotation, coherence checks, and mode/pref side-effect helpers.
+
+## API surface
+
+- `PersonaSeed` / `PersonaSnapshot` / `generate_persona` (mulberry32; Firefox × host OS families)
+- `Mode`, `resolve_activation`, `mode_pref_effects` (Pollution kills RFP/FPP; Homogeneous restores stock RFP)
+- `prefs::*` — chrome / about:config names matching Phase 1 Proof pin
 
 ## Boundaries
 
@@ -11,17 +17,15 @@ Rust source of truth for darkstr **Pollution** personas: families, seed/rotation
 | Persona structs + seeded RNG | Full browser / Gecko rewrite |
 | Family filters (Firefox + host OS) | Homogeneous/RFP metric customization |
 | Validators feeding `duppel-coherence` | Cloudflare / anti-detect claims |
-| FFI-ready API for Gecko prefs bridge | Servo / Ladybird (Track D only) |
+| Pref name constants + XOR activation | Servo / Ladybird (Track D only) |
 
 ## Prefs
-
-Consumes chrome prefs (see `docs/PHASE-2-PLAN.md`):
 
 - `darkstr.mode` — XOR `homogeneous` \| `pollution`
 - `darkstr.nativeCompatible` — global escape (independent of mode)
 - Site map / strict-first-doc — still mostly WebExt until DocShell hooks land
 
-When mode ≠ pollution, or native-compatible is on, this crate must not emit a spoof persona.
+When mode ≠ pollution, or native-compatible is on, this crate must not emit a spoof persona (`generate_persona_if_active`).
 
 ## Build
 
