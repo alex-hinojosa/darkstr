@@ -18,9 +18,12 @@ Hygiene and review norms. Product behavior and positioning stay as pinned in [`d
 
 ```bash
 npm test
+npm run check:positioning
 npm run build
 cd crates && cargo test
 ```
+
+`npm test` includes a fail-closed positioning scan of user-facing extension UI (popup, settings, first-run, manifest, background notification copy). It rejects anti-detect / Cloudflare-bypass capability claims (allowlisted honest negations like “not anti-detect” / “Not a Cloudflare bypass”), “Chrome prefs” / “chrome-prefs” product labels, and “crates” in Homogeneous implications UI copy. Standalone: `npm run check:positioning`.
 
 ## License
 
