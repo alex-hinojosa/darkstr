@@ -84,6 +84,11 @@ function strictFirstDocEnabled() {
   return STATE.prefs[DARKSTR_PREF.STRICT_FIRST_DOC] !== false;
 }
 
+/** M3: when native persona hooks are on, skip WebExt MAIN inject (avoid split-brain). */
+function nativePersonaHooksEnabled() {
+  return STATE.prefs[DARKSTR_PREF.NATIVE_PERSONA_HOOKS] === true;
+}
+
 function siteIsNativeCompat(urlOrHost) {
   return isNativeCompatSite(nativeCompatSites(), urlOrHost);
 }
@@ -326,6 +331,10 @@ function isInjectableUrl(url) {
 
 async function injectPersona(tabId, url) {
   if (!pollutionActiveForUrl(url)) return;
+  if (nativePersonaHooksEnabled()) {
+    // Native path owns Navigator/HTTP — WebExt MAIN inject stays off.
+    return;
+  }
   if (!PERSONA_STATE.sessionSeed) await ensureSessionPersona();
   if (!PERSONA_STATE.sessionSeed || !PERSONA_STATE.profile) return;
   if (!isInjectableUrl(url)) return;

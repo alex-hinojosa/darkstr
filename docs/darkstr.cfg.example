@@ -10,7 +10,7 @@ defaultPref("darkstr.nativeCompatible", false);
 defaultPref("darkstr.strictFirstDoc", true);
 // darkstr.nativeCompatSites: start empty; JSON/object pref or profile file TBD in M2.
 // M3 feature flag (default false until fork hooks Proof-checked):
-// defaultPref("darkstr.nativePersonaHooks", false);
+defaultPref("darkstr.nativePersonaHooks", false);
 
 // Homogeneous default expects stock LibreWolf RFP. Do not customize RFP metrics here.
 // When the user (or UI) sets darkstr.mode=pollution, fork code MUST force:

@@ -1,6 +1,6 @@
 # Gecko / LibreWolf integration hooks (Phase 2 sketch)
 
-**Status:** Design pin for M1–M3. M2 XOR applicator + **M3 hook-site enums** landed — see [`M2-STATUS.md`](M2-STATUS.md), [`M3-STATUS.md`](M3-STATUS.md). **No** Mozilla/LibreWolf source is vendored in this repo. Live C++/XPCOM hooks remain sketches until verified against the private 155.0.1-1 train.  
+**Status:** Design pin for M1–M3. M2 XOR observer + **M3 live chrome native persona hooks** landed — see [`M2-STATUS.md`](M2-STATUS.md), [`M3-STATUS.md`](M3-STATUS.md). **No** Mozilla/LibreWolf source is vendored in this repo. Live C++/XPCOM FFI still not claimed; M3 uses chrome JS extension points on the 155.0.1-1 train.  
 **Brand:** darkstr — not official LibreWolf. Pollution browser, not Cloudflare bypass.  
 **License note:** Our crates = GPL-3.0-only. Upstream Gecko patches remain MPL-2.0; counsel before binary distribution.
 
@@ -70,7 +70,7 @@ Real train-pinned patch: [`../patches/0002-darkstr-mode-xor-rfp.patch`](../patch
 
 Hooks below are **call sites**, not “rewrite Gecko in Rust.” Thin C++/XPCOM or Rust-in-Gecko glue calls into GPL crates; keep patch surface small.
 
-**M3 public-repo status:** typed hook-site / applicator enums + gating APIs are in `duppel-persona` / `duppel-bridge` (unit-tested). Live C++ observer/patch against LibreWolf **155.0.1-1** is **not** claimed — prefer enums + tests over fake patches. See [`M3-STATUS.md`](M3-STATUS.md).
+**M3 public-repo status:** Rust enums/APIs on main (#16) + **train-pinned chrome JS patch** [`../patches/0003-darkstr-native-persona-hooks.patch`](../patches/0003-darkstr-native-persona-hooks.patch) (`DarkstrNativePersona*.sys.mjs`). Live C++/Rust FFI **not** claimed. See [`M3-STATUS.md`](M3-STATUS.md).
 
 Rust labels (no FFI yet):
 
@@ -89,10 +89,10 @@ Glue reads cached `PersonaSnapshot` **only** when `pollution_active` (`read_cach
 | Surface | Gecko / LibreWolf area | When | M3 status |
 |---------|------------------------|------|-----------|
 | Process / profile start seed | Browser chrome init / content process launch | M3 | Enum/plan only — live seed wiring private-fork |
-| HTTP User-Agent | **nsHttp** / `nsHttpHandler` / channel `User-Agent` override | M3 | `NsHttpAction::OverrideUserAgent` encoded; **no** live patch claimed |
-| Client Hints | nsHttp request header policy | M3 | Firefox: **REMOVE** (`ClientHintsPolicy::Remove`) — never SET; unit-tested |
-| `navigator.*` / platform / HW | DOM `Navigator` / related bindings | M3 | `NavigatorField` minimum set; same seed as HTTP UA |
-| Feature flag | `darkstr.nativePersonaHooks` | M3 | Disables WebExt MAIN inject when native path + pollution |
+| HTTP User-Agent | **nsHttp** via chrome `http-on-modify-request` | M3 | Live in `0003` patch (`DarkstrNativePersona`); Rust label `OverrideUserAgent` |
+| Client Hints | nsHttp request header policy | M3 | Live REMOVE in `0003` (never SET); Rust `ClientHintsPolicy::Remove` |
+| `navigator.*` / platform / HW | JSWindowActor child Navigator spoofs | M3 | Live minimum set in `0003`; same snapshot as HTTP UA |
+| Feature flag | `darkstr.nativePersonaHooks` | M3 | Pref + WebExt MAIN inject gate + chrome plan |
 
 **Idle when:** Homogeneous, Native-Compatible escape, or `rfp_xor_pollution`.
 
@@ -122,7 +122,7 @@ Does **not** ship as user-facing UI. Does **not** reimplement CreepJS.
 
 | Surface | Gecko area | When | Status |
 |---------|------------|------|--------|
-| First document vs next nav | **DocShell** navigation / load state | M3→Phase 3 | `DocShellNavPhase::{FirstDocument, SubsequentNav}` + `persona_armed_for_nav` / `strict_next_nav_armed` encoded; live DocShell patch **not** claimed |
+| First document vs next nav | Top-level document load count (chrome) | M3 | Live cheap counter in `0003`; Rust `DocShellNavPhase` remains SoT |
 | Pref | `darkstr.strictFirstDoc` | M1+ chrome defaults | Semantics unchanged from Proof pin |
 
 M4 extends naming/notes for **strict-next-nav** (SubsequentNav arm); no new live C++. Until live DocShell hooks land and `darkstr.nativePersonaHooks` is flipped on a fork build, WebExt tab-scoped DNR + MAIN inject remain the Phase 1 path (`WebExtMainInjectPolicy::AllowFallback`).
@@ -165,7 +165,7 @@ Else:
 ```
 
 nsHttp / Navigator / DocShell / canvas hooks **read** the cached snapshot only when activation says `pollution_active` — never invent a second seed.  
-M3 API: `duppel_bridge::read_cached_persona` / `duppel_persona::cached_snapshot_readable`. Stub: [`0003-…`](../patches/stubs/0003-darkstr-hook-sites.patch.stub) · [`M3-STATUS.md`](M3-STATUS.md).  
+M3 API: `duppel_bridge::read_cached_persona` / `duppel_persona::cached_snapshot_readable`. Live patch: [`0003-darkstr-native-persona-hooks.patch`](../patches/0003-darkstr-native-persona-hooks.patch) · stub pointer retained · [`M3-STATUS.md`](M3-STATUS.md).  
 M4 API: `duppel_chaff::ChaffSchedulerPlan` / `duppel_bridge::read_depth_seeds` / `m4_depth_surfaces`. Stub: [`0004-…`](../patches/stubs/0004-darkstr-chaff-depth.patch.stub) · [`M4-STATUS.md`](M4-STATUS.md).
 
 ---
@@ -175,7 +175,7 @@ M4 API: `duppel_chaff::ChaffSchedulerPlan` / `duppel_bridge::read_depth_seeds` /
 | In `alex-hinojosa/darkstr` (public) | Private fork / Builder machine |
 |-------------------------------------|--------------------------------|
 | `docs/GECKO-HOOKS.md` (this file) | Full Firefox/LibreWolf source tree |
-| `patches/` stubs + **real** `0002-…xor-rfp.patch` + apply README | Apply / rebuild on private 155.0.1-1 tree (`mach build browser/components`) |
+| `patches/` stubs + **real** `0002-…xor-rfp.patch` + **real** `0003-…native-persona-hooks.patch` + apply README | Apply / rebuild on private 155.0.1-1 tree (`mach build browser/components`) |
 | `docs/darkstr.cfg.example` | Shipped `darkstr.cfg` in product |
 | `crates/duppel-*` + `duppel-bridge` | `moz.build` / workspace link into Gecko |
 | Phase 1 `extension/` companion | Branding, about:, icons |

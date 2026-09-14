@@ -284,7 +284,8 @@ Still **no** Mozilla/LibreWolf vendor:
 - [x] Hook-site enums / applicator surfaces for nsHttp UA + CH **REMOVE**, Navigator, DocShell strict-first-doc, MAIN inject feature flag (`M3-STATUS.md`, GECKO-HOOKS §2)
 - [x] Glue cache gate: read `PersonaSnapshot` only when `pollution_active` (unit-tested)
 - [x] `darkstr.nativePersonaHooks` name + `WebExtMainInjectPolicy` (disable MAIN inject when native path + pollution)
-- [ ] Live necko / Navigator / DocShell C++ hooks on private fork (train-pinned patch — not invented in public stubs)
+- [x] Live chrome JS native persona hooks train-pinned (`0003-darkstr-native-persona-hooks.patch` on 155.0.1-1)
+- [ ] Live C++ nsHttpHandler / Navigator.cpp / nsDocShell.cpp (optional later; not required for M3 chrome path)
 - [ ] Persona seed at process/startup wired in fork; `duppel-coherence` HTTP↔JS on fork smoke sites
 
 ### M4 — Chaff native + depth kickoff (into Phase 3)

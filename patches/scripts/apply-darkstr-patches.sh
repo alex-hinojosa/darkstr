@@ -134,6 +134,7 @@ if [[ "${APPEND_LW}" -eq 1 ]]; then
         echo 'defaultPref("darkstr.mode", "homogeneous");'
         echo 'defaultPref("darkstr.nativeCompatible", false);'
         echo 'defaultPref("darkstr.strictFirstDoc", true);'
+        echo 'defaultPref("darkstr.nativePersonaHooks", false);'
         echo "${MARKER_END}"
       } >> "${LW_CFG}"
     fi
@@ -160,9 +161,10 @@ for stub in "${STUBS}"/000*.patch.stub; do
 done
 if [[ "${stub_count}" -gt 0 ]]; then
   echo "Note: ${stub_count} .patch.stub file(s) present — sketches only, not applied."
-  echo "Remaining stubs are sketches; real M2 observer is patches/0002-darkstr-mode-xor-rfp.patch when present."
+  echo "Remaining stubs are sketches; real patches: 0002 XOR observer, 0003 native persona hooks when present."
 fi
 
 echo "Done. Cfg path always; real unified diffs under patches/000*.patch applied when present."
 echo "Remember XOR: Pollution kills RFP/FPP; Homogeneous restores stock RFP (no metric customization)."
-echo "M2 live observer: patches/0002-darkstr-mode-xor-rfp.patch (DarkstrModeXor.sys.mjs). Rebuild: ./mach build browser/components (see docs/M2-STATUS.md)."
+echo "M2 live observer: patches/0002-darkstr-mode-xor-rfp.patch (DarkstrModeXor.sys.mjs)."
+echo "M3 native hooks: patches/0003-darkstr-native-persona-hooks.patch (DarkstrNativePersona*.sys.mjs). Rebuild: ./mach build browser/components (see docs/M3-STATUS.md)."

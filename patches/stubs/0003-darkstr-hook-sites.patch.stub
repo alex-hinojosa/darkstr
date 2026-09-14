@@ -1,42 +1,26 @@
-# STUB — not a real unified diff. Do NOT invent untested C++/Gecko patch bodies here.
+# STUB POINTER — real unified diff is:
+#   patches/0003-darkstr-native-persona-hooks.patch
 #
-# M3 status (2026-09-14): public control plane landed in Rust enums/APIs.
-#   Live nsHttp / Navigator / DocShell hooks in a private LibreWolf-based tree = still TODO
-#   (train-pinned .patch only after Proof-checked against librewolf-155.0.1-1 or successor).
+# M3 live (2026-09-14): train-pinned chrome JS on LibreWolf/Firefox 155.0.1-1.
+#   DarkstrNativePersona.sys.mjs + Parent/Child JSWindowActor
+#   Wired via BrowserGlue + moz.build (requires M2 DarkstrModeXor context)
 #
-# Intent — M3 first native wins (hook sites; see docs/GECKO-HOOKS.md §2):
-#   nsHttp / nsHttpHandler
-#     -> Override User-Agent from cached PersonaSnapshot (same seed as Navigator)
-#     -> Client-Hints REMOVE for Firefox personas (never SET) — A1 parity
-#   Navigator DOM bindings
-#     -> userAgent / platform / hardwareConcurrency / deviceMemory / languages
-#        from the same PersonaSnapshot seed
-#   DocShell navigation
-#     -> darkstr.strictFirstDoc: FirstDocument stays native; SubsequentNav may arm persona
-#   Feature flag darkstr.nativePersonaHooks
-#     -> when true + pollution_active: disable WebExt MAIN inject (Avoid HTTP↔JS split-brain)
+# Surfaces landed in real patch (not C++):
+#   nsHttp via http-on-modify-request — UA override + CH REMOVE (never SET)
+#   Navigator minimum fields via JSWindowActor child
+#   DocShell-ish first vs subsequent via top-level document load count
+#   Feature flag darkstr.nativePersonaHooks (+ WebExt MAIN inject gate)
 #
-# Glue reads cached snapshot ONLY when pollution_active:
-#   duppel_bridge::read_cached_persona / duppel_persona::cached_snapshot_readable
-# Homogeneous / Native-Compatible / rfp_xor_pollution → idle (no second seed).
+# Glue reads cached snapshot only when pollution_active:
+#   prefs darkstr.persona.snapshot (JSON) or darkstr.persona.seed fallback
+# Homogeneous / Native-Compatible → idle
 #
-# Authoritative enums (must match unit tests):
+# Authoritative enums (Rust control plane on main):
 #   duppel_bridge::HookSite / HookApplicatorSurface / NsHttpAction / NavigatorField
-#   duppel_bridge::m3_applicator_surfaces / native_persona_plan
 #   duppel_persona::DocShellNavPhase / NativePersonaPlan / ClientHintsPolicy::Remove
-#   duppel_persona::webext_main_inject_policy
 #
-# When replacing this stub with a real patch (private fork):
-#   1. Pin Firefox/LibreWolf train SHA (e.g. 155.0.1-1) and verify paths exist.
-#   2. Thin glue only — call into NativePersonaPlan / read_cached_persona; no spoof logic in C++.
-#   3. Do not SET Client Hints on Firefox host personas.
-#   4. Keep brand: darkstr — not official LibreWolf. No Cloudflare/TLS claims.
-#   5. Optional path check: docs/M3-MINI-VERIFY.sh (no Mesh mv; do not hang on Mesh).
-#
-# Out of scope for this stub: full canvas/WebGL/Audio pipeline (M4+), TLS fingerprint games.
-#
-# Proof: docs/PROOF-XOR-CHECKLIST.md (M3 hook-site pin)
-# Status: docs/M3-STATUS.md
-# Hooks:  docs/GECKO-HOOKS.md §2
+# Apply: after 0002, patch -d "$DARKSTR_GECKO_ROOT" -p1 < patches/0003-darkstr-native-persona-hooks.patch
+# Atlas: never mv under /Volumes/Mesh.
 #
 # Brand: darkstr — not official LibreWolf. No Cloudflare/TLS claims.
+# Status: docs/M3-STATUS.md · Hooks: docs/GECKO-HOOKS.md §2
