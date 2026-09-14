@@ -167,3 +167,7 @@ Chrome key names and the activation matrix above remain the pin. M4 first drop s
 | Native-Compatible site list UI | **Unchanged** this PR — Phase 1 WebExt list; chrome pane = docs/PM only |
 
 See `docs/M4-STATUS.md`, `docs/GECKO-HOOKS.md` §2.2 / §2.5, stub `patches/stubs/0004-darkstr-chaff-depth.patch.stub`. Live Mini tree is for path checks only until a train-pinned patch is Proof-verified.
+
+## M3-CPP note (C++ nsHttp)
+
+Train-pinned C++ call-ins: `patches/0005-darkstr-cpp-native-hooks.patch` (`DarkstrNsHttpHooks`). Gates on `darkstr.nativePersonaHooks` (default **false**) + pollution XOR. CH = REMOVE only. Navigator/DocShell remain chrome-JS (`0003`). No Cloudflare/TLS/JA3 claims. Status: `docs/M3-CPP-STATUS.md`.

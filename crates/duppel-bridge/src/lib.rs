@@ -698,6 +698,24 @@ mod tests {
     }
 
     #[test]
+    fn m3_cpp_nshttp_path_hint_matches_public_patch() {
+        // Control-plane note: live C++ call-ins land in patches/0005 (nsHttp only).
+        // Navigator/DocShell remain chrome-JS (0003) until a later C++ PR.
+        let actions = firefox_nshttp_actions();
+        assert_eq!(actions.len(), 2);
+        assert_eq!(actions[0], NsHttpAction::OverrideUserAgent);
+        assert_eq!(actions[1], NsHttpAction::RemoveClientHints);
+        assert_eq!(HookSite::NsHttp.milestone(), "M3");
+        assert!(HookSite::NsHttp
+            .gecko_path_hints()
+            .iter()
+            .any(|p| p.contains("nsHttpHandler")),
+            "nsHttp hints should name nsHttpHandler (0005 C++ pin)");
+    }
+
+
+
+    #[test]
     fn m3_firefox_nshttp_ch_remove_never_set() {
         let actions = firefox_nshttp_actions();
         assert!(actions.contains(&NsHttpAction::OverrideUserAgent));

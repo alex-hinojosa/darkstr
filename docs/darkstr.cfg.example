@@ -17,3 +17,6 @@ defaultPref("darkstr.nativePersonaHooks", false);
 //   privacy.resistFingerprinting = false
 //   privacy.fingerprintingProtection = false
 // When returning to homogeneous, restore LibreWolf stock RFP/FPP expectations.
+
+// Optional M3-CPP mirror (written by DarkstrNativePersona when hooks apply):
+// defaultPref("darkstr.persona.ua", "");

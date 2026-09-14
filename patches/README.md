@@ -11,6 +11,7 @@ These stubs document *how* a real bsys6 / LibreWolf recipe would layer darkstr p
 | [`stubs/0002-darkstr-mode-xor-rfp.patch.stub`](stubs/0002-darkstr-mode-xor-rfp.patch.stub) | Pointer only — superseded by real `0002-…patch` |
 | [`0003-darkstr-native-persona-hooks.patch`](0003-darkstr-native-persona-hooks.patch) | **Real** train-pinned chrome JS native persona hooks (155.0.1-1 / `DarkstrNativePersona*.sys.mjs`) |
 | [`stubs/0003-darkstr-hook-sites.patch.stub`](stubs/0003-darkstr-hook-sites.patch.stub) | Pointer only — superseded by real `0003-…patch` |
+| [`0005-darkstr-cpp-native-hooks.patch`](0005-darkstr-cpp-native-hooks.patch) | **Real** train-pinned C++ nsHttp UA + CH REMOVE (155.0.1-1 / `DarkstrNsHttpHooks`) — Navigator/DocShell still chrome-JS |
 | [`stubs/0004-darkstr-chaff-depth.patch.stub`](stubs/0004-darkstr-chaff-depth.patch.stub) | M4: chaff scheduler + canvas/Audio/WebGL/worker depth notes (enums in Rust; still not a real patch) |
 | [`scripts/apply-darkstr-patches.sh`](scripts/apply-darkstr-patches.sh) | Example apply order for a real tree |
 
@@ -69,3 +70,15 @@ The script copies `stubs/darkstr.cfg` → `lw/darkstr.cfg` and appends an idempo
 ## M2 control-plane + train-pinned observer (2026-09-14)
 
 Rust XOR applicator remains the public SoT (`duppel_bridge` / `duppel_persona`). Live chrome observer is the real unified diff [`0002-darkstr-mode-xor-rfp.patch`](0002-darkstr-mode-xor-rfp.patch) against Firefox/LibreWolf **155.0.1-1** (`BrowserGlue` + `moz.build` + new `DarkstrModeXor.sys.mjs`). **No** invented C++ paths. Rebuild: `./mach build browser/components`. See `docs/M2-STATUS.md` / `docs/M2-MINI-VERIFY.sh`.
+
+
+## M3-CPP nsHttp call-ins (2026-09-14)
+
+Real unified diff [`0005-darkstr-cpp-native-hooks.patch`](0005-darkstr-cpp-native-hooks.patch) against post-M3 155.0.1-1:
+
+- New `DarkstrNsHttpHooks.{h,cpp}` in `netwerk/protocol/http/`
+- `nsHttpHandler::UserAgent` + `AddStandardRequestHeaders` call-ins
+- Chrome `DarkstrNativePersona` mirrors `darkstr.persona.ua` for C++ (no JSON in necko)
+- **Not** claimed: Navigator.cpp / nsDocShell.cpp edits, Rust FFI, Cloudflare/TLS/JA3
+
+Rebuild: `./mach build netwerk/protocol/http`. See `docs/M3-CPP-STATUS.md`. Stub `0004` remains chaff (not this patch number).

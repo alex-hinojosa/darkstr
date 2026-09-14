@@ -1,0 +1,6 @@
+# STUB POINTER — real patch is patches/0005-darkstr-cpp-native-hooks.patch
+# Train: LibreWolf / Firefox 155.0.1-1
+# Brand: darkstr — not official LibreWolf.
+# Surfaces: nsHttp UA override + Client Hints REMOVE only.
+# Navigator / DocShell remain chrome-JS (0003) in the 0005 drop.
+# Apply script skips *.stub; use the real .patch.
