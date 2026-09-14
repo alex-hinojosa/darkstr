@@ -12,7 +12,7 @@
 #![forbid(unsafe_code)]
 
 /// Crate API version string (bumps when snapshot fields change).
-pub const VERSION: &str = "0.1.0-phase2-m3";
+pub const VERSION: &str = "0.1.0-phase2-m4";
 
 /// Chrome / about:config pref names (stable Phase 1 → 2 Proof pin).
 pub mod prefs {
@@ -28,6 +28,9 @@ pub mod prefs {
     /// When true, WebExt MAIN inject should disable (fork companion). Default false
     /// until private-fork wiring is Proof-checked.
     pub const NATIVE_PERSONA_HOOKS: &str = "darkstr.nativePersonaHooks";
+    /// Quiet / Balanced / Loud chaff intensity (Phase 1 `darkstr.chaosLevel`).
+    /// Consumed by `duppel-chaff` scheduler; internal product pref (may stay storage longer).
+    pub const CHAOS_LEVEL: &str = "darkstr.chaosLevel";
 
     /// Browser prefs the fork auto-manages on mode change (not darkstr.* keys).
     pub const PRIVACY_RFP: &str = "privacy.resistFingerprinting";
@@ -190,6 +193,21 @@ impl PersonaSnapshot {
             return Err(CoherenceError::UtcTimezoneForbidden);
         }
         Ok(())
+    }
+
+    /// Canvas 2D noise seed (M4 depth surface — control plane only).
+    pub fn depth_canvas_seed(&self) -> u32 {
+        self.canvas_seed
+    }
+
+    /// AudioContext / OfflineAudioContext seed (M4 depth surface).
+    pub fn depth_audio_seed(&self) -> u32 {
+        self.audio_seed
+    }
+
+    /// WebGL vendor/renderer correlated with persona GPU family (M4 depth).
+    pub fn depth_webgl_gpu(&self) -> &GpuInfo {
+        &self.gpu
     }
 }
 
@@ -567,15 +585,16 @@ pub fn generate_persona(seed: PersonaSeed, engine: Engine, os: HostOs) -> Option
 
 // --- M3 native hook-site policy (enums + gating; no Gecko FFI) ---
 
-/// DocShell navigation phase for `darkstr.strictFirstDoc` coherence.
+/// DocShell navigation phase for `darkstr.strictFirstDoc` / strict-next-nav coherence.
 ///
 /// Phase 1 parity: when strict-first-doc is on, the **first** document load stays
-/// native; persona arms on the **subsequent** main_frame navigation.
+/// native; persona arms on the **subsequent** main_frame navigation ("strict-next-nav").
+/// M4 keeps this encoding; live DocShell patch remains private-fork / not claimed here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DocShellNavPhase {
     /// First document in the tab/session scope — stay native when strictFirstDoc.
     FirstDocument,
-    /// Next / subsequent main_frame navigation — persona may arm.
+    /// Next / subsequent main_frame navigation — persona may arm (strict-next-nav).
     SubsequentNav,
 }
 
@@ -596,6 +615,13 @@ pub fn persona_armed_for_nav(strict_first_doc: bool, phase: DocShellNavPhase) ->
         return true;
     }
     matches!(phase, DocShellNavPhase::SubsequentNav)
+}
+
+/// Alias: strict-next-nav arm = persona armed for this DocShell phase.
+///
+/// Prefer this name in M4+ DocShell notes; semantics identical to [`persona_armed_for_nav`].
+pub fn strict_next_nav_armed(strict_first_doc: bool, phase: DocShellNavPhase) -> bool {
+    persona_armed_for_nav(strict_first_doc, phase)
 }
 
 /// Glue may read a cached [`PersonaSnapshot`] only when Pollution surfaces are active.
@@ -850,6 +876,7 @@ mod tests {
     fn m3_pref_native_persona_hooks_name() {
         assert_eq!(prefs::NATIVE_PERSONA_HOOKS, "darkstr.nativePersonaHooks");
         assert_eq!(prefs::STRICT_FIRST_DOC, "darkstr.strictFirstDoc");
+        assert_eq!(prefs::CHAOS_LEVEL, "darkstr.chaosLevel");
     }
 
     #[test]
@@ -894,6 +921,9 @@ mod tests {
         assert!(persona_armed_for_nav(true, DocShellNavPhase::SubsequentNav));
         assert!(persona_armed_for_nav(false, DocShellNavPhase::FirstDocument));
         assert!(persona_armed_for_nav(false, DocShellNavPhase::SubsequentNav));
+        // M4 alias: strict-next-nav == SubsequentNav arm
+        assert!(!strict_next_nav_armed(true, DocShellNavPhase::FirstDocument));
+        assert!(strict_next_nav_armed(true, DocShellNavPhase::SubsequentNav));
     }
 
     #[test]

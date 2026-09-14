@@ -289,10 +289,13 @@ Still **no** Mozilla/LibreWolf vendor:
 
 ### M4 — Chaff native + depth kickoff (into Phase 3)
 
-- `duppel-chaff` scheduler behind prefs; Quiet/Balanced/Loud parity.
-- Start canvas/Audio/WebGL + worker coverage; DocShell strict-next-nav.
-- Native-Compatible site list UI in chrome privacy pane.
-- Track D: quarterly Servo/Ladybird note only — no eng investment unless fork cost flips.
+- [x] `duppel-chaff` scheduler control plane behind prefs; Quiet/Balanced/Loud parity (`M4-STATUS.md`, GECKO-HOOKS §2.2)
+- [x] Canvas/Audio/WebGL + worker **enums/APIs/tests**; seeds from `PersonaSnapshot` (GECKO-HOOKS §2.5)
+- [x] DocShell strict-next-nav notes extended (`strict_next_nav_armed`; live patch still not claimed)
+- [x] Native-Compatible site list UI: **docs / PM notes only** this drop (Phase 1 WebExt list remains; no UI string churn)
+- [x] Track D: one-paragraph quarterly Servo/Ladybird note in `M4-STATUS.md` — no eng investment
+- [ ] Live native chaff timer / canvas / WebGL / Audio / worker C++ hooks on private fork (train-pinned — not invented in public stubs)
+- [ ] Chrome privacy-pane Native-Compatible site list UI (when PM schedules; not this control-plane PR)
 
 ### Exit criteria for “Phase 2 done”
 
