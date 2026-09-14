@@ -207,8 +207,8 @@ diff -ruN a/netwerk/protocol/http/moz.build b/netwerk/protocol/http/moz.build
 @@ -114,6 +114,7 @@
      "ConnectionEstablisher.cpp",
      "ConnectionHandle.cpp",
-     "DnsAndConnectSocket.cpp",
 +    "DarkstrNsHttpHooks.cpp",  # darkstr M3-CPP nsHttp UA + CH REMOVE
+     "DnsAndConnectSocket.cpp",
      "EarlyHintPreconnect.cpp",
      "EarlyHintPreloader.cpp",
      "EarlyHintRegistrar.cpp",

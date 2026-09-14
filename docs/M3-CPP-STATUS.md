@@ -90,3 +90,7 @@ bash docs/M3-CPP-MINI-VERIFY.sh
 | Proof | `docs/PROOF-XOR-CHECKLIST.md`, `docs/PROOF-PIN.md`, this file |
 | PM | Goal + honesty (no CF/TLS/bypass) |
 | Builder Mini | `$DARKSTR_GECKO_ROOT`, `docs/M3-CPP-MINI-VERIFY.sh` |
+
+## Mini compile note
+
+`UNIFIED_SOURCES` must keep `DarkstrNsHttpHooks.cpp` **alphabetically** between `ConnectionHandle.cpp` and `DnsAndConnectSocket.cpp` or `mach` fails with `UnsortedError`.
