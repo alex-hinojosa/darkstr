@@ -160,9 +160,9 @@ for stub in "${STUBS}"/000*.patch.stub; do
 done
 if [[ "${stub_count}" -gt 0 ]]; then
   echo "Note: ${stub_count} .patch.stub file(s) present — sketches only, not applied."
-  echo "Replace with real diffs against the pinned Firefox/LibreWolf train before CI apply."
+  echo "Remaining stubs are sketches; real M2 observer is patches/0002-darkstr-mode-xor-rfp.patch when present."
 fi
 
-echo "Done (cfg path). No make bootstrap / make build invoked."
+echo "Done. Cfg path always; real unified diffs under patches/000*.patch applied when present."
 echo "Remember XOR: Pollution kills RFP/FPP; Homogeneous restores stock RFP (no metric customization)."
-echo "M2 control-plane: Rust XOR applicator landed (docs/M2-STATUS.md). Next: private-fork live pref observer — stubs/0002-*.stub (no invented C++ here)."
+echo "M2 live observer: patches/0002-darkstr-mode-xor-rfp.patch (DarkstrModeXor.sys.mjs). Rebuild: ./mach build browser/components (see docs/M2-STATUS.md)."

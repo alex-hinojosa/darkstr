@@ -35,7 +35,7 @@ Ship path in fork tree (illustrative): `browser/app/profile/darkstr.js` **or** a
 | Integration | Upstream area (Firefox/LibreWolf) | darkstr action | M2 status |
 |-------------|-----------------------------------|----------------|-----------|
 | Declare prefs | `modules/libpref/init/StaticPrefList.yaml` **or** `all.js` / product `.js` | Add `darkstr.mode` (String), `darkstr.nativeCompatible` (Bool), later `darkstr.strictFirstDoc` | Defaults via M1 `darkstr.cfg`; StaticPrefList still private-fork |
-| Observe changes | Pref observer in chrome process (C++ or Rust static prefs callback) | On `darkstr.mode` / `darkstr.nativeCompatible` change → call `PrefsApplicator::apply_mode_effects` | **Rust applicator + XOR guards landed**; live C++ observer **not** claimed |
+| Observe changes | Pref observer in chrome process (chrome JS ESM on 155.0.1-1) | On `darkstr.mode` / `darkstr.nativeCompatible` change → XOR write `privacy.resistFingerprinting` / `privacy.fingerprintingProtection` (same table as `PrefsApplicator::apply_mode_effects`) | **Rust applicator landed**; **live chrome JS observer** in `patches/0002-darkstr-mode-xor-rfp.patch` (`DarkstrModeXor.sys.mjs` via `BrowserGlue`); C++/Rust FFI **not** claimed |
 | Mirror WebExt | Fork-only experimental API / native messaging | Bidirectional sync per [`PREF-BRIDGE.md`](PREF-BRIDGE.md) §2 | Deferred (fork wiring) |
 
 **Authoritative in fork:** chrome prefs. WebExt `browser.storage.local` is a UI mirror until bridge lands.
@@ -62,7 +62,7 @@ duppel_bridge::PrefsApplicator::apply_mode_effects(...)
 duppel_bridge::PrefApplyPlan::is_xor_safe() / allow_persona_chaff()
 ```
 
-Stub notes (not a real patch): [`../patches/stubs/0002-darkstr-mode-xor-rfp.patch.stub`](../patches/stubs/0002-darkstr-mode-xor-rfp.patch.stub). Status: [`M2-STATUS.md`](M2-STATUS.md).
+Real train-pinned patch: [`../patches/0002-darkstr-mode-xor-rfp.patch`](../patches/0002-darkstr-mode-xor-rfp.patch) (stub pointer retained). Status: [`M2-STATUS.md`](M2-STATUS.md).
 
 ---
 
@@ -175,7 +175,7 @@ M4 API: `duppel_chaff::ChaffSchedulerPlan` / `duppel_bridge::read_depth_seeds` /
 | In `alex-hinojosa/darkstr` (public) | Private fork / Builder machine |
 |-------------------------------------|--------------------------------|
 | `docs/GECKO-HOOKS.md` (this file) | Full Firefox/LibreWolf source tree |
-| `patches/` stubs + apply README | Real `.patch` bodies against pinned train |
+| `patches/` stubs + **real** `0002-…xor-rfp.patch` + apply README | Apply / rebuild on private 155.0.1-1 tree (`mach build browser/components`) |
 | `docs/darkstr.cfg.example` | Shipped `darkstr.cfg` in product |
 | `crates/duppel-*` + `duppel-bridge` | `moz.build` / workspace link into Gecko |
 | Phase 1 `extension/` companion | Branding, about:, icons |

@@ -7,7 +7,8 @@ These stubs document *how* a real bsys6 / LibreWolf recipe would layer darkstr p
 |------|------|
 | [`stubs/darkstr.cfg`](stubs/darkstr.cfg) | Chrome pref defaults (`darkstr.mode`, …) — same as `docs/darkstr.cfg.example` |
 | [`stubs/0001-darkstr-prefs-defaults.patch.stub`](stubs/0001-darkstr-prefs-defaults.patch.stub) | Prefs / cfg wiring sketch |
-| [`stubs/0002-darkstr-mode-xor-rfp.patch.stub`](stubs/0002-darkstr-mode-xor-rfp.patch.stub) | Pollution kills RFP/FPP; Homogeneous restores stock RFP — **M2 notes upgraded**; still not a real C++ patch |
+| [`0002-darkstr-mode-xor-rfp.patch`](0002-darkstr-mode-xor-rfp.patch) | **Real** train-pinned chrome JS XOR observer (155.0.1-1 / `DarkstrModeXor.sys.mjs`) |
+| [`stubs/0002-darkstr-mode-xor-rfp.patch.stub`](stubs/0002-darkstr-mode-xor-rfp.patch.stub) | Pointer only — superseded by real `0002-…patch` |
 | [`stubs/0003-darkstr-hook-sites.patch.stub`](stubs/0003-darkstr-hook-sites.patch.stub) | M3: nsHttp UA+CH REMOVE / Navigator / DocShell / MAIN inject gate notes (enums in Rust; still not a real patch) |
 | [`stubs/0004-darkstr-chaff-depth.patch.stub`](stubs/0004-darkstr-chaff-depth.patch.stub) | M4: chaff scheduler + canvas/Audio/WebGL/worker depth notes (enums in Rust; still not a real patch) |
 | [`scripts/apply-darkstr-patches.sh`](scripts/apply-darkstr-patches.sh) | Example apply order for a real tree |
@@ -56,6 +57,6 @@ grep -n 'darkstr.mode\|BEGIN darkstr-m1-prefs' "$DARKSTR_GECKO_ROOT/lw/librewolf
 
 The script copies `stubs/darkstr.cfg` → `lw/darkstr.cfg` and appends an idempotent `defaultPref` block into `lw/librewolf.cfg` so chrome prefs load. It does **not** run `make bootstrap` / `make build`. `.patch.stub` files remain sketches until replaced with train-pinned unified diffs.
 
-## M2 control-plane (2026-09-14)
+## M2 control-plane + train-pinned observer (2026-09-14)
 
-Rust XOR applicator is the public source of truth (`duppel_bridge` / `duppel_persona`). Stub `0002` notes document the observer→applicator contract. **No** untested C++ bodies in this repo. See `docs/M2-STATUS.md`.
+Rust XOR applicator remains the public SoT (`duppel_bridge` / `duppel_persona`). Live chrome observer is the real unified diff [`0002-darkstr-mode-xor-rfp.patch`](0002-darkstr-mode-xor-rfp.patch) against Firefox/LibreWolf **155.0.1-1** (`BrowserGlue` + `moz.build` + new `DarkstrModeXor.sys.mjs`). **No** invented C++ paths. Rebuild: `./mach build browser/components`. See `docs/M2-STATUS.md` / `docs/M2-MINI-VERIFY.sh`.

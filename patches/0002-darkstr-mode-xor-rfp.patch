@@ -1,0 +1,164 @@
+# darkstr M2 — train-pinned live chrome XOR pref observer
+# Train: Firefox FIREFOX_155_0_1_RELEASE / LibreWolf 155.0.1-1
+# Brand: darkstr — not official LibreWolf. No Cloudflare/TLS claims.
+# Apply: patch -d "$DARKSTR_GECKO_ROOT" -p1 < patches/0002-darkstr-mode-xor-rfp.patch
+#
+--- /dev/null
++++ b/browser/components/DarkstrModeXor.sys.mjs
+@@ -0,0 +1,114 @@
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
++
++/**
++ * darkstr M2 — live chrome pref observer for XOR mode→RFP side-effects.
++ *
++ * Train pin: Firefox / LibreWolf 155.0.1-1 (FIREFOX_155_0_1_RELEASE).
++ * Brand: darkstr — not official LibreWolf. Pollution browser, not Cloudflare bypass.
++ *
++ * Semantics mirror the public control plane:
++ *   duppel_persona::mode_pref_effects
++ *   duppel_bridge::PrefsApplicator::apply_mode_effects / PrefApplyPlan::is_xor_safe
++ *
++ * Pollution  → privacy.resistFingerprinting=false,
++ *              privacy.fingerprintingProtection=false
++ * Homogeneous → stock RFP true / FPP stock-on restore; no RFP metric customization
++ * Forbidden   → Pollution with RFP still true via this prefs path
++ *
++ * Observes darkstr.mode / darkstr.nativeCompatible. Writes only privacy.*
++ * (does not echo darkstr.* back — avoids re-entrancy). Persona/chaff remain
++ * WebExt / later M3 hooks; nativeCompatible is read for parity only here.
++ */
++
++const MODE_PREF = "darkstr.mode";
++const NATIVE_PREF = "darkstr.nativeCompatible";
++const RFP_PREF = "privacy.resistFingerprinting";
++const FPP_PREF = "privacy.fingerprintingProtection";
++
++export var DarkstrModeXor = {
++  _inited: false,
++  _applying: false,
++
++  init() {
++    if (this._inited) {
++      return;
++    }
++    this._inited = true;
++    this._observer = this._observe.bind(this);
++    Services.prefs.addObserver(MODE_PREF, this._observer);
++    Services.prefs.addObserver(NATIVE_PREF, this._observer);
++    this.applyModeEffects();
++  },
++
++  uninit() {
++    if (!this._inited) {
++      return;
++    }
++    try {
++      Services.prefs.removeObserver(MODE_PREF, this._observer);
++      Services.prefs.removeObserver(NATIVE_PREF, this._observer);
++    } catch (_e) {
++      // Observers may already be gone during shutdown.
++    }
++    this._inited = false;
++  },
++
++  _observe(_subject, topic, data) {
++    if (topic !== "nsPref:changed") {
++      return;
++    }
++    if (data === MODE_PREF || data === NATIVE_PREF) {
++      this.applyModeEffects();
++    }
++  },
++
++  /**
++   * Apply XOR side-effects for the current darkstr.mode value.
++   * @returns {{ mode: string, nativeCompatible: boolean, xorSafe: boolean }}
++   */
++  applyModeEffects() {
++    if (this._applying) {
++      return { mode: "homogeneous", nativeCompatible: false, xorSafe: true };
++    }
++    this._applying = true;
++    try {
++      let mode = "homogeneous";
++      try {
++        mode = Services.prefs.getStringPref(MODE_PREF, "homogeneous");
++      } catch (_e) {
++        mode = "homogeneous";
++      }
++      if (mode !== "pollution" && mode !== "homogeneous") {
++        mode = "homogeneous";
++      }
++
++      let nativeCompatible = false;
++      try {
++        nativeCompatible = Services.prefs.getBoolPref(NATIVE_PREF, false);
++      } catch (_e) {
++        nativeCompatible = false;
++      }
++
++      if (mode === "pollution") {
++        Services.prefs.setBoolPref(RFP_PREF, false);
++        Services.prefs.setBoolPref(FPP_PREF, false);
++      } else {
++        // Homogeneous: restore LibreWolf stock RFP expectations.
++        // Do not customize RFP metrics / letterboxing tables.
++        Services.prefs.setBoolPref(RFP_PREF, true);
++        Services.prefs.setBoolPref(FPP_PREF, true);
++      }
++
++      const rfp = Services.prefs.getBoolPref(RFP_PREF, false);
++      const fpp = Services.prefs.getBoolPref(FPP_PREF, false);
++      const xorSafe =
++        mode === "pollution" ? !rfp && !fpp : rfp === true;
++
++      return { mode, nativeCompatible, xorSafe };
++    } finally {
++      this._applying = false;
++    }
++  },
++};
+--- a/browser/components/moz.build
++++ b/browser/components/moz.build
+@@ -117,6 +117,7 @@
+ ]
+ 
+ MOZ_SRC_FILES += [
++    "DarkstrModeXor.sys.mjs",
+     "DefaultBrowserCheck.sys.mjs",
+     "DesktopActorRegistry.sys.mjs",
+     "ProfileDataUpgrader.sys.mjs",
+--- a/browser/components/BrowserGlue.sys.mjs
++++ b/browser/components/BrowserGlue.sys.mjs
+@@ -30,6 +30,7 @@
+   DAPVisitCounter: "resource://gre/modules/DAPVisitCounter.sys.mjs",
+   DefaultBrowserCheck:
+     "moz-src:///browser/components/DefaultBrowserCheck.sys.mjs",
++  DarkstrModeXor: "moz-src:///browser/components/DarkstrModeXor.sys.mjs",
+   DesktopActorRegistry:
+     "moz-src:///browser/components/DesktopActorRegistry.sys.mjs",
+   Discovery: "resource:///modules/Discovery.sys.mjs",
+@@ -358,6 +359,10 @@
+     }
+ 
+     lazy.DesktopActorRegistry.init();
++
++    // darkstr M2: live XOR observer (Pollution kills RFP/FPP; Homogeneous restores stock RFP).
++    // Brand: darkstr — not official LibreWolf.
++    lazy.DarkstrModeXor.init();
+   },
+ 
+   // cleanup (called on application shutdown)
+@@ -367,6 +372,10 @@
+     // until here.
+     lazy.AboutHomeStartupCache.uninit();
+ 
++    try {
++      lazy.DarkstrModeXor.uninit();
++    } catch (_e) {}
++
+     if (this._lateTasksIdleObserver) {
+       this._userIdleService.removeIdleObserver(
+         this._lateTasksIdleObserver,

@@ -1,36 +1,17 @@
-# STUB — not a real unified diff. Do NOT invent untested C++/Gecko patch bodies here.
+# SUPERSEDED by real train-pinned patch:
+#   patches/0002-darkstr-mode-xor-rfp.patch
 #
-# M2 status (2026-09-14): public control plane landed in Rust.
-#   Live chrome pref observer in a private LibreWolf-based tree = still TODO
-#   (train-pinned .patch only after Proof-checked on that tree).
+# That unified diff targets Firefox FIREFOX_155_0_1_RELEASE /
+# LibreWolf 155.0.1-1 and lands:
+#   browser/components/DarkstrModeXor.sys.mjs  (new chrome JS observer)
+#   browser/components/moz.build               (MOZ_SRC_FILES)
+#   browser/components/BrowserGlue.sys.mjs     (init/uninit)
 #
-# Intent — M2 observer XOR gates (prefs path):
-#   Pref observer on darkstr.mode / darkstr.nativeCompatible calls:
-#     duppel_bridge::PrefsApplicator::apply_mode_effects(mode, nativeCompatible)
+# Semantics (must match Rust control plane):
+#   Pollution  -> privacy.resistFingerprinting=false
+#                 privacy.fingerprintingProtection=false
+#   Homogeneous -> RFP true / FPP stock-on; idle crates; no metric customization
+#   Forbidden  -> Pollution with RFP still true via prefs path
 #
-#   Pollution  -> privacy.resistFingerprinting = false
-#                 privacy.fingerprintingProtection = false
-#                 enable duppel-persona / duppel-chaff path (unless nativeCompatible)
-#   Homogeneous -> restore LibreWolf stock RFP/FPP expectations
-#                  (resistFingerprinting = true; FPP stock-on restore)
-#                  idle persona/chaff crates
-#                  DO NOT customize RFP metrics / letterboxing tables
-#
-# Authoritative table (must match unit tests):
-#   duppel_persona::mode_pref_effects
-#   duppel_bridge::PrefApplyPlan::for_mode / is_xor_safe / allow_persona_chaff
-#
-# Forbidden (release-fail): darkstr.mode=pollution with RFP still true via prefs path.
-#   Guard: PrefApplyPlan::is_xor_safe() == true after apply_mode_effects.
-#
-# When replacing this stub with a real patch (private fork):
-#   1. Pin Firefox/LibreWolf train SHA.
-#   2. Thin chrome-process observer only — call into PrefsApplicator; no spoof logic.
-#   3. Do not patch RFP metric / letterbox tables for Homogeneous.
-#   4. Keep brand: darkstr — not official LibreWolf. No Cloudflare/TLS claims.
-#
-# Proof: docs/PROOF-XOR-CHECKLIST.md (M2 applicator pin)
-# Status: docs/M2-STATUS.md
-# Hooks:  docs/GECKO-HOOKS.md §1.2–1.3
-#
+# This .stub file remains as a sketch pointer only — apply script skips *.stub.
 # Brand: darkstr — not official LibreWolf. No Cloudflare/TLS claims.
