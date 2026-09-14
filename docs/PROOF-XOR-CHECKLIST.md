@@ -12,8 +12,8 @@ When the PR touches XOR mode→RFP application (even docs/Rust-only):
 - [ ] Pollution → RFP=false, FPP=false; persona/chaff unless `nativeCompatible`
 - [ ] Homogeneous → stock RFP true / FPP stock; idle crates; **no** RFP metric customization
 - [ ] Forbidden: Pollution with RFP still true via prefs path (`PrefApplyPlan::is_xor_safe`)
-- [ ] No claim that untested C++/Gecko observers landed unless Proof-checked on a fork artifact
-- [ ] Status: [`M2-STATUS.md`](M2-STATUS.md) · Hooks: [`GECKO-HOOKS.md`](GECKO-HOOKS.md) §1.2–1.3
+- [ ] Live observer claims limited to train-pinned `patches/0002-darkstr-mode-xor-rfp.patch` (chrome JS `DarkstrModeXor.sys.mjs` on 155.0.1-1); no C++/Rust FFI claims without Proof on a fork artifact
+- [ ] Status: [`M2-STATUS.md`](M2-STATUS.md) · Hooks: [`GECKO-HOOKS.md`](GECKO-HOOKS.md) §1.2–1.3 · Mini: [`M2-MINI-VERIFY.sh`](M2-MINI-VERIFY.sh)
 
 ## M3 hook-site pin (persona applicator enums)
 

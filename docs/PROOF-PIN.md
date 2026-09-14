@@ -121,18 +121,21 @@ Chrome key names above remain the pin. M1 first drop on the private LibreWolf-ba
 
 Installed via `patches/scripts/apply-darkstr-patches.sh` into `lw/darkstr.cfg` + marked append on `lw/librewolf.cfg`. **No** Pollution auto-RFP yet (M2). **No** claim that a rebuilt browser binary exists until Linux CI / local build artifacts are Proof-checked. See `docs/M1-STATUS.md`.
 
-## Phase 2 M2 note (XOR applicator control plane — 2026-09-14)
+## Phase 2 M2 note (XOR applicator + train-pinned live observer — 2026-09-14)
 
-Chrome key names and the activation matrix above remain the pin. M2 first drop is the **Rust prefs-path applicator** (not a claim that live Gecko C++ observers exist yet):
+Chrome key names and the activation matrix above remain the pin. M2 ships:
 
-| Mode | Applicator writes | Crates |
-|------|-------------------|--------|
+1. **Rust prefs-path applicator** (`duppel_bridge` / `duppel_persona`) — control plane SoT.
+2. **Train-pinned chrome JS observer** for LibreWolf/Firefox **155.0.1-1**: `patches/0002-darkstr-mode-xor-rfp.patch` → `DarkstrModeXor.sys.mjs` wired from `BrowserGlue` (not C++ FFI).
+
+| Mode | Applicator / observer writes | Crates |
+|------|------------------------------|--------|
 | Pollution | `privacy.resistFingerprinting=false`, `privacy.fingerprintingProtection=false` | enable unless `darkstr.nativeCompatible` |
 | Homogeneous | stock RFP true / FPP stock-on restore | idle; **no** RFP metric customization |
 
-**Forbidden via prefs path:** Pollution with RFP still true. Enforced in `duppel_bridge::PrefApplyPlan::is_xor_safe` after `PrefsApplicator::apply_mode_effects`.
+**Forbidden via prefs path:** Pollution with RFP still true. Enforced in `duppel_bridge::PrefApplyPlan::is_xor_safe` and mirrored by the chrome observer writes.
 
-See `docs/M2-STATUS.md`, `docs/GECKO-HOOKS.md` §1.2–1.3, stub `patches/stubs/0002-darkstr-mode-xor-rfp.patch.stub`. Stock LibreWolf companion still cannot auto-kill RFP (manual about:config + UTC probe).
+See `docs/M2-STATUS.md`, `docs/GECKO-HOOKS.md` §1.2–1.3, `docs/M2-MINI-VERIFY.sh`. Stock LibreWolf **without** the fork patch still cannot auto-kill RFP (manual about:config + UTC probe). Mini apply + `mach build` proof is operator-side until recorded.
 
 ## Phase 2 M3 note (persona hook-site enums — 2026-09-14)
 
