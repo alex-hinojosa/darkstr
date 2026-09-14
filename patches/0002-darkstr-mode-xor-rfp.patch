@@ -2,10 +2,11 @@
 # Train: Firefox FIREFOX_155_0_1_RELEASE / LibreWolf 155.0.1-1
 # Brand: darkstr — not official LibreWolf. No Cloudflare/TLS claims.
 # Apply: patch -d "$DARKSTR_GECKO_ROOT" -p1 < patches/0002-darkstr-mode-xor-rfp.patch
+# Soft residual (Proof): FPP re-assert after CB settle — observe RFP/FPP + deferred apply under Pollution.
 #
 --- /dev/null
 +++ b/browser/components/DarkstrModeXor.sys.mjs
-@@ -0,0 +1,114 @@
+@@ -0,0 +1,159 @@
 +/* This Source Code Form is subject to the terms of the Mozilla Public
 + * License, v. 2.0. If a copy of the MPL was not distributed with this
 + * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -25,7 +26,11 @@
 + * Homogeneous → stock RFP true / FPP stock-on restore; no RFP metric customization
 + * Forbidden   → Pollution with RFP still true via this prefs path
 + *
-+ * Observes darkstr.mode / darkstr.nativeCompatible. Writes only privacy.*
++ * Observes darkstr.mode / darkstr.nativeCompatible. Also observes
++ * privacy.resistFingerprinting / privacy.fingerprintingProtection so that under
++ * Pollution we can re-assert both false after ContentBlockingPrefs (or similar
++ * CB category) stomps FPP/RFP post-BrowserGlue init. Homogeneous ignores RFP/FPP
++ * observer callbacks (do not fight user/stock). Writes only privacy.*
 + * (does not echo darkstr.* back — avoids re-entrancy). Persona/chaff remain
 + * WebExt / later M3 hooks; nativeCompatible is read for parity only here.
 + */
@@ -47,7 +52,12 @@
 +    this._observer = this._observe.bind(this);
 +    Services.prefs.addObserver(MODE_PREF, this._observer);
 +    Services.prefs.addObserver(NATIVE_PREF, this._observer);
++    Services.prefs.addObserver(RFP_PREF, this._observer);
++    Services.prefs.addObserver(FPP_PREF, this._observer);
 +    this.applyModeEffects();
++    // CB category / ContentBlockingPrefs may settle after BrowserGlue init and
++    // re-enable FPP. Deferred re-apply re-asserts Pollution XOR (!rfp && !fpp).
++    this._scheduleDeferredReapply();
 +  },
 +
 +  uninit() {
@@ -57,18 +67,54 @@
 +    try {
 +      Services.prefs.removeObserver(MODE_PREF, this._observer);
 +      Services.prefs.removeObserver(NATIVE_PREF, this._observer);
++      Services.prefs.removeObserver(RFP_PREF, this._observer);
++      Services.prefs.removeObserver(FPP_PREF, this._observer);
 +    } catch (_e) {
 +      // Observers may already be gone during shutdown.
 +    }
 +    this._inited = false;
 +  },
 +
++  _scheduleDeferredReapply() {
++    const self = this;
++    const reapply = () => {
++      try {
++        self.applyModeEffects();
++      } catch (_e) {
++        // Best-effort; init path must not throw.
++      }
++    };
++    try {
++      Services.tm.dispatchToMainThread(reapply);
++    } catch (_e) {}
++    try {
++      Services.tm.idleDispatchToMainThread(reapply);
++    } catch (_e) {}
++  },
++
 +  _observe(_subject, topic, data) {
 +    if (topic !== "nsPref:changed") {
 +      return;
 +    }
++    if (this._applying) {
++      return;
++    }
 +    if (data === MODE_PREF || data === NATIVE_PREF) {
 +      this.applyModeEffects();
++      return;
++    }
++    if (data === RFP_PREF || data === FPP_PREF) {
++      // Only re-assert under Pollution (counter CB stomps). Homogeneous: ignore
++      // so we do not fight a user or stock toggling RFP/FPP.
++      let mode = "homogeneous";
++      try {
++        mode = Services.prefs.getStringPref(MODE_PREF, "homogeneous");
++      } catch (_e) {
++        mode = "homogeneous";
++      }
++      if (mode === "pollution") {
++        this.applyModeEffects();
++      }
 +    }
 +  },
 +
@@ -120,6 +166,7 @@
 +    }
 +  },
 +};
+
 --- a/browser/components/moz.build
 +++ b/browser/components/moz.build
 @@ -117,6 +117,7 @@

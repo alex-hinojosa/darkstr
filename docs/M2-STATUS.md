@@ -50,12 +50,18 @@ LibreWolf does **not** patch `BrowserGlue.sys.mjs` in its 155 patch set (verifie
 Not invented C++. A thin ESM chrome module:
 
 1. `Services.prefs.addObserver` on `darkstr.mode` + `darkstr.nativeCompatible`
-2. On change (+ once at `BrowserGlue._init`): write only `privacy.resistFingerprinting` / `privacy.fingerprintingProtection` per the table above
-3. Does **not** rewrite `darkstr.*` (no re-entrancy)
-4. Does **not** customize RFP metrics / letterboxing
-5. `nativeCompatible` is read for control-plane parity; persona/chaff stay WebExt until M3 native hooks
+2. Also observes `privacy.resistFingerprinting` + `privacy.fingerprintingProtection`: under **Pollution** only, re-call `applyModeEffects` when those change (counter ContentBlockingPrefs / CB category stomps). **Homogeneous** ignores RFP/FPP observer callbacks (do not fight user/stock).
+3. On mode/native change (+ once at `BrowserGlue._init`): write only `privacy.resistFingerprinting` / `privacy.fingerprintingProtection` per the table above
+4. After first `applyModeEffects` in `init`, schedule deferred re-apply (`Services.tm.dispatchToMainThread` + `idleDispatchToMainThread`) so CB settle after BrowserGlue init is overridden under Pollution
+5. Does **not** rewrite `darkstr.*` (no re-entrancy); keeps `_applying` guard
+6. Does **not** customize RFP metrics / letterboxing
+7. `nativeCompatible` is read for control-plane parity; persona/chaff stay WebExt until M3 native hooks
 
 Semantics intentionally mirror `duppel_bridge::PrefsApplicator::apply_mode_effects` / `duppel_persona::mode_pref_effects`.
+
+### Soft residual (Proof skim) — closed in this drop
+
+Proof soft residual after M2 XOR skim PASS: under Pollution, `DarkstrModeXor` set FPP=false but CB category re-applied FPP=true afterward (`xorSafe` wants `!rfp && !fpp`). RFP path already held. **Closed** by observing FPP (+RFP) and deferred re-apply under Pollution only — honesty: soft residual closed by observing FPP+deferred apply; not a claim of Full CB rewrite or FFI.
 
 ## Apply + rebuild (Mini SSD)
 
@@ -79,6 +85,10 @@ bash docs/M2-MINI-VERIFY.sh
 Runtime skim after rebuild: Homogeneous → RFP true; set `darkstr.mode=pollution` → RFP/FPP false; back to homogeneous → RFP true. No metric customization.
 
 **Atlas:** never `mv` under `/Volumes/Mesh`.
+
+## Soft residual closure (2026-09-14)
+
+Proof soft residual (FPP re-assert after CB settle under Pollution) closed by: observe `privacy.fingerprintingProtection` + `privacy.resistFingerprinting`; re-assert both false only when `darkstr.mode===pollution`; deferred apply after `init`. Homogeneous does not fight user/stock on RFP/FPP prefs. Not claimed: CB rewrite, C++/FFI, Mini binary re-Proof.
 
 ## Honesty / non-claims
 
