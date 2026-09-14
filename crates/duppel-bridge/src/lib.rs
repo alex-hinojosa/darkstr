@@ -13,7 +13,7 @@ use duppel_persona::{
 };
 
 /// Crate API version string.
-pub const VERSION: &str = "0.1.0-phase2-gecko-hooks";
+pub const VERSION: &str = "0.1.0-phase2-m2";
 
 /// Re-export pref name constants for glue that only depends on this crate.
 pub use duppel_persona::prefs as pref_names;
@@ -116,6 +116,42 @@ impl PrefApplyPlan {
     /// True when persona/chaff must stay idle after this plan is applied.
     pub fn crates_idle(&self) -> bool {
         self.effects.crates_idle
+    }
+
+    /// Release-fail guard for the prefs path (M2 observer XOR gate).
+    ///
+    /// Pollution plans must never write `privacy.resistFingerprinting=true`
+    /// (forbidden frankenstein). Homogeneous plans must idle crates and
+    /// restore stock RFP (`resistFingerprinting=true`) without enabling
+    /// persona/chaff.
+    pub fn is_xor_safe(&self) -> bool {
+        match self.mode {
+            Mode::Pollution => {
+                if self.effects.resist_fingerprinting || self.effects.fingerprinting_protection {
+                    return false;
+                }
+                let rfp_writes_ok = self.writes.iter().all(|w| {
+                    if w.name == prefs::PRIVACY_RFP || w.name == prefs::PRIVACY_FPP {
+                        w.value == PrefValue::Bool(false)
+                    } else {
+                        true
+                    }
+                });
+                rfp_writes_ok
+            }
+            Mode::Homogeneous => {
+                self.effects.crates_idle
+                    && self.effects.resist_fingerprinting
+                    && self.writes.iter().any(|w| {
+                        w.name == prefs::PRIVACY_RFP && w.value == PrefValue::Bool(true)
+                    })
+            }
+        }
+    }
+
+    /// Persona/chaff may run only when Pollution, not native-compatible, and XOR-safe.
+    pub fn allow_persona_chaff(&self) -> bool {
+        self.mode == Mode::Pollution && !self.native_compatible && self.is_xor_safe()
     }
 }
 
@@ -247,5 +283,79 @@ mod tests {
         assert_eq!(pref_names::MODE, "darkstr.mode");
         assert_eq!(pref_names::NATIVE_COMPATIBLE, "darkstr.nativeCompatible");
         assert_eq!(pref_names::PRIVACY_RFP, "privacy.resistFingerprinting");
+    }
+
+    /// M2 observer table: Pollution → RFP/FPP false; enable crates unless nativeCompatible.
+    #[test]
+    fn m2_pollution_xor_table() {
+        let armed = PrefApplyPlan::for_mode(Mode::Pollution, false);
+        assert!(armed.is_xor_safe());
+        assert!(armed.allow_persona_chaff());
+        assert!(!armed.crates_idle());
+        assert!(!armed.effects.resist_fingerprinting);
+        assert!(!armed.effects.fingerprinting_protection);
+
+        let escaped = PrefApplyPlan::for_mode(Mode::Pollution, true);
+        assert!(escaped.is_xor_safe());
+        assert!(!escaped.allow_persona_chaff());
+        assert!(escaped.crates_idle());
+        assert!(!escaped.effects.resist_fingerprinting);
+        assert!(!escaped.effects.fingerprinting_protection);
+    }
+
+    /// M2 observer table: Homogeneous → stock RFP true / FPP stock; idle crates; no persona.
+    #[test]
+    fn m2_homogeneous_stock_rfp_table() {
+        let plan = PrefApplyPlan::for_mode(Mode::Homogeneous, false);
+        assert!(plan.is_xor_safe());
+        assert!(!plan.allow_persona_chaff());
+        assert!(plan.crates_idle());
+        assert!(plan.effects.resist_fingerprinting);
+        assert!(plan.effects.fingerprinting_protection);
+        // Native-Compatible does not rewrite Homogeneous RFP restore.
+        let with_native = PrefApplyPlan::for_mode(Mode::Homogeneous, true);
+        assert!(with_native.is_xor_safe());
+        assert!(with_native.crates_idle());
+        assert!(with_native.effects.resist_fingerprinting);
+    }
+
+    /// Forbidden: Pollution with RFP still true via prefs applicator path.
+    #[test]
+    fn m2_forbidden_pollution_with_rfp_true_impossible_via_applicator() {
+        for native in [false, true] {
+            let mut app = RecordingApplicator::default();
+            let plan = app
+                .apply_mode_effects(Mode::Pollution, native)
+                .expect("apply");
+            assert!(
+                plan.is_xor_safe(),
+                "Pollution plan must be XOR-safe (native={native})"
+            );
+            assert!(
+                !app.writes.iter().any(|w| {
+                    w.name == prefs::PRIVACY_RFP && w.value == PrefValue::Bool(true)
+                }),
+                "applicator must never write RFP=true under Pollution"
+            );
+            assert!(
+                !app.writes.iter().any(|w| {
+                    w.name == prefs::PRIVACY_FPP && w.value == PrefValue::Bool(true)
+                }),
+                "applicator must never write FPP=true under Pollution"
+            );
+        }
+    }
+
+    #[test]
+    fn apply_mode_effects_matches_persona_mode_pref_effects() {
+        use duppel_persona::mode_pref_effects;
+        for mode in [Mode::Homogeneous, Mode::Pollution] {
+            for native in [false, true] {
+                let mut app = RecordingApplicator::default();
+                let plan = app.apply_mode_effects(mode, native).expect("apply");
+                assert_eq!(plan.effects, mode_pref_effects(mode, native));
+                assert!(plan.is_xor_safe());
+            }
+        }
     }
 }

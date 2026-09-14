@@ -120,3 +120,16 @@ Chrome key names above remain the pin. M1 first drop on the private LibreWolf-ba
 - `defaultPref("darkstr.strictFirstDoc", true)`
 
 Installed via `patches/scripts/apply-darkstr-patches.sh` into `lw/darkstr.cfg` + marked append on `lw/librewolf.cfg`. **No** Pollution auto-RFP yet (M2). **No** claim that a rebuilt browser binary exists until Linux CI / local build artifacts are Proof-checked. See `docs/M1-STATUS.md`.
+
+## Phase 2 M2 note (XOR applicator control plane — 2026-09-14)
+
+Chrome key names and the activation matrix above remain the pin. M2 first drop is the **Rust prefs-path applicator** (not a claim that live Gecko C++ observers exist yet):
+
+| Mode | Applicator writes | Crates |
+|------|-------------------|--------|
+| Pollution | `privacy.resistFingerprinting=false`, `privacy.fingerprintingProtection=false` | enable unless `darkstr.nativeCompatible` |
+| Homogeneous | stock RFP true / FPP stock-on restore | idle; **no** RFP metric customization |
+
+**Forbidden via prefs path:** Pollution with RFP still true. Enforced in `duppel_bridge::PrefApplyPlan::is_xor_safe` after `PrefsApplicator::apply_mode_effects`.
+
+See `docs/M2-STATUS.md`, `docs/GECKO-HOOKS.md` §1.2–1.3, stub `patches/stubs/0002-darkstr-mode-xor-rfp.patch.stub`. Stock LibreWolf companion still cannot auto-kill RFP (manual about:config + UTC probe).

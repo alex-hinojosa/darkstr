@@ -1,6 +1,6 @@
 # Gecko / LibreWolf integration hooks (Phase 2 sketch)
 
-**Status:** Design pin for M1–M3. **No** Mozilla/LibreWolf source is vendored in this repo.  
+**Status:** Design pin for M1–M3. M2 control-plane (Rust XOR applicator) landed — see [`M2-STATUS.md`](M2-STATUS.md). **No** Mozilla/LibreWolf source is vendored in this repo.  
 **Brand:** darkstr — not official LibreWolf. Pollution browser, not Cloudflare bypass.  
 **License note:** Our crates = GPL-3.0-only. Upstream Gecko patches remain MPL-2.0; counsel before binary distribution.
 
@@ -32,33 +32,37 @@ Ship path in fork tree (illustrative): `browser/app/profile/darkstr.js` **or** a
 
 ### 1.2 Static prefs / observers
 
-| Integration | Upstream area (Firefox/LibreWolf) | darkstr action |
-|-------------|-----------------------------------|----------------|
-| Declare prefs | `modules/libpref/init/StaticPrefList.yaml` **or** `all.js` / product `.js` | Add `darkstr.mode` (String), `darkstr.nativeCompatible` (Bool), later `darkstr.strictFirstDoc` |
-| Observe changes | Pref observer in chrome process (C++ or Rust static prefs callback) | On `darkstr.mode` change → call `PrefsApplicator::apply_mode_effects` |
-| Mirror WebExt | Fork-only experimental API / native messaging | Bidirectional sync per [`PREF-BRIDGE.md`](PREF-BRIDGE.md) §2 |
+| Integration | Upstream area (Firefox/LibreWolf) | darkstr action | M2 status |
+|-------------|-----------------------------------|----------------|-----------|
+| Declare prefs | `modules/libpref/init/StaticPrefList.yaml` **or** `all.js` / product `.js` | Add `darkstr.mode` (String), `darkstr.nativeCompatible` (Bool), later `darkstr.strictFirstDoc` | Defaults via M1 `darkstr.cfg`; StaticPrefList still private-fork |
+| Observe changes | Pref observer in chrome process (C++ or Rust static prefs callback) | On `darkstr.mode` / `darkstr.nativeCompatible` change → call `PrefsApplicator::apply_mode_effects` | **Rust applicator + XOR guards landed**; live C++ observer **not** claimed |
+| Mirror WebExt | Fork-only experimental API / native messaging | Bidirectional sync per [`PREF-BRIDGE.md`](PREF-BRIDGE.md) §2 | Deferred (fork wiring) |
 
 **Authoritative in fork:** chrome prefs. WebExt `browser.storage.local` is a UI mirror until bridge lands.
 
 ### 1.3 XOR side-effects (release-fail if skipped)
 
-When applying mode (see `duppel_persona::mode_pref_effects` / `duppel_bridge`):
+When applying mode (see `duppel_persona::mode_pref_effects` / `duppel_bridge`) — **M2 observer XOR gates**:
 
 | `darkstr.mode` | Write |
 |----------------|-------|
 | **`pollution`** | `privacy.resistFingerprinting = false`; `privacy.fingerprintingProtection = false`; enable persona/chaff path (unless Native-Compatible) |
-| **`homogeneous`** | Restore LibreWolf **stock** RFP expectations (`privacy.resistFingerprinting = true`; FPP to stock path); **idle** crates; **do not** patch RFP metrics / letterbox tables |
+| **`homogeneous`** | Restore LibreWolf **stock** RFP expectations (`privacy.resistFingerprinting = true`; FPP to stock-on path); **idle** crates; **do not** patch RFP metrics / letterbox tables |
 
 `darkstr.nativeCompatible = true` leaves mode unchanged and disables spoof/chaff surfaces (global escape).
 
-**Forbidden:** Pollution with `privacy.resistFingerprinting = true` via the prefs path.
+**Forbidden:** Pollution with `privacy.resistFingerprinting = true` via the prefs path.  
+Guard: `duppel_bridge::PrefApplyPlan::is_xor_safe()` after `apply_mode_effects`.
 
-Rust mirror (no Gecko link yet):
+Rust control plane (public repo — no Gecko FFI / no invented C++ in this drop):
 
 ```text
 duppel_persona::mode_pref_effects(Mode, native_compatible)
 duppel_bridge::PrefsApplicator::apply_mode_effects(...)
+duppel_bridge::PrefApplyPlan::is_xor_safe() / allow_persona_chaff()
 ```
+
+Stub notes (not a real patch): [`../patches/stubs/0002-darkstr-mode-xor-rfp.patch.stub`](../patches/stubs/0002-darkstr-mode-xor-rfp.patch.stub). Status: [`M2-STATUS.md`](M2-STATUS.md).
 
 ---
 
