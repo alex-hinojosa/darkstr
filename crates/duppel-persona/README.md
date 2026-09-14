@@ -1,6 +1,6 @@
 # duppel-persona
 
-**Status:** Phase 2 M0.5 control-plane API (no Gecko FFI).
+**Status:** Phase 2 M3 control-plane API (hook-site gating; no Gecko FFI).
 
 Rust source of truth for darkstr **Pollution** personas: families, seed/rotation, coherence checks, and mode/pref side-effect helpers.
 
@@ -9,6 +9,8 @@ Rust source of truth for darkstr **Pollution** personas: families, seed/rotation
 - `PersonaSeed` / `PersonaSnapshot` / `generate_persona` (mulberry32; Firefox × host OS families)
 - `Mode`, `resolve_activation`, `mode_pref_effects` (Pollution kills RFP/FPP; Homogeneous restores stock RFP)
 - `prefs::*` — chrome / about:config names matching Phase 1 Proof pin
+- M3: `DocShellNavPhase`, `NativePersonaPlan`, `ClientHintsPolicy::Remove`,
+  `cached_snapshot_readable`, `webext_main_inject_policy` (`darkstr.nativePersonaHooks`)
 
 ## Boundaries
 

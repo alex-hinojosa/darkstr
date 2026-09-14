@@ -9,17 +9,22 @@
 #![forbid(unsafe_code)]
 
 use duppel_persona::{
-    mode_pref_effects, prefs, Mode, ModePrefEffects,
+    cached_snapshot_readable, mode_pref_effects, prefs, Activation, ClientHintsPolicy,
+    DocShellNavPhase, Mode, ModePrefEffects, NativePersonaPlan, PersonaSnapshot,
+    WebExtMainInjectPolicy,
 };
 
 /// Crate API version string.
-pub const VERSION: &str = "0.1.0-phase2-m2";
+pub const VERSION: &str = "0.1.0-phase2-m3";
 
 /// Re-export pref name constants for glue that only depends on this crate.
 pub use duppel_persona::prefs as pref_names;
 
 /// Gecko / LibreWolf call sites documented in `docs/GECKO-HOOKS.md`.
 /// Used as labels for future wiring — not an FFI boundary by themselves.
+///
+/// M3 strengthens applicator surfaces for nsHttp / Navigator / DocShell; live
+/// C++/XPCOM patches against a pinned train are **not** claimed in this public drop.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum HookSite {
     /// Chrome pref observer / static prefs callback.
@@ -54,6 +59,145 @@ impl HookSite {
             }
         }
     }
+
+    /// Milestone label for docs / Proof skim (M2 prefs, M3 first native wins, M4 depth).
+    pub fn milestone(self) -> &'static str {
+        match self {
+            HookSite::PrefObserver => "M2",
+            HookSite::NsHttp | HookSite::Navigator | HookSite::DocShell => "M3",
+            HookSite::CanvasAudio => "M4",
+        }
+    }
+
+    /// Illustrative Gecko areas for Mini path checks (155.x train; verify locally).
+    pub fn gecko_path_hints(self) -> &'static [&'static str] {
+        match self {
+            HookSite::PrefObserver => &[
+                "modules/libpref/init/StaticPrefList.yaml",
+                "browser/app/profile",
+            ],
+            HookSite::NsHttp => &[
+                "netwerk/protocol/http/nsHttpHandler.cpp",
+                "netwerk/protocol/http/nsHttpChannel.cpp",
+            ],
+            HookSite::Navigator => &[
+                "dom/base/Navigator.cpp",
+                "dom/webidl/Navigator.webidl",
+            ],
+            HookSite::DocShell => &[
+                "docshell/base/nsDocShell.cpp",
+                "docshell/base/nsDocShellLoadState.cpp",
+            ],
+            HookSite::CanvasAudio => &[
+                "dom/canvas/CanvasRenderingContext2D.cpp",
+                "dom/media/webaudio",
+            ],
+        }
+    }
+}
+
+/// nsHttp applicator actions for M3 (Firefox host).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum NsHttpAction {
+    /// Override channel User-Agent from cached persona seed.
+    OverrideUserAgent,
+    /// REMOVE / omit Client Hints — never SET on Firefox personas.
+    RemoveClientHints,
+}
+
+impl NsHttpAction {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            NsHttpAction::OverrideUserAgent => "override_user_agent",
+            NsHttpAction::RemoveClientHints => "remove_client_hints",
+        }
+    }
+}
+
+/// Navigator DOM fields driven from the same persona seed as HTTP UA (M3 minimum set).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum NavigatorField {
+    UserAgent,
+    Platform,
+    HardwareConcurrency,
+    DeviceMemory,
+    Languages,
+    // Screen / GPU / timezone deepen later; listed for coherence planning.
+}
+
+impl NavigatorField {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            NavigatorField::UserAgent => "userAgent",
+            NavigatorField::Platform => "platform",
+            NavigatorField::HardwareConcurrency => "hardwareConcurrency",
+            NavigatorField::DeviceMemory => "deviceMemory",
+            NavigatorField::Languages => "languages",
+        }
+    }
+}
+
+/// Typed applicator surface: which hook + what it does (M3 encoding of GECKO-HOOKS §2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum HookApplicatorSurface {
+    NsHttpUa,
+    NsHttpClientHintsRemove,
+    NavigatorBindings,
+    DocShellStrictFirstDoc,
+    WebExtMainInjectGate,
+}
+
+impl HookApplicatorSurface {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            HookApplicatorSurface::NsHttpUa => "nshttp_ua",
+            HookApplicatorSurface::NsHttpClientHintsRemove => "nshttp_ch_remove",
+            HookApplicatorSurface::NavigatorBindings => "navigator_bindings",
+            HookApplicatorSurface::DocShellStrictFirstDoc => "docshell_strict_first_doc",
+            HookApplicatorSurface::WebExtMainInjectGate => "webext_main_inject_gate",
+        }
+    }
+
+    pub fn hook_site(self) -> HookSite {
+        match self {
+            HookApplicatorSurface::NsHttpUa | HookApplicatorSurface::NsHttpClientHintsRemove => {
+                HookSite::NsHttp
+            }
+            HookApplicatorSurface::NavigatorBindings => HookSite::Navigator,
+            HookApplicatorSurface::DocShellStrictFirstDoc => HookSite::DocShell,
+            HookApplicatorSurface::WebExtMainInjectGate => HookSite::PrefObserver,
+        }
+    }
+}
+
+/// M3 first-native-wins applicator surfaces (excludes M4 canvas depth).
+pub fn m3_applicator_surfaces() -> &'static [HookApplicatorSurface] {
+    &[
+        HookApplicatorSurface::NsHttpUa,
+        HookApplicatorSurface::NsHttpClientHintsRemove,
+        HookApplicatorSurface::NavigatorBindings,
+        HookApplicatorSurface::DocShellStrictFirstDoc,
+        HookApplicatorSurface::WebExtMainInjectGate,
+    ]
+}
+
+/// nsHttp actions for Firefox host (UA override + CH REMOVE only).
+pub fn firefox_nshttp_actions() -> &'static [NsHttpAction] {
+    &[
+        NsHttpAction::OverrideUserAgent,
+        NsHttpAction::RemoveClientHints,
+    ]
+}
+
+/// Minimum Navigator fields from the same seed as HTTP UA.
+pub fn m3_navigator_fields() -> &'static [NavigatorField] {
+    &[
+        NavigatorField::UserAgent,
+        NavigatorField::Platform,
+        NavigatorField::HardwareConcurrency,
+        NavigatorField::DeviceMemory,
+        NavigatorField::Languages,
+    ]
 }
 
 /// A single chrome pref write the fork must perform.
@@ -215,6 +359,53 @@ pub fn persona_hook_sites() -> &'static [HookSite] {
     ]
 }
 
+/// M3 hook sites only (excludes M4 canvas/audio depth).
+pub fn m3_persona_hook_sites() -> &'static [HookSite] {
+    &[HookSite::NsHttp, HookSite::Navigator, HookSite::DocShell]
+}
+
+/// Gate: glue may return a cached snapshot reference only when `pollution_active`.
+///
+/// Homogeneous / Native-Compatible / RFP-conflict → `None` (crates idle; no second seed).
+pub fn read_cached_persona<'a>(
+    activation: &Activation,
+    cached: Option<&'a PersonaSnapshot>,
+) -> Option<&'a PersonaSnapshot> {
+    if cached_snapshot_readable(activation) {
+        cached
+    } else {
+        None
+    }
+}
+
+/// Firefox CH policy constant for nsHttp glue (never SET on darkstr host).
+pub fn firefox_client_hints_policy() -> ClientHintsPolicy {
+    ClientHintsPolicy::Remove
+}
+
+/// Build M3 native persona plan from activation + prefs (DocShell phase included).
+pub fn native_persona_plan(
+    activation: &Activation,
+    native_persona_hooks: bool,
+    strict_first_doc: bool,
+    nav_phase: DocShellNavPhase,
+) -> NativePersonaPlan {
+    NativePersonaPlan::resolve(
+        activation,
+        native_persona_hooks,
+        strict_first_doc,
+        nav_phase,
+    )
+}
+
+/// Convenience: whether WebExt MAIN inject should stay off under native path.
+pub fn should_disable_webext_main_inject(plan: &NativePersonaPlan) -> bool {
+    matches!(
+        plan.main_inject,
+        WebExtMainInjectPolicy::DisableNativePathActive
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -357,5 +548,115 @@ mod tests {
                 assert!(plan.is_xor_safe());
             }
         }
+    }
+
+    #[test]
+    fn m3_hook_milestones_and_path_hints() {
+        assert_eq!(HookSite::NsHttp.milestone(), "M3");
+        assert_eq!(HookSite::PrefObserver.milestone(), "M2");
+        assert_eq!(HookSite::CanvasAudio.milestone(), "M4");
+        assert!(HookSite::NsHttp
+            .gecko_path_hints()
+            .iter()
+            .any(|p| p.contains("nsHttpHandler")));
+        assert!(HookSite::Navigator
+            .gecko_path_hints()
+            .iter()
+            .any(|p| p.contains("Navigator")));
+        assert!(HookSite::DocShell
+            .gecko_path_hints()
+            .iter()
+            .any(|p| p.contains("nsDocShell")));
+    }
+
+    #[test]
+    fn m3_applicator_surfaces_cover_gecko_hooks_section2() {
+        let surfaces = m3_applicator_surfaces();
+        assert!(surfaces.contains(&HookApplicatorSurface::NsHttpUa));
+        assert!(surfaces.contains(&HookApplicatorSurface::NsHttpClientHintsRemove));
+        assert!(surfaces.contains(&HookApplicatorSurface::NavigatorBindings));
+        assert!(surfaces.contains(&HookApplicatorSurface::DocShellStrictFirstDoc));
+        assert!(surfaces.contains(&HookApplicatorSurface::WebExtMainInjectGate));
+        assert_eq!(
+            HookApplicatorSurface::NsHttpClientHintsRemove.hook_site(),
+            HookSite::NsHttp
+        );
+        assert!(!m3_persona_hook_sites().contains(&HookSite::CanvasAudio));
+    }
+
+    #[test]
+    fn m3_firefox_nshttp_ch_remove_never_set() {
+        let actions = firefox_nshttp_actions();
+        assert!(actions.contains(&NsHttpAction::OverrideUserAgent));
+        assert!(actions.contains(&NsHttpAction::RemoveClientHints));
+        let ch = firefox_client_hints_policy();
+        assert_eq!(ch, ClientHintsPolicy::Remove);
+        assert!(!ch.allows_set());
+        assert_eq!(ch.nshttp_action(), NsHttpAction::RemoveClientHints.as_str());
+    }
+
+    #[test]
+    fn m3_read_cached_persona_gated_on_pollution_active() {
+        use duppel_persona::{
+            generate_persona, resolve_activation, ActivationInput, Engine, HostOs, PersonaSeed,
+        };
+        let snap = generate_persona(PersonaSeed(3), Engine::Firefox, HostOs::Linux).unwrap();
+        let active = resolve_activation(ActivationInput {
+            mode: Mode::Pollution,
+            native_compatible: false,
+            rfp_likely: false,
+        });
+        assert!(read_cached_persona(&active, Some(&snap)).is_some());
+
+        let homo = resolve_activation(ActivationInput {
+            mode: Mode::Homogeneous,
+            native_compatible: false,
+            rfp_likely: true,
+        });
+        assert!(read_cached_persona(&homo, Some(&snap)).is_none());
+
+        let native = resolve_activation(ActivationInput {
+            mode: Mode::Pollution,
+            native_compatible: true,
+            rfp_likely: false,
+        });
+        assert!(read_cached_persona(&native, Some(&snap)).is_none());
+    }
+
+    #[test]
+    fn m3_native_plan_disables_main_inject_when_hooks_on() {
+        use duppel_persona::{resolve_activation, ActivationInput};
+        let active = resolve_activation(ActivationInput {
+            mode: Mode::Pollution,
+            native_compatible: false,
+            rfp_likely: false,
+        });
+        let plan = native_persona_plan(
+            &active,
+            true,
+            true,
+            DocShellNavPhase::SubsequentNav,
+        );
+        assert!(plan.apply_native_persona);
+        assert!(should_disable_webext_main_inject(&plan));
+        assert!(plan.may_read_cached_snapshot());
+        assert_eq!(plan.client_hints, ClientHintsPolicy::Remove);
+
+        let first = native_persona_plan(
+            &active,
+            true,
+            true,
+            DocShellNavPhase::FirstDocument,
+        );
+        assert!(!first.apply_native_persona);
+        assert!(should_disable_webext_main_inject(&first));
+    }
+
+    #[test]
+    fn m3_navigator_minimum_fields() {
+        let fields = m3_navigator_fields();
+        assert!(fields.contains(&NavigatorField::UserAgent));
+        assert!(fields.contains(&NavigatorField::Platform));
+        assert_eq!(NavigatorField::UserAgent.as_str(), "userAgent");
     }
 }

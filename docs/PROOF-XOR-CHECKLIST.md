@@ -15,6 +15,17 @@ When the PR touches XOR mode→RFP application (even docs/Rust-only):
 - [ ] No claim that untested C++/Gecko observers landed unless Proof-checked on a fork artifact
 - [ ] Status: [`M2-STATUS.md`](M2-STATUS.md) · Hooks: [`GECKO-HOOKS.md`](GECKO-HOOKS.md) §1.2–1.3
 
+## M3 hook-site pin (persona applicator enums)
+
+When the PR touches nsHttp / Navigator / DocShell / MAIN inject native-path work (even docs/Rust-only):
+
+- [ ] Firefox Client Hints policy is **REMOVE** only (never SET on Firefox host)
+- [ ] Cached persona readable only when `pollution_active` (Homogeneous / Native-Compatible idle)
+- [ ] `strictFirstDoc` first-nav vs subsequent-nav semantics preserved
+- [ ] WebExt MAIN inject disabled (or feature-flagged off) when `darkstr.nativePersonaHooks` + pollution
+- [ ] No claim that untested C++/Gecko hooks landed unless Proof-checked on a fork artifact (155.x train)
+- [ ] Status: [`M3-STATUS.md`](M3-STATUS.md) · Hooks: [`GECKO-HOOKS.md`](GECKO-HOOKS.md) §2
+
 ---
 
 Copy this checklist into the PR body (or link it) and check each applicable box. Unchecked release-fail items → do not merge.

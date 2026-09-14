@@ -74,7 +74,7 @@ XOR auto-RFP remains **M2** (`0002-darkstr-mode-xor-rfp.patch.stub`).
 | `stubs/darkstr.cfg` | **Apply now** (copy + librewolf.cfg append) |
 | `0001-…prefs-defaults.patch.stub` | Satisfied by script append; replace with unified diff once train pin is CI-locked |
 | `0002-…xor-rfp.patch.stub` | **Defer M2** (pref observer) |
-| `0003-…hook-sites.patch.stub` | **Defer M3+** |
+| `0003-…hook-sites.patch.stub` | M3 enums/docs landed (`M3-STATUS.md`); live C++ still private-fork |
 
 ## Mesh / Atlas
 

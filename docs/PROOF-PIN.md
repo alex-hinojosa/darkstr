@@ -133,3 +133,18 @@ Chrome key names and the activation matrix above remain the pin. M2 first drop i
 **Forbidden via prefs path:** Pollution with RFP still true. Enforced in `duppel_bridge::PrefApplyPlan::is_xor_safe` after `PrefsApplicator::apply_mode_effects`.
 
 See `docs/M2-STATUS.md`, `docs/GECKO-HOOKS.md` §1.2–1.3, stub `patches/stubs/0002-darkstr-mode-xor-rfp.patch.stub`. Stock LibreWolf companion still cannot auto-kill RFP (manual about:config + UTC probe).
+
+## Phase 2 M3 note (persona hook-site enums — 2026-09-14)
+
+Chrome key names and the activation matrix above remain the pin. M3 first drop encodes **native hook-site / applicator surfaces** in Rust (not a claim that live Gecko C++ hooks exist yet):
+
+| Surface | Control-plane encoding |
+|---------|------------------------|
+| nsHttp UA + CH | `NsHttpAction::{OverrideUserAgent, RemoveClientHints}`; Firefox CH = **REMOVE** only |
+| Navigator | `NavigatorField` minimum set from same `PersonaSnapshot` seed |
+| DocShell strict-first-doc | `DocShellNavPhase` + `persona_armed_for_nav` |
+| MAIN inject gate | `darkstr.nativePersonaHooks` → `WebExtMainInjectPolicy::DisableNativePathActive` when pollution |
+| Snapshot cache | Readable only when `pollution_active` (`read_cached_persona`) |
+
+See `docs/M3-STATUS.md`, `docs/GECKO-HOOKS.md` §2, stub `patches/stubs/0003-darkstr-hook-sites.patch.stub`. Live tree on Mini (`librewolf-155.0.1-1`) is for path checks only until a train-pinned patch is Proof-verified.
+
