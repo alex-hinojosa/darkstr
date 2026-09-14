@@ -135,7 +135,7 @@ Chrome key names and the activation matrix above remain the pin. M2 ships:
 
 **Forbidden via prefs path:** Pollution with RFP still true. Enforced in `duppel_bridge::PrefApplyPlan::is_xor_safe` and mirrored by the chrome observer writes.
 
-See `docs/M2-STATUS.md`, `docs/GECKO-HOOKS.md` §1.2–1.3, `docs/M2-MINI-VERIFY.sh`. Stock LibreWolf **without** the fork patch still cannot auto-kill RFP (manual about:config + UTC probe). Mini apply + `mach build` proof is operator-side until recorded.
+See `docs/M2-STATUS.md`, `docs/GECKO-HOOKS.md` §1.2–1.3, `docs/M2-MINI-VERIFY.sh`. Soft residual (FPP re-assert after CB settle under Pollution) closed by observing FPP+RFP + deferred apply — honesty only; not a Mini re-Proof claim. Stock LibreWolf **without** the fork patch still cannot auto-kill RFP (manual about:config + UTC probe). Mini apply + `mach build` proof is operator-side until recorded.
 
 ## Phase 2 M3 note (train-pinned live native persona hooks — 2026-09-14)
 
