@@ -109,3 +109,14 @@ Static tracking ruleset follows global `pollutionActive` (mode + global native +
 9b. Open chrome-prefs panel: mode radios + Native-Compatible + Delay persona one page match popup; XOR box shows Pollution→RFP/FPP off vs Homogeneous→stock RFP / no metric customization; chrome key table lists `darkstr.*` names; patches apply pointer present; copy stays pollution framing (not Cloudflare bypass / not official LibreWolf).
 10. Tracker cookies: with site access, **Purge tracker cookies** removes Domain-matched known-tracker cookies only; counter bumps `cookiesCleaned`. Without site access → honest error hint. Wording must not claim containers.
 11. `npm test` for XOR + profile seed determinism + eTLD+1 / sites prefs + tracker-cookie filter + DNR chaff guardrail.
+
+
+## Phase 2 M1 skim note (prefs/cfg only — 2026-09-14)
+
+Chrome key names above remain the pin. M1 first drop on the private LibreWolf-based tree is **defaults only**:
+
+- `defaultPref("darkstr.mode", "homogeneous")`
+- `defaultPref("darkstr.nativeCompatible", false)`
+- `defaultPref("darkstr.strictFirstDoc", true)`
+
+Installed via `patches/scripts/apply-darkstr-patches.sh` into `lw/darkstr.cfg` + marked append on `lw/librewolf.cfg`. **No** Pollution auto-RFP yet (M2). **No** claim that a rebuilt browser binary exists until Linux CI / local build artifacts are Proof-checked. See `docs/M1-STATUS.md`.
