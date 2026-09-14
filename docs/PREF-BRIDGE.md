@@ -112,7 +112,7 @@ Native-Compatible is for banking / SSO — **not** a Cloudflare-defeat switch.
 | On Pollution: force RFP/FPP false | Builder (M2) | Single Rust prefs path; Proof exclusivity matrix |
 | On Homogeneous: restore stock RFP/FPP | Builder (M2) | No metric patches |
 | WebExt mirror sync | Builder (M2+) | storage ↔ chrome; fork-only privileged API — deferred |
-| Disable WebExt MAIN inject when native path on | Builder (M3+) | Feature flag |
+| Disable WebExt MAIN inject when native path on | Builder (M3) | Pref name `darkstr.nativePersonaHooks` + `WebExtMainInjectPolicy` encoded; live flip after fork Proof |
 | Gecko call sites (nsHttp / DocShell / canvas) | Builder (M3+) | [`GECKO-HOOKS.md`](GECKO-HOOKS.md); stubs in [`../patches/`](../patches/) |
 | `PrefsApplicator` XPCOM adapter | Builder (M2+) | Trait + recording mock landed; XPCOM glue still fork |
 

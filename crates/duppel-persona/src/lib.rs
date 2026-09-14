@@ -12,7 +12,7 @@
 #![forbid(unsafe_code)]
 
 /// Crate API version string (bumps when snapshot fields change).
-pub const VERSION: &str = "0.1.0-phase2-m2";
+pub const VERSION: &str = "0.1.0-phase2-m3";
 
 /// Chrome / about:config pref names (stable Phase 1 → 2 Proof pin).
 pub mod prefs {
@@ -24,6 +24,10 @@ pub mod prefs {
     pub const NATIVE_COMPAT_SITES: &str = "darkstr.nativeCompatSites";
     /// Strict-first-document / next-nav coherence (bool, default true).
     pub const STRICT_FIRST_DOC: &str = "darkstr.strictFirstDoc";
+    /// Feature flag: native persona hooks (nsHttp/Navigator/DocShell) are active.
+    /// When true, WebExt MAIN inject should disable (fork companion). Default false
+    /// until private-fork wiring is Proof-checked.
+    pub const NATIVE_PERSONA_HOOKS: &str = "darkstr.nativePersonaHooks";
 
     /// Browser prefs the fork auto-manages on mode change (not darkstr.* keys).
     pub const PRIVACY_RFP: &str = "privacy.resistFingerprinting";
@@ -190,10 +194,38 @@ impl PersonaSnapshot {
 }
 
 /// Client Hints wire policy for a persona (Firefox host → REMOVE).
+///
+/// M3 nsHttp applicator must **never SET** Client Hints for Firefox personas
+/// (Phase 1 A1 parity). `SetFromUa` exists for Chromium family completeness only;
+/// darkstr host ships Firefox families.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClientHintsPolicy {
+    /// Strip / omit Sec-CH-UA* (Firefox personas).
     Remove,
+    /// Chromium-only: derive CH from UA (not used on darkstr Firefox host).
     SetFromUa,
+}
+
+impl ClientHintsPolicy {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ClientHintsPolicy::Remove => "remove",
+            ClientHintsPolicy::SetFromUa => "set_from_ua",
+        }
+    }
+
+    /// Firefox host policy: SET is forbidden.
+    pub fn allows_set(self) -> bool {
+        matches!(self, ClientHintsPolicy::SetFromUa)
+    }
+
+    /// nsHttp action label for glue (M3).
+    pub fn nshttp_action(self) -> &'static str {
+        match self {
+            ClientHintsPolicy::Remove => "remove_client_hints",
+            ClientHintsPolicy::SetFromUa => "set_client_hints_from_ua",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -532,6 +564,129 @@ pub fn generate_persona(seed: PersonaSeed, engine: Engine, os: HostOs) -> Option
     })
 }
 
+
+// --- M3 native hook-site policy (enums + gating; no Gecko FFI) ---
+
+/// DocShell navigation phase for `darkstr.strictFirstDoc` coherence.
+///
+/// Phase 1 parity: when strict-first-doc is on, the **first** document load stays
+/// native; persona arms on the **subsequent** main_frame navigation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum DocShellNavPhase {
+    /// First document in the tab/session scope — stay native when strictFirstDoc.
+    FirstDocument,
+    /// Next / subsequent main_frame navigation — persona may arm.
+    SubsequentNav,
+}
+
+impl DocShellNavPhase {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            DocShellNavPhase::FirstDocument => "first_document",
+            DocShellNavPhase::SubsequentNav => "subsequent_nav",
+        }
+    }
+}
+
+/// Whether persona surfaces should arm for this DocShell navigation.
+///
+/// Independent of XOR: call only after [`resolve_activation`] says `pollution_active`.
+pub fn persona_armed_for_nav(strict_first_doc: bool, phase: DocShellNavPhase) -> bool {
+    if !strict_first_doc {
+        return true;
+    }
+    matches!(phase, DocShellNavPhase::SubsequentNav)
+}
+
+/// Glue may read a cached [`PersonaSnapshot`] only when Pollution surfaces are active.
+///
+/// Homogeneous / Native-Compatible / RFP-conflict → idle (no second seed, no reads).
+pub fn cached_snapshot_readable(activation: &Activation) -> bool {
+    activation.pollution_active
+}
+
+/// WebExt MAIN-world inject policy once native hooks exist (M3 feature flag).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum WebExtMainInjectPolicy {
+    /// Stock LibreWolf companion / native hooks not yet active — keep Phase 1 inject.
+    AllowFallback,
+    /// Native nsHttp/Navigator path is on — disable WebExt MAIN inject to avoid split-brain.
+    DisableNativePathActive,
+}
+
+impl WebExtMainInjectPolicy {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            WebExtMainInjectPolicy::AllowFallback => "allow_fallback",
+            WebExtMainInjectPolicy::DisableNativePathActive => "disable_native_path_active",
+        }
+    }
+}
+
+/// Resolve MAIN inject policy from activation + `darkstr.nativePersonaHooks`.
+pub fn webext_main_inject_policy(
+    activation: &Activation,
+    native_persona_hooks: bool,
+) -> WebExtMainInjectPolicy {
+    if native_persona_hooks && activation.pollution_active {
+        WebExtMainInjectPolicy::DisableNativePathActive
+    } else {
+        WebExtMainInjectPolicy::AllowFallback
+    }
+}
+
+/// True when the companion WebExt may still run MAIN inject.
+pub fn webext_main_inject_allowed(
+    activation: &Activation,
+    native_persona_hooks: bool,
+) -> bool {
+    matches!(
+        webext_main_inject_policy(activation, native_persona_hooks),
+        WebExtMainInjectPolicy::AllowFallback
+    )
+}
+
+/// M3 plan for a single navigation: gates nsHttp/Navigator apply + MAIN inject.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NativePersonaPlan {
+    pub pollution_active: bool,
+    pub native_persona_hooks: bool,
+    pub strict_first_doc: bool,
+    pub nav_phase: DocShellNavPhase,
+    /// Apply UA/navigator from cached snapshot this navigation.
+    pub apply_native_persona: bool,
+    pub main_inject: WebExtMainInjectPolicy,
+    pub client_hints: ClientHintsPolicy,
+}
+
+impl NativePersonaPlan {
+    /// Build the M3 applicator plan (Firefox host → CH REMOVE always).
+    pub fn resolve(
+        activation: &Activation,
+        native_persona_hooks: bool,
+        strict_first_doc: bool,
+        nav_phase: DocShellNavPhase,
+    ) -> Self {
+        let armed = persona_armed_for_nav(strict_first_doc, nav_phase);
+        let apply_native_persona =
+            activation.pollution_active && native_persona_hooks && armed;
+        Self {
+            pollution_active: activation.pollution_active,
+            native_persona_hooks,
+            strict_first_doc,
+            nav_phase,
+            apply_native_persona,
+            main_inject: webext_main_inject_policy(activation, native_persona_hooks),
+            client_hints: ClientHintsPolicy::Remove,
+        }
+    }
+
+    /// Snapshot cache read gate (Homogeneous / Native-Compatible idle).
+    pub fn may_read_cached_snapshot(&self) -> bool {
+        self.pollution_active
+    }
+}
+
 /// Generate only when Pollution surfaces are active; otherwise `None` (crates idle).
 pub fn generate_persona_if_active(
     seed: PersonaSeed,
@@ -689,5 +844,122 @@ mod tests {
             generate_persona_if_active(PersonaSeed(9), Engine::Firefox, HostOs::Linux, &act)
                 .is_none()
         );
+    }
+
+    #[test]
+    fn m3_pref_native_persona_hooks_name() {
+        assert_eq!(prefs::NATIVE_PERSONA_HOOKS, "darkstr.nativePersonaHooks");
+        assert_eq!(prefs::STRICT_FIRST_DOC, "darkstr.strictFirstDoc");
+    }
+
+    #[test]
+    fn m3_client_hints_firefox_never_set() {
+        let p = generate_persona(PersonaSeed(7), Engine::Firefox, HostOs::Linux).unwrap();
+        let ch = p.client_hints_policy();
+        assert_eq!(ch, ClientHintsPolicy::Remove);
+        assert!(!ch.allows_set());
+        assert_eq!(ch.nshttp_action(), "remove_client_hints");
+        assert_eq!(ch.as_str(), "remove");
+    }
+
+    #[test]
+    fn m3_cached_snapshot_readable_only_when_pollution_active() {
+        let active = resolve_activation(ActivationInput {
+            mode: Mode::Pollution,
+            native_compatible: false,
+            rfp_likely: false,
+        });
+        assert!(cached_snapshot_readable(&active));
+
+        for (mode, native, rfp) in [
+            (Mode::Homogeneous, false, true),
+            (Mode::Pollution, true, false),
+            (Mode::Pollution, false, true),
+        ] {
+            let act = resolve_activation(ActivationInput {
+                mode,
+                native_compatible: native,
+                rfp_likely: rfp,
+            });
+            assert!(
+                !cached_snapshot_readable(&act),
+                "idle path must not read snapshot ({mode:?}, native={native}, rfp={rfp})"
+            );
+        }
+    }
+
+    #[test]
+    fn m3_strict_first_doc_nav_phases() {
+        assert!(!persona_armed_for_nav(true, DocShellNavPhase::FirstDocument));
+        assert!(persona_armed_for_nav(true, DocShellNavPhase::SubsequentNav));
+        assert!(persona_armed_for_nav(false, DocShellNavPhase::FirstDocument));
+        assert!(persona_armed_for_nav(false, DocShellNavPhase::SubsequentNav));
+    }
+
+    #[test]
+    fn m3_webext_main_inject_disabled_when_native_hooks_and_pollution() {
+        let active = resolve_activation(ActivationInput {
+            mode: Mode::Pollution,
+            native_compatible: false,
+            rfp_likely: false,
+        });
+        assert!(!webext_main_inject_allowed(&active, true));
+        assert_eq!(
+            webext_main_inject_policy(&active, true),
+            WebExtMainInjectPolicy::DisableNativePathActive
+        );
+        // Native hooks off → Phase 1 fallback inject still allowed.
+        assert!(webext_main_inject_allowed(&active, false));
+        // Idle modes: inject policy is AllowFallback (surfaces already gated elsewhere).
+        let homo = resolve_activation(ActivationInput {
+            mode: Mode::Homogeneous,
+            native_compatible: false,
+            rfp_likely: true,
+        });
+        assert!(webext_main_inject_allowed(&homo, true));
+    }
+
+    #[test]
+    fn m3_native_persona_plan_gates_apply() {
+        let active = resolve_activation(ActivationInput {
+            mode: Mode::Pollution,
+            native_compatible: false,
+            rfp_likely: false,
+        });
+        let first = NativePersonaPlan::resolve(
+            &active,
+            true,
+            true,
+            DocShellNavPhase::FirstDocument,
+        );
+        assert!(first.may_read_cached_snapshot());
+        assert!(!first.apply_native_persona);
+        assert_eq!(first.client_hints, ClientHintsPolicy::Remove);
+        assert_eq!(
+            first.main_inject,
+            WebExtMainInjectPolicy::DisableNativePathActive
+        );
+
+        let next = NativePersonaPlan::resolve(
+            &active,
+            true,
+            true,
+            DocShellNavPhase::SubsequentNav,
+        );
+        assert!(next.apply_native_persona);
+
+        let idle = resolve_activation(ActivationInput {
+            mode: Mode::Homogeneous,
+            native_compatible: false,
+            rfp_likely: true,
+        });
+        let idle_plan = NativePersonaPlan::resolve(
+            &idle,
+            true,
+            true,
+            DocShellNavPhase::SubsequentNav,
+        );
+        assert!(!idle_plan.may_read_cached_snapshot());
+        assert!(!idle_plan.apply_native_persona);
     }
 }

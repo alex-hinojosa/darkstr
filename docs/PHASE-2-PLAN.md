@@ -281,10 +281,11 @@ Still **no** Mozilla/LibreWolf vendor:
 
 ### M3 — First native wins (`duppel-persona`)
 
-- Persona seed at process/startup; necko UA (+ CH policy for Firefox host: REMOVE path parity with Phase 1).
-- Navigator/platform/HW surfaces from same seed (minimum coherent set).
-- WebExt MAIN inject disabled when native path active (feature flag).
-- `duppel-coherence` asserts HTTP↔JS on smoke sites.
+- [x] Hook-site enums / applicator surfaces for nsHttp UA + CH **REMOVE**, Navigator, DocShell strict-first-doc, MAIN inject feature flag (`M3-STATUS.md`, GECKO-HOOKS §2)
+- [x] Glue cache gate: read `PersonaSnapshot` only when `pollution_active` (unit-tested)
+- [x] `darkstr.nativePersonaHooks` name + `WebExtMainInjectPolicy` (disable MAIN inject when native path + pollution)
+- [ ] Live necko / Navigator / DocShell C++ hooks on private fork (train-pinned patch — not invented in public stubs)
+- [ ] Persona seed at process/startup wired in fork; `duppel-coherence` HTTP↔JS on fork smoke sites
 
 ### M4 — Chaff native + depth kickoff (into Phase 3)
 
