@@ -32,6 +32,14 @@ The script:
 
 Until M1, stubs end in `.patch.stub` so `patch(1)` is not accidentally run against an empty tree.
 
+## Idempotent re-apply (soft residual after #19; markers after later patches rewrite shared files)
+
+`scripts/apply-darkstr-patches.sh` applies real `patches/000*.patch` via
+`patch -p1 --forward --batch` (dry-run, then apply). Re-running after a
+successful apply skips already-applied hunks — no interactive prompts and no
+leftover `.rej` for those hunks. Genuine conflicts still exit non-zero. M1 cfg
+copy + `librewolf.cfg` marker append remain separately idempotent.
+
 ## Rules
 
 - Homogeneous: stock LibreWolf RFP expectations — **no** RFP metric customization in patches.
