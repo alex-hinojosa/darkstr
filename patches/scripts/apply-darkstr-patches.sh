@@ -4,6 +4,10 @@
 # M1 skim (no bootstrap/build): verify tree, install darkstr.cfg under lw/,
 # optionally append defaultPref block into lw/librewolf.cfg (idempotent).
 #
+# Patch loop is idempotent: dry-run with `patch -p1 --forward --batch`, then
+# apply only when needed. Already-applied hunks → skip/success (no interactive
+# prompts, no leftover .rej). Real conflicts still fail hard.
+#
 # Safe outside a fork: exits 0 with a message if DARKSTR_GECKO_ROOT is unset
 # (unless --require-root). Does NOT vendor Mozilla/LibreWolf.
 # Brand: darkstr — not official LibreWolf.
@@ -144,14 +148,28 @@ else
 fi
 
 # Real unified diffs will drop the .stub suffix. Apply in order when present.
+# Idempotent: --forward --batch dry-run first; skip already-applied (no .rej);
+# apply only when dry-run is clean; real conflicts fail hard (no prompts).
 shopt -s nullglob
-for patch in "${STUBS}"/000*.patch "${ROOT}/patches"/000*.patch; do
-  [[ -f "${patch}" ]] || continue
-  echo "Applying ${patch}"
+for patchfile in "${STUBS}"/000*.patch "${ROOT}/patches"/000*.patch; do
+  [[ -f "${patchfile}" ]] || continue
+  echo "Applying ${patchfile}"
   if [[ "${DRY_RUN}" -eq 1 ]]; then
-    echo "DRY-RUN: patch -d ${DARKSTR_GECKO_ROOT} -p1 < ${patch}"
+    echo "DRY-RUN: patch -d ${DARKSTR_GECKO_ROOT} -p1 --forward --batch < ${patchfile}"
+    continue
+  fi
+  set +e
+  dry_out="$(patch -d "${DARKSTR_GECKO_ROOT}" -p1 --dry-run --forward --batch < "${patchfile}" 2>&1)"
+  dry_rc=$?
+  set -e
+  if [[ "${dry_rc}" -eq 0 ]]; then
+    patch -d "${DARKSTR_GECKO_ROOT}" -p1 --forward --batch < "${patchfile}"
+  elif printf '%s\n' "${dry_out}" | grep -Eqi 'previously applied|Ignoring previously applied|Reversed \(or previously applied\)'; then
+    echo "apply-darkstr-patches: already applied — skip ${patchfile}"
   else
-    patch -d "${DARKSTR_GECKO_ROOT}" -p1 < "${patch}"
+    echo "apply-darkstr-patches: patch does not apply cleanly for ${patchfile}" >&2
+    printf '%s\n' "${dry_out}" >&2
+    exit 1
   fi
 done
 
