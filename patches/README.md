@@ -40,3 +40,17 @@ Until M1, stubs end in `.patch.stub` so `patch(1)` is not accidentally run again
 ## Branding
 
 Product name is **darkstr**. Do not ship these patches as “LibreWolf official.” Change about: / icons / name in the private fork branding pass (M1), not by claiming upstream identity.
+
+
+## M1 skim apply (2026-09-14)
+
+On the Builder Mini SSD clean tree (`DARKSTR_GECKO_ROOT`, see `docs/M1-STATUS.md`):
+
+```bash
+source ~/src/darkstr-gecko/DARKSTR_GECKO_ROOT.env   # or export DARKSTR_GECKO_ROOT=...
+./patches/scripts/apply-darkstr-patches.sh --dry-run --require-root
+./patches/scripts/apply-darkstr-patches.sh --require-root
+grep -n 'darkstr.mode\|BEGIN darkstr-m1-prefs' "$DARKSTR_GECKO_ROOT/lw/librewolf.cfg"
+```
+
+The script copies `stubs/darkstr.cfg` → `lw/darkstr.cfg` and appends an idempotent `defaultPref` block into `lw/librewolf.cfg` so chrome prefs load. It does **not** run `make bootstrap` / `make build`. `.patch.stub` files remain sketches until replaced with train-pinned unified diffs.
