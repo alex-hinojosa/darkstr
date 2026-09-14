@@ -1,0 +1,250 @@
+# darkstr M3-CPP — train-pinned live C++ nsHttp hooks (UA + CH REMOVE)
+# Train: Firefox FIREFOX_155_0_1_RELEASE / LibreWolf 155.0.1-1
+# Brand: darkstr — not official LibreWolf. No Cloudflare/TLS/JA3 claims.
+# Prerequisite: M3 chrome 0003 (DarkstrNativePersona) for UA mirror pref writer.
+# Apply: patch -d "$DARKSTR_GECKO_ROOT" -p1 < patches/0005-darkstr-cpp-native-hooks.patch
+# Rebuild: ./mach build netwerk/protocol/http  (or full ./mach build)
+# Honesty: Navigator + DocShell remain chrome-JS (0003) in this drop — no Rust FFI.
+#
+diff -ruN a/browser/components/DarkstrNativePersona.sys.mjs b/browser/components/DarkstrNativePersona.sys.mjs
+--- a/browser/components/DarkstrNativePersona.sys.mjs
++++ b/browser/components/DarkstrNativePersona.sys.mjs
+@@ -28,6 +28,8 @@
+ const STRICT_PREF = "darkstr.strictFirstDoc";
+ const SNAPSHOT_PREF = "darkstr.persona.snapshot";
+ const SEED_PREF = "darkstr.persona.seed";
++/** Mirror for C++ nsHttp hooks (0005) — plain UA string, no JSON. */
++const UA_MIRROR_PREF = "darkstr.persona.ua";
+ 
+ const CLIENT_HINT_HEADERS = [
+   "sec-ch-ua",
+@@ -279,6 +281,16 @@
+       snapshot,
+       mainInjectDisable,
+     };
++
++    // Mirror UA for C++ DarkstrNsHttpHooks (patches/0005). Clear when idle.
++    try {
++      if (this._plan.applyNativeBase && snapshot?.userAgent) {
++        Services.prefs.setStringPref(UA_MIRROR_PREF, snapshot.userAgent);
++      } else if (Services.prefs.prefHasUserValue(UA_MIRROR_PREF)) {
++        Services.prefs.clearUserPref(UA_MIRROR_PREF);
++      }
++    } catch (_e) {}
++
+     return this._plan;
+   },
+ 
+diff -ruN a/netwerk/protocol/http/DarkstrNsHttpHooks.cpp b/netwerk/protocol/http/DarkstrNsHttpHooks.cpp
+--- a/netwerk/protocol/http/DarkstrNsHttpHooks.cpp
++++ b/netwerk/protocol/http/DarkstrNsHttpHooks.cpp
+@@ -0,0 +1,106 @@
++/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
++/* vim: set sw=2 ts=8 et tw=80 : */
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
++
++#include "DarkstrNsHttpHooks.h"
++
++#include "nsHttp.h"
++#include "nsHttpRequestHead.h"
++#include "mozilla/Preferences.h"
++#include "nsString.h"
++
++namespace mozilla::net {
++
++static constexpr const char* kClientHintHeaders[] = {
++    "sec-ch-ua",
++    "sec-ch-ua-mobile",
++    "sec-ch-ua-platform",
++    "sec-ch-ua-platform-version",
++    "sec-ch-ua-arch",
++    "sec-ch-ua-bitness",
++    "sec-ch-ua-model",
++    "sec-ch-ua-full-version-list",
++    "sec-ch-ua-wow64",
++};
++
++// Storage for UserAgentOverride() return — refreshed each call.
++static nsCString gDarkstrUaOverride;
++
++bool DarkstrNsHttpHooks::PollutionNativeHooksActive() {
++  if (!Preferences::GetBool("darkstr.nativePersonaHooks", false)) {
++    return false;
++  }
++  if (Preferences::GetBool("darkstr.nativeCompatible", false)) {
++    return false;
++  }
++  nsAutoCString mode;
++  Preferences::GetCString("darkstr.mode", mode);
++  return mode.EqualsLiteral("pollution");
++}
++
++static bool ExtractUserAgentFromSnapshotJson(const nsACString& aJson,
++                                             nsACString& aOutUa) {
++  // Minimal honest extractor: look for "userAgent":"<value>" only.
++  // Full JSON parse stays in chrome (0003). This is a C++ fallback mirror.
++  // Find "userAgent" then the next quoted string value.
++  nsAutoCString flat(aJson);
++  int32_t keyPos = flat.Find("\"userAgent\"");
++  if (keyPos < 0) {
++    return false;
++  }
++  int32_t colon = flat.Find(":", keyPos + 12);
++  if (colon < 0) {
++    return false;
++  }
++  int32_t firstQuote = flat.Find("\"", colon + 1);
++  if (firstQuote < 0) {
++    return false;
++  }
++  int32_t secondQuote = flat.Find("\"", firstQuote + 1);
++  if (secondQuote < 0 || secondQuote <= firstQuote + 1) {
++    return false;
++  }
++  aOutUa.Assign(Substring(flat, firstQuote + 1, secondQuote - firstQuote - 1));
++  return !aOutUa.IsEmpty();
++}
++
++const nsCString* DarkstrNsHttpHooks::UserAgentOverride() {
++  gDarkstrUaOverride.Truncate();
++  if (!PollutionNativeHooksActive()) {
++    return nullptr;
++  }
++
++  nsAutoCString ua;
++  if (NS_SUCCEEDED(Preferences::GetCString("darkstr.persona.ua", ua)) &&
++      !ua.IsEmpty()) {
++    gDarkstrUaOverride.Assign(ua);
++    return &gDarkstrUaOverride;
++  }
++
++  nsAutoCString snapshot;
++  if (NS_SUCCEEDED(
++          Preferences::GetCString("darkstr.persona.snapshot", snapshot)) &&
++      !snapshot.IsEmpty() &&
++      ExtractUserAgentFromSnapshotJson(snapshot, ua)) {
++    gDarkstrUaOverride.Assign(ua);
++    return &gDarkstrUaOverride;
++  }
++
++  return nullptr;
++}
++
++void DarkstrNsHttpHooks::RemoveClientHintHeaders(nsHttpRequestHead* aRequest) {
++  if (!aRequest || !PollutionNativeHooksActive()) {
++    return;
++  }
++  for (const char* name : kClientHintHeaders) {
++    nsHttpAtom atom = nsHttp::ResolveAtom(nsDependentCString(name));
++    if (atom && aRequest->HasHeader(atom)) {
++      (void)aRequest->ClearHeader(atom);
++    }
++  }
++}
++
++}  // namespace mozilla::net
+diff -ruN a/netwerk/protocol/http/DarkstrNsHttpHooks.h b/netwerk/protocol/http/DarkstrNsHttpHooks.h
+--- a/netwerk/protocol/http/DarkstrNsHttpHooks.h
++++ b/netwerk/protocol/http/DarkstrNsHttpHooks.h
+@@ -0,0 +1,52 @@
++/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
++/* vim: set sw=2 ts=8 et tw=80 : */
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
++
++/**
++ * darkstr M3-CPP — thin nsHttp call-ins (train-pinned LibreWolf/Firefox 155.0.1-1).
++ *
++ * Brand: darkstr — not official LibreWolf. Pollution browser, not Cloudflare bypass.
++ * No Rust FFI / XPCOM crate link in this drop.
++ *
++ * Surfaces (this file):
++ *   1) User-Agent override from chrome-mirrored `darkstr.persona.ua` (or snapshot JSON)
++ *      when pollution + darkstr.nativePersonaHooks (and not nativeCompatible).
++ *   2) Client Hints REMOVE only (never SET) on the request head.
++ *
++ * Navigator / DocShell remain chrome-JS SoT (0003 DarkstrNativePersona*) for now.
++ */
++
++#ifndef mozilla_net_DarkstrNsHttpHooks_h
++#define mozilla_net_DarkstrNsHttpHooks_h
++
++#include "nsStringFwd.h"
++
++class nsHttpRequestHead;
++
++namespace mozilla::net {
++
++class DarkstrNsHttpHooks final {
++ public:
++  /** pollution && nativePersonaHooks && !nativeCompatible */
++  static bool PollutionNativeHooksActive();
++
++  /**
++   * Non-null when PollutionNativeHooksActive and a non-empty UA is available
++   * from `darkstr.persona.ua` or `darkstr.persona.snapshot` JSON.
++   * Returned pointer is stable until the next call.
++   */
++  static const nsCString* UserAgentOverride();
++
++  /** REMOVE Client Hint request headers if present; never SET. */
++  static void RemoveClientHintHeaders(nsHttpRequestHead* aRequest);
++
++ private:
++  DarkstrNsHttpHooks() = delete;
++  ~DarkstrNsHttpHooks() = delete;
++};
++
++}  // namespace mozilla::net
++
++#endif  // mozilla_net_DarkstrNsHttpHooks_h
+diff -ruN a/netwerk/protocol/http/moz.build b/netwerk/protocol/http/moz.build
+--- a/netwerk/protocol/http/moz.build
++++ b/netwerk/protocol/http/moz.build
+@@ -114,6 +114,7 @@
+     "ConnectionEstablisher.cpp",
+     "ConnectionHandle.cpp",
++    "DarkstrNsHttpHooks.cpp",  # darkstr M3-CPP nsHttp UA + CH REMOVE
+     "DnsAndConnectSocket.cpp",
+     "EarlyHintPreconnect.cpp",
+     "EarlyHintPreloader.cpp",
+     "EarlyHintRegistrar.cpp",
+diff -ruN a/netwerk/protocol/http/nsHttpHandler.cpp b/netwerk/protocol/http/nsHttpHandler.cpp
+--- a/netwerk/protocol/http/nsHttpHandler.cpp
++++ b/netwerk/protocol/http/nsHttpHandler.cpp
+@@ -4,6 +4,7 @@
+ 
+ // HttpLog.h should generally be included first
+ #include "nsHttpHandler.h"
++#include "DarkstrNsHttpHooks.h"
+ 
+ #include <bitset>
+ 
+@@ -810,6 +811,10 @@
+     rv = request->SetHeader(nsHttp::Accept_Encoding, mHttpAcceptEncodings,
+                             false, nsHttpHeaderArray::eVarietyRequestDefault);
+   }
++
++  // darkstr M3-CPP: Client Hints REMOVE only (never SET) when pollution+hooks.
++  DarkstrNsHttpHooks::RemoveClientHintHeaders(request);
++
+   return NS_OK;
+ }
+ 
+@@ -998,6 +1003,13 @@
+     return mSpoofedUserAgent;
+   }
+ 
++  // darkstr M3-CPP: persona UA when pollution + nativePersonaHooks (never Cloudflare).
++  // Reads chrome-mirrored darkstr.persona.ua / snapshot; default hooks pref stays false.
++  if (const nsCString* darkstrUa = DarkstrNsHttpHooks::UserAgentOverride()) {
++    LOG(("using darkstr.persona.ua : %s\n", darkstrUa->get()));
++    return *darkstrUa;
++  }
++
+   if (!mUserAgentOverride.IsVoid()) {
+     LOG(("using general.useragent.override : %s\n", mUserAgentOverride.get()));
+     return mUserAgentOverride;

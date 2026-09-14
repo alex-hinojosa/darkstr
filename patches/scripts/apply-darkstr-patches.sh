@@ -168,6 +168,13 @@ patch_markers_present() {
         && grep -Fq "DarkstrNativePersona" "${DARKSTR_GECKO_ROOT}/browser/components/BrowserGlue.sys.mjs" \
         && grep -Fq "DarkstrNativePersona.sys.mjs" "${DARKSTR_GECKO_ROOT}/browser/components/moz.build"
       ;;
+    0005-darkstr-cpp-native-hooks.patch)
+      [[ -f "${DARKSTR_GECKO_ROOT}/netwerk/protocol/http/DarkstrNsHttpHooks.cpp" ]] \
+        && [[ -f "${DARKSTR_GECKO_ROOT}/netwerk/protocol/http/DarkstrNsHttpHooks.h" ]] \
+        && grep -Fq "DarkstrNsHttpHooks" "${DARKSTR_GECKO_ROOT}/netwerk/protocol/http/nsHttpHandler.cpp" \
+        && grep -Fq "DarkstrNsHttpHooks.cpp" "${DARKSTR_GECKO_ROOT}/netwerk/protocol/http/moz.build" \
+        && grep -Fq "darkstr.persona.ua" "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrNativePersona.sys.mjs"
+      ;;
     *)
       return 1
       ;;
@@ -207,10 +214,11 @@ for stub in "${STUBS}"/000*.patch.stub; do
 done
 if [[ "${stub_count}" -gt 0 ]]; then
   echo "Note: ${stub_count} .patch.stub file(s) present — sketches only, not applied."
-  echo "Remaining stubs are sketches; real patches: 0002 XOR observer, 0003 native persona hooks when present."
+  echo "Remaining stubs are sketches; real patches: 0002 XOR, 0003 chrome persona, 0005 C++ nsHttp when present (0004 stub=chaff)."
 fi
 
 echo "Done. Cfg path always; real unified diffs under patches/000*.patch applied when present."
 echo "Remember XOR: Pollution kills RFP/FPP; Homogeneous restores stock RFP (no metric customization)."
 echo "M2 live observer: patches/0002-darkstr-mode-xor-rfp.patch (DarkstrModeXor.sys.mjs)."
 echo "M3 native hooks: patches/0003-darkstr-native-persona-hooks.patch (DarkstrNativePersona*.sys.mjs). Rebuild: ./mach build browser/components (see docs/M3-STATUS.md)."
+echo "M3-CPP nsHttp hooks: patches/0005-darkstr-cpp-native-hooks.patch (DarkstrNsHttpHooks). Rebuild: ./mach build netwerk/protocol/http (see docs/M3-CPP-STATUS.md)."

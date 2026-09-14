@@ -27,7 +27,7 @@ Prefer chrome JS / existing Gecko extension points over inventing C++.
 | Pref `darkstr.nativePersonaHooks` in cfg / apply script | **Yes** |
 | WebExt MAIN inject gate when flag true | **Yes** (`extension/`) |
 | Rust enums / `NativePersonaPlan` (already on main #16) | **Unchanged SoT** |
-| Live C++ / XPCOM / Rust FFI | **Not claimed** |
+| Live C++ / XPCOM / Rust FFI | Chrome M3: **not** C++. Follow-on: [`M3-CPP-STATUS.md`](M3-CPP-STATUS.md) (`0005` nsHttp only) |
 | Mini `mach build` from this executor | See honesty |
 
 ## Train pin

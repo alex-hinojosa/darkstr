@@ -48,3 +48,32 @@ test("0003 patch is a real unified diff not a stub", () => {
   assert.doesNotMatch(patch, /^# STUB/m);
   assert.ok(patch.length > 5000, "patch should be substantial");
 });
+
+test("0005 C++ nsHttp patch is a real unified diff (UA + CH REMOVE)", () => {
+  const patch = readFileSync(
+    join(root, "patches/0005-darkstr-cpp-native-hooks.patch"),
+    "utf8"
+  );
+  assert.match(patch, /DarkstrNsHttpHooks/);
+  assert.match(patch, /nsHttpHandler\.cpp/);
+  assert.match(patch, /RemoveClientHintHeaders/);
+  assert.match(patch, /darkstr\.persona\.ua/);
+  assert.match(patch, /sec-ch-ua/);
+  // Honesty: non-claims may name Cloudflare/TLS/JA3 only to deny them.
+  assert.match(patch, /No Cloudflare\/TLS\/JA3 claims|not Cloudflare/i);
+  assert.doesNotMatch(patch, /bypass Cloudflare|spoof JA3|defeat TLS/i);
+  assert.doesNotMatch(patch, /^# STUB/m);
+  assert.ok(patch.length > 4000, "0005 patch should be substantial");
+  // Focused PR: do not claim Navigator.cpp / nsDocShell.cpp in this drop
+  assert.doesNotMatch(patch, /Navigator\.cpp/);
+  assert.doesNotMatch(patch, /nsDocShell\.cpp/);
+});
+
+test("apply script has 0005 content markers", () => {
+  const sh = readFileSync(
+    join(root, "patches/scripts/apply-darkstr-patches.sh"),
+    "utf8"
+  );
+  assert.match(sh, /0005-darkstr-cpp-native-hooks\.patch/);
+  assert.match(sh, /DarkstrNsHttpHooks\.cpp/);
+});
