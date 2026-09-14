@@ -150,12 +150,40 @@ fi
 # Real unified diffs will drop the .stub suffix. Apply in order when present.
 # Idempotent: --forward --batch dry-run first; skip already-applied (no .rej);
 # apply only when dry-run is clean; real conflicts fail hard (no prompts).
+# Later patches may rewrite shared files (BrowserGlue/moz.build), so a prior
+# patch can fail dry-run after a later one landed — use content markers too.
+patch_markers_present() {
+  local base
+  base="$(basename "$1")"
+  case "${base}" in
+    0002-darkstr-mode-xor-rfp.patch)
+      [[ -f "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrModeXor.sys.mjs" ]] \
+        && grep -Fq "DarkstrModeXor" "${DARKSTR_GECKO_ROOT}/browser/components/BrowserGlue.sys.mjs" \
+        && grep -Fq "DarkstrModeXor.sys.mjs" "${DARKSTR_GECKO_ROOT}/browser/components/moz.build"
+      ;;
+    0003-darkstr-native-persona-hooks.patch)
+      [[ -f "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrNativePersona.sys.mjs" ]] \
+        && [[ -f "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrNativePersonaChild.sys.mjs" ]] \
+        && [[ -f "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrNativePersonaParent.sys.mjs" ]] \
+        && grep -Fq "DarkstrNativePersona" "${DARKSTR_GECKO_ROOT}/browser/components/BrowserGlue.sys.mjs" \
+        && grep -Fq "DarkstrNativePersona.sys.mjs" "${DARKSTR_GECKO_ROOT}/browser/components/moz.build"
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
 shopt -s nullglob
 for patchfile in "${STUBS}"/000*.patch "${ROOT}/patches"/000*.patch; do
   [[ -f "${patchfile}" ]] || continue
   echo "Applying ${patchfile}"
   if [[ "${DRY_RUN}" -eq 1 ]]; then
     echo "DRY-RUN: patch -d ${DARKSTR_GECKO_ROOT} -p1 --forward --batch < ${patchfile}"
+    continue
+  fi
+  if patch_markers_present "${patchfile}"; then
+    echo "apply-darkstr-patches: markers present — skip ${patchfile}"
     continue
   fi
   set +e

@@ -32,7 +32,7 @@ The script:
 
 Until M1, stubs end in `.patch.stub` so `patch(1)` is not accidentally run against an empty tree.
 
-## Idempotent re-apply (soft residual after #19)
+## Idempotent re-apply (soft residual after #19; markers after later patches rewrite shared files)
 
 `scripts/apply-darkstr-patches.sh` applies real `patches/000*.patch` via
 `patch -p1 --forward --batch` (dry-run, then apply). Re-running after a
