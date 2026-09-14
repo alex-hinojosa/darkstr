@@ -137,19 +137,22 @@ Chrome key names and the activation matrix above remain the pin. M2 ships:
 
 See `docs/M2-STATUS.md`, `docs/GECKO-HOOKS.md` §1.2–1.3, `docs/M2-MINI-VERIFY.sh`. Stock LibreWolf **without** the fork patch still cannot auto-kill RFP (manual about:config + UTC probe). Mini apply + `mach build` proof is operator-side until recorded.
 
-## Phase 2 M3 note (persona hook-site enums — 2026-09-14)
+## Phase 2 M3 note (train-pinned live native persona hooks — 2026-09-14)
 
-Chrome key names and the activation matrix above remain the pin. M3 first drop encodes **native hook-site / applicator surfaces** in Rust (not a claim that live Gecko C++ hooks exist yet):
+Chrome key names and the activation matrix above remain the pin. M3 ships:
 
-| Surface | Control-plane encoding |
-|---------|------------------------|
-| nsHttp UA + CH | `NsHttpAction::{OverrideUserAgent, RemoveClientHints}`; Firefox CH = **REMOVE** only |
-| Navigator | `NavigatorField` minimum set from same `PersonaSnapshot` seed |
-| DocShell strict-first-doc | `DocShellNavPhase` + `persona_armed_for_nav` |
-| MAIN inject gate | `darkstr.nativePersonaHooks` → `WebExtMainInjectPolicy::DisableNativePathActive` when pollution |
-| Snapshot cache | Readable only when `pollution_active` (`read_cached_persona`) |
+1. **Rust control plane** (already on main #16) — `NativePersonaPlan` / CH REMOVE / snapshot gate.
+2. **Train-pinned chrome JS** on LibreWolf/Firefox **155.0.1-1**: `patches/0003-darkstr-native-persona-hooks.patch` → `DarkstrNativePersona*.sys.mjs` (UA + CH REMOVE + Navigator + strictFirstDoc counter + `darkstr.nativePersonaHooks`).
 
-See `docs/M3-STATUS.md`, `docs/GECKO-HOOKS.md` §2, stub `patches/stubs/0003-darkstr-hook-sites.patch.stub`. Live tree on Mini (`librewolf-155.0.1-1`) is for path checks only until a train-pinned patch is Proof-verified.
+| Surface | Live encoding |
+|---------|----------------|
+| nsHttp UA + CH | `http-on-modify-request` UA override; CH **REMOVE** only (never SET) |
+| Navigator | JSWindowActor child minimum fields from same snapshot |
+| DocShell strict-first-doc | Top-level document load count (first stays native when strict) |
+| MAIN inject gate | Pref `darkstr.nativePersonaHooks` + WebExt skip MAIN inject |
+| Snapshot cache | `darkstr.persona.snapshot` / `darkstr.persona.seed`; idle unless pollution |
+
+See `docs/M3-STATUS.md`, `docs/GECKO-HOOKS.md` §2. Default hooks flag **false** until fork smoke + Proof.
 
 ## Phase 2 M4 note (chaff scheduler + depth enums — 2026-09-14)
 

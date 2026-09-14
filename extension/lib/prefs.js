@@ -6,6 +6,7 @@
  *   darkstr.nativeCompatible    = boolean                       (independent, global escape)
  *   darkstr.nativeCompatSites   = { [etld1]: true }             (per-site escape)
  *   darkstr.strictFirstDoc      = boolean                       (strict-next-nav coherence)
+ *   darkstr.nativePersonaHooks  = boolean                       (M3: disable MAIN inject when native path)
  *
  * These live in browser.storage.local. They are NOT about:config prefs.
  * Browser RFP prefs are documented separately and are user-set.
@@ -17,6 +18,7 @@ const DARKSTR_PREF = Object.freeze({
   NATIVE_COMPATIBLE: "darkstr.nativeCompatible",
   NATIVE_COMPAT_SITES: "darkstr.nativeCompatSites",
   STRICT_FIRST_DOC: "darkstr.strictFirstDoc",
+  NATIVE_PERSONA_HOOKS: "darkstr.nativePersonaHooks",
   FIRST_RUN_DONE: "darkstr.firstRunDone",
   HOST_PERMS_OK: "darkstr.hostPermsOk",
 });
@@ -31,6 +33,7 @@ const DARKSTR_DEFAULTS = Object.freeze({
   [DARKSTR_PREF.NATIVE_COMPATIBLE]: false,
   [DARKSTR_PREF.NATIVE_COMPAT_SITES]: Object.freeze({}),
   [DARKSTR_PREF.STRICT_FIRST_DOC]: true,
+  [DARKSTR_PREF.NATIVE_PERSONA_HOOKS]: false,
   [DARKSTR_PREF.FIRST_RUN_DONE]: false,
   [DARKSTR_PREF.HOST_PERMS_OK]: false,
 });
@@ -42,7 +45,7 @@ function isDarkstrMode(value) {
 /**
  * Coerce raw storage into a legal prefs object.
  * Illegal / missing mode → homogeneous (safe default; does not fight LibreWolf RFP).
- * nativeCompatible / nativeCompatSites / strictFirstDoc are independent of mode.
+ * nativeCompatible / nativeCompatSites / strictFirstDoc / nativePersonaHooks are independent of mode.
  */
 function normalizeDarkstrPrefs(raw) {
   const src = raw && typeof raw === "object" ? raw : {};
@@ -72,11 +75,13 @@ function normalizeDarkstrPrefs(raw) {
   const strictRaw = src[DARKSTR_PREF.STRICT_FIRST_DOC];
   const strictFirstDoc =
     strictRaw === false ? false : strictRaw === true ? true : true;
+  const nativeHooks = src[DARKSTR_PREF.NATIVE_PERSONA_HOOKS] === true;
   return {
     [DARKSTR_PREF.MODE]: mode,
     [DARKSTR_PREF.NATIVE_COMPATIBLE]: src[DARKSTR_PREF.NATIVE_COMPATIBLE] === true,
     [DARKSTR_PREF.NATIVE_COMPAT_SITES]: sites,
     [DARKSTR_PREF.STRICT_FIRST_DOC]: strictFirstDoc,
+    [DARKSTR_PREF.NATIVE_PERSONA_HOOKS]: nativeHooks,
     [DARKSTR_PREF.FIRST_RUN_DONE]: src[DARKSTR_PREF.FIRST_RUN_DONE] === true,
     [DARKSTR_PREF.HOST_PERMS_OK]: src[DARKSTR_PREF.HOST_PERMS_OK] === true,
   };

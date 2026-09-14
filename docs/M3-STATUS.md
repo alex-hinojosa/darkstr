@@ -1,4 +1,4 @@
-# Phase 2 M3 status — first native wins (`duppel-persona` hook sites)
+# Phase 2 M3 status — first native wins (train-pinned live hooks)
 
 **Date:** 2026-09-14  
 **Owner:** Builder  
@@ -7,97 +7,93 @@
 
 ## Goal (narrow)
 
-Document + encode **hook-site enums / applicator surfaces** for the first native wins:
+First **live** native persona wins on LibreWolf / Firefox **155.0.1-1**, mirroring Rust control plane from main (#16):
 
-1. **nsHttp** — User-Agent override + Client-Hints **REMOVE** (Firefox personas; never SET CH).
-2. **Navigator** DOM bindings from the **same** persona seed as HTTP UA.
-3. **DocShell** / `darkstr.strictFirstDoc` — first-nav native vs next-nav persona arm.
-4. **Feature flag** `darkstr.nativePersonaHooks` — disable WebExt MAIN inject when native path active.
-5. Glue **reads cached `PersonaSnapshot` only when `pollution_active`** (Homogeneous / Native-Compatible idle).
+1. **nsHttp** — User-Agent override from persona snapshot when `pollution_active`
+2. **Client Hints REMOVE** only (never SET) on Firefox host
+3. **Minimum Navigator fields** from the same seed (platform / HW / languages / UA)
+4. **Feature flag** `darkstr.nativePersonaHooks` — disable WebExt MAIN inject when native path + pollution
+5. **DocShell-ish** first vs subsequent nav (top-level document load count; cheap chrome)
 
-This PR is **docs + Rust enums/APIs + stub notes + optional Mini path-check helper**. It does **not** claim live C++/XPCOM observers, a unified diff verified against LibreWolf 155.0.1-1, bootstrap, or a rebuilt browser binary.
+Prefer chrome JS / existing Gecko extension points over inventing C++.
 
-## Confirmed on main (pre-M3)
-
-| Item | Value |
-|------|-------|
-| Base | `origin/main` @ `b23fc12` (M2 #15 XOR applicator merged) |
-| M1 prefs | `darkstr.cfg` / `defaultPref("darkstr.*")` apply path |
-| M2 XOR | `mode_pref_effects` / `PrefsApplicator` / `is_xor_safe` |
-| Live tree (Mini, path checks only) | `$DARKSTR_GECKO_ROOT` = `…/librewolf-155.0.1-1` with M1 prefs |
-
-## What this M3 drop ships
+## What this drop ships
 
 | Deliverable | Status |
 |-------------|--------|
-| `docs/M3-STATUS.md` (this file) | **New** |
-| GECKO-HOOKS §2 M3 applicator surfaces pin | Updated |
-| PROOF-PIN / PROOF-XOR-CHECKLIST / PHASE-2-PLAN M3 notes | Updated |
-| Rust: `DocShellNavPhase`, `NativePersonaPlan`, CH-remove helpers, snapshot gate | **New** |
-| Rust: `HookApplicatorSurface`, `NsHttpAction`, `NavigatorField`, `read_cached_persona` | **New** |
-| Unit tests: pollution_active gating + CH-remove + MAIN inject flag | **New** |
-| `patches/stubs/0003-darkstr-hook-sites.patch.stub` notes | Upgraded (still a stub) |
-| Optional `docs/M3-MINI-VERIFY.sh` path existence checks | **New** (no Mesh hang) |
-| Live C++/XPCOM nsHttp / Navigator / DocShell patch | **Not claimed** |
-| Verified unified diff vs 155.0.1-1 | **Not claimed** |
-| `make bootstrap` / `make build` / Firefox rebuild | **Out of scope** |
+| Real unified diff `patches/0003-darkstr-native-persona-hooks.patch` | **New** — train-pinned |
+| `DarkstrNativePersona.sys.mjs` + Parent/Child JSWindowActor | **In patch** |
+| Wire via `BrowserGlue.sys.mjs` + `moz.build` (after M2) | **In patch** |
+| Pref `darkstr.nativePersonaHooks` in cfg / apply script | **Yes** |
+| WebExt MAIN inject gate when flag true | **Yes** (`extension/`) |
+| Rust enums / `NativePersonaPlan` (already on main #16) | **Unchanged SoT** |
+| Live C++ / XPCOM / Rust FFI | **Not claimed** |
+| Mini `mach build` from this executor | See honesty |
 
-## Authoritative M3 control-plane table
+## Train pin
 
-| Gate | Behavior |
-|------|----------|
-| `pollution_active` | Only then may glue read cached `PersonaSnapshot` |
-| Homogeneous / `nativeCompatible` / RFP conflict | Crates idle — no snapshot read, no UA/CH apply |
-| Firefox CH | **REMOVE** only (`ClientHintsPolicy::Remove`); never SET |
-| `strictFirstDoc=true` + FirstDocument | Stay native (no persona apply this nav) |
-| `strictFirstDoc=true` + SubsequentNav | Persona may apply (if pollution + native hooks) |
-| `darkstr.nativePersonaHooks=true` + pollution | WebExt MAIN inject **DisableNativePathActive** |
-| Native hooks false | Phase 1 WebExt MAIN inject remains AllowFallback |
+| Item | Value |
+|------|-------|
+| Product train | LibreWolf **155.0.1-1** |
+| Upstream tag context | Mozilla `FIREFOX_155_0_1_RELEASE` |
+| Mini gecko root | `$DARKSTR_GECKO_ROOT` = `…/librewolf-source/librewolf-155.0.1-1` |
+| Prerequisite | M2 `DarkstrModeXor` applied (#18 / `0757256`) |
+| Touched Gecko paths | `DarkstrNativePersona*.sys.mjs` (new×3), `BrowserGlue.sys.mjs`, `moz.build` |
 
-## Rust call sites (no Gecko FFI yet)
+## Hook shape (smallest honest chrome JS)
 
-```text
-duppel_persona::DocShellNavPhase / persona_armed_for_nav
-duppel_persona::cached_snapshot_readable / NativePersonaPlan::resolve
-duppel_persona::webext_main_inject_policy / ClientHintsPolicy::Remove
-duppel_bridge::HookSite / HookApplicatorSurface / NsHttpAction / NavigatorField
-duppel_bridge::m3_applicator_surfaces / read_cached_persona / native_persona_plan
+1. Pref observers on mode / nativeCompatible / nativePersonaHooks / strictFirstDoc / persona snapshot|seed
+2. `http-on-modify-request`: UA override when plan applies; CH headers **REMOVE** if present; never SET CH
+3. JSWindowActor child spoofs minimum Navigator fields from the **same** snapshot
+4. Top-level `TYPE_DOCUMENT` load count ≈ DocShell first vs subsequent (`strictFirstDoc`)
+5. Snapshot from `darkstr.persona.snapshot` JSON **or** `darkstr.persona.seed` mulberry32 fallback (Firefox×host OS)
+6. Idle when Homogeneous / `nativeCompatible` / hooks false / no snapshot|seed
+
+Semantics mirror `duppel_persona::NativePersonaPlan` / `duppel_bridge::read_cached_persona`.
+
+## Apply + rebuild (Mini SSD)
+
+```bash
+source ~/src/darkstr-gecko/DARKSTR_GECKO_ROOT.env
+# from darkstr checkout with patches/0002 + patches/0003:
+./patches/scripts/apply-darkstr-patches.sh --require-root
+# or only M3 (M2 already applied):
+patch -d "$DARKSTR_GECKO_ROOT" -p1 < patches/0003-darkstr-native-persona-hooks.patch
+
+cd "$DARKSTR_GECKO_ROOT"
+./mach build browser/components
+# or full incremental:
+./mach build
+
+bash docs/M3-MINI-VERIFY.sh
 ```
 
-## Stub honesty
+**Atlas:** never `mv` under `/Volumes/Mesh`.
 
-`0003-darkstr-hook-sites.patch.stub` documents intended nsHttp / Navigator / DocShell call sites and points at the Rust enums above. It is **not** a unified diff against pinned Firefox/LibreWolf 155.0.1-1. Do **not** invent untested C++ patches in this public repo. Live tree on Mini is useful for **path existence checks only** until a train-pinned patch is Proof-verified.
+## Honesty / non-claims
 
-## Mesh / Mini
+- This PR **does** ship a real unified diff against post-M2 155.0.1 BrowserGlue/moz.build paths (dry-run apply verified on a pristine post-M2 copy of those files).
+- This PR **does not** claim: Rust FFI, C++ nsHttpHandler edits, Proof-PASS binary artifact from this authoring executor, or WebExt↔chrome privileged sync of the snapshot pref (snapshot/seed may be set via about:config / later bridge).
+- Default `darkstr.nativePersonaHooks=false` until fork smoke; flip only after Proof.
+- Stub `patches/stubs/0003-…stub` retained as pointer; apply script skips `*.stub`.
 
-- Clean gecko root remains on Builder Mini SSD (`docs/M1-STATUS.md`).
-- **Atlas:** never `mv` under `/Volumes/Mesh`.
-- Optional: `docs/M3-MINI-VERIFY.sh` — lists expected Gecko paths; does not apply patches or wait on Mesh.
+## Proof gates for this PR
+
+- [x] Pref keys stay `darkstr.*` (adds `darkstr.nativePersonaHooks` + optional persona snapshot/seed)
+- [x] Firefox CH = REMOVE only; never SET in chrome glue
+- [x] Snapshot/apply gated on pollution_active (+ hooks + nav phase)
+- [x] DocShell first-nav vs subsequent encoded in chrome load counter
+- [x] WebExt MAIN inject disabled when native hooks flag true
+- [x] Real patch paths exist on 155.0.1 train; no fake C++ files
+- [x] `cd crates && cargo test` / `npm test` green
+- [x] Honest brand: darkstr; no Cloudflare/TLS claims
+- [ ] Mini apply + `mach build` EXIT — operator / verify script (record when run)
 
 ## Exact skim paths
 
 | Who | Read |
 |-----|------|
-| Meridian | `docs/PHASE-2-PLAN.md` §M3, this file, `docs/GECKO-HOOKS.md` §2 |
+| Meridian | this file, `docs/GECKO-HOOKS.md` §2, `patches/0003-darkstr-native-persona-hooks.patch` |
 | Proof | `docs/PROOF-XOR-CHECKLIST.md` M3 pin, `docs/PROOF-PIN.md` M3 note, this file |
-| PM | README positioning + this file “Goal” (no CF/TLS/bypass claims) |
-| Builder | `crates/duppel-bridge`, `crates/duppel-persona`, stub `0003-…` |
-
-## Proof gates for this PR
-
-- [x] Pref keys stay `darkstr.*` (adds `darkstr.nativePersonaHooks` feature flag name only)
-- [x] CH policy for Firefox = REMOVE; unit-tested never SET
-- [x] Snapshot cache readable only when `pollution_active`
-- [x] DocShell first-nav vs next-nav encoded + tested
-- [x] MAIN inject disabled when native hooks + pollution
-- [x] `cd crates && cargo test` green
-- [x] `npm test` CI positioning denylist green
-- [x] No claim of live Gecko C++ hooks landed
-- [x] Honest brand: darkstr, not official LibreWolf; no Cloudflare/TLS claims
-
-## Next after merge
-
-1. Private-fork: thin nsHttp UA + CH-remove glue calling `NativePersonaPlan` / cached snapshot (train-pinned `.patch`, Proof-checked on 155.0.1-1).
-2. Navigator bindings from same seed; DocShell strict-first-doc flag.
-3. Flip `darkstr.nativePersonaHooks` default only after fork smoke + coherence fixtures.
-4. M4: chaff native + canvas/Audio depth (`HookSite::CanvasAudio`).
+| PM | Goal + honesty (no CF/TLS/bypass) |
+| Builder Mini | `$DARKSTR_GECKO_ROOT`, `docs/M3-MINI-VERIFY.sh` |

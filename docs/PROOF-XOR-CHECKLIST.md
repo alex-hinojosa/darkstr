@@ -23,7 +23,8 @@ When the PR touches nsHttp / Navigator / DocShell / MAIN inject native-path work
 - [ ] Cached persona readable only when `pollution_active` (Homogeneous / Native-Compatible idle)
 - [ ] `strictFirstDoc` first-nav vs subsequent-nav semantics preserved
 - [ ] WebExt MAIN inject disabled (or feature-flagged off) when `darkstr.nativePersonaHooks` + pollution
-- [ ] No claim that untested C++/Gecko hooks landed unless Proof-checked on a fork artifact (155.x train)
+- [ ] Chrome JS train-pinned patch only claims paths that exist on 155.x; no invented C++ files
+- [ ] No claim that untested C++/Gecko FFI landed unless Proof-checked on a fork artifact
 - [ ] Status: [`M3-STATUS.md`](M3-STATUS.md) · Hooks: [`GECKO-HOOKS.md`](GECKO-HOOKS.md) §2
 
 ## M4 chaff + depth pin
