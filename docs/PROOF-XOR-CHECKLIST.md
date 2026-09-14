@@ -26,6 +26,18 @@ When the PR touches nsHttp / Navigator / DocShell / MAIN inject native-path work
 - [ ] No claim that untested C++/Gecko hooks landed unless Proof-checked on a fork artifact (155.x train)
 - [ ] Status: [`M3-STATUS.md`](M3-STATUS.md) · Hooks: [`GECKO-HOOKS.md`](GECKO-HOOKS.md) §2
 
+## M4 chaff + depth pin
+
+When the PR touches chaff scheduler, canvas/Audio/WebGL/worker depth, or strict-next-nav notes (even docs/Rust-only):
+
+- [ ] Chaff arms only when `pollution_active` / `allow_persona_chaff` (Homogeneous / Native-Compatible / RFP conflict idle)
+- [ ] Quiet/Balanced/Loud volume + timing remain Phase 1 poisoner-parity (or documented deltas)
+- [ ] Depth seeds come from the same `PersonaSnapshot`; readable only when `pollution_active`
+- [ ] No claim that untested C++ chaff timers or canvas/WebGL/Audio/worker hooks landed unless Proof-checked on a fork artifact
+- [ ] Native-Compatible site list UI changes (if any) called out for Product Manager; prefer docs-only
+- [ ] Track D Servo/Ladybird remains docs-only — no eng ship dependency
+- [ ] Status: [`M4-STATUS.md`](M4-STATUS.md) · Hooks: [`GECKO-HOOKS.md`](GECKO-HOOKS.md) §2.2 / §2.5
+
 ---
 
 Copy this checklist into the PR body (or link it) and check each applicable box. Unchecked release-fail items → do not merge.

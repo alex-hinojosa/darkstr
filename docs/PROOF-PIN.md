@@ -148,3 +148,16 @@ Chrome key names and the activation matrix above remain the pin. M3 first drop e
 
 See `docs/M3-STATUS.md`, `docs/GECKO-HOOKS.md` §2, stub `patches/stubs/0003-darkstr-hook-sites.patch.stub`. Live tree on Mini (`librewolf-155.0.1-1`) is for path checks only until a train-pinned patch is Proof-verified.
 
+## Phase 2 M4 note (chaff scheduler + depth enums — 2026-09-14)
+
+Chrome key names and the activation matrix above remain the pin. M4 first drop strengthens the **chaff control plane** and starts **depth coverage enums** (not a claim that live Gecko timers or canvas/WebGL/Audio hooks exist yet):
+
+| Surface | Control-plane encoding |
+|---------|------------------------|
+| Chaff scheduler | `ChaffSchedulerPlan` gated on `pollution_active` / `allow_persona_chaff`; Quiet/Balanced/Loud parity |
+| Pref | `darkstr.chaosLevel` (internal product; may stay storage longer) |
+| Canvas / Audio / WebGL / workers | `DepthSurface` + seeds from `PersonaSnapshot` via `read_depth_seeds` |
+| DocShell strict-next-nav | `strict_next_nav_armed` (SubsequentNav) — extends M3 notes |
+| Native-Compatible site list UI | **Unchanged** this PR — Phase 1 WebExt list; chrome pane = docs/PM only |
+
+See `docs/M4-STATUS.md`, `docs/GECKO-HOOKS.md` §2.2 / §2.5, stub `patches/stubs/0004-darkstr-chaff-depth.patch.stub`. Live Mini tree is for path checks only until a train-pinned patch is Proof-verified.

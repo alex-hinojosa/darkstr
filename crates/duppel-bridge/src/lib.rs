@@ -15,7 +15,7 @@ use duppel_persona::{
 };
 
 /// Crate API version string.
-pub const VERSION: &str = "0.1.0-phase2-m3";
+pub const VERSION: &str = "0.1.0-phase2-m4";
 
 /// Re-export pref name constants for glue that only depends on this crate.
 pub use duppel_persona::prefs as pref_names;
@@ -33,10 +33,12 @@ pub enum HookSite {
     NsHttp,
     /// DOM Navigator / platform / HW surfaces.
     Navigator,
-    /// DocShell navigation (strict-first-doc / next-nav).
+    /// DocShell navigation (strict-first-doc / strict-next-nav).
     DocShell,
-    /// Canvas 2D / WebGL / Audio (M4+ depth).
+    /// Canvas 2D / WebGL / Audio depth umbrella (M4).
     CanvasAudio,
+    /// Native chaff / poison scheduler (M4; `duppel-chaff`).
+    ChaffScheduler,
 }
 
 impl HookSite {
@@ -47,6 +49,7 @@ impl HookSite {
             HookSite::Navigator => "navigator",
             HookSite::DocShell => "docshell",
             HookSite::CanvasAudio => "canvas_audio",
+            HookSite::ChaffScheduler => "chaff_scheduler",
         }
     }
 
@@ -57,6 +60,7 @@ impl HookSite {
             HookSite::NsHttp | HookSite::Navigator | HookSite::DocShell | HookSite::CanvasAudio => {
                 "duppel-persona"
             }
+            HookSite::ChaffScheduler => "duppel-chaff",
         }
     }
 
@@ -65,7 +69,7 @@ impl HookSite {
         match self {
             HookSite::PrefObserver => "M2",
             HookSite::NsHttp | HookSite::Navigator | HookSite::DocShell => "M3",
-            HookSite::CanvasAudio => "M4",
+            HookSite::CanvasAudio | HookSite::ChaffScheduler => "M4",
         }
     }
 
@@ -90,7 +94,13 @@ impl HookSite {
             ],
             HookSite::CanvasAudio => &[
                 "dom/canvas/CanvasRenderingContext2D.cpp",
+                "dom/canvas/WebGLContext.cpp",
                 "dom/media/webaudio",
+                "dom/workers",
+            ],
+            HookSite::ChaffScheduler => &[
+                "netwerk/protocol/http/nsHttpChannel.cpp",
+                "xpcom/threads",
             ],
         }
     }
@@ -144,7 +154,19 @@ pub enum HookApplicatorSurface {
     NsHttpClientHintsRemove,
     NavigatorBindings,
     DocShellStrictFirstDoc,
+    /// M4 DocShell note: subsequent-nav / strict-next-nav arm (same gate as M3).
+    DocShellStrictNextNav,
     WebExtMainInjectGate,
+    /// M4: native chaff scheduler behind prefs.
+    ChaffNativeScheduler,
+    /// M4 depth: canvas 2D noise from PersonaSnapshot::canvas_seed.
+    Canvas2dNoise,
+    /// M4 depth: WebGL vendor/renderer from persona GPU family.
+    WebGlRendererStrings,
+    /// M4 depth: AudioContext / OfflineAudioContext from audio_seed.
+    AudioFingerprint,
+    /// M4 depth: Dedicated/Shared worker globals (same persona coherence).
+    WorkerGlobals,
 }
 
 impl HookApplicatorSurface {
@@ -154,7 +176,13 @@ impl HookApplicatorSurface {
             HookApplicatorSurface::NsHttpClientHintsRemove => "nshttp_ch_remove",
             HookApplicatorSurface::NavigatorBindings => "navigator_bindings",
             HookApplicatorSurface::DocShellStrictFirstDoc => "docshell_strict_first_doc",
+            HookApplicatorSurface::DocShellStrictNextNav => "docshell_strict_next_nav",
             HookApplicatorSurface::WebExtMainInjectGate => "webext_main_inject_gate",
+            HookApplicatorSurface::ChaffNativeScheduler => "chaff_native_scheduler",
+            HookApplicatorSurface::Canvas2dNoise => "canvas_2d_noise",
+            HookApplicatorSurface::WebGlRendererStrings => "webgl_renderer_strings",
+            HookApplicatorSurface::AudioFingerprint => "audio_fingerprint",
+            HookApplicatorSurface::WorkerGlobals => "worker_globals",
         }
     }
 
@@ -164,13 +192,19 @@ impl HookApplicatorSurface {
                 HookSite::NsHttp
             }
             HookApplicatorSurface::NavigatorBindings => HookSite::Navigator,
-            HookApplicatorSurface::DocShellStrictFirstDoc => HookSite::DocShell,
+            HookApplicatorSurface::DocShellStrictFirstDoc
+            | HookApplicatorSurface::DocShellStrictNextNav => HookSite::DocShell,
             HookApplicatorSurface::WebExtMainInjectGate => HookSite::PrefObserver,
+            HookApplicatorSurface::ChaffNativeScheduler => HookSite::ChaffScheduler,
+            HookApplicatorSurface::Canvas2dNoise
+            | HookApplicatorSurface::WebGlRendererStrings
+            | HookApplicatorSurface::AudioFingerprint
+            | HookApplicatorSurface::WorkerGlobals => HookSite::CanvasAudio,
         }
     }
 }
 
-/// M3 first-native-wins applicator surfaces (excludes M4 canvas depth).
+/// M3 first-native-wins applicator surfaces (excludes M4 canvas depth / chaff).
 pub fn m3_applicator_surfaces() -> &'static [HookApplicatorSurface] {
     &[
         HookApplicatorSurface::NsHttpUa,
@@ -179,6 +213,69 @@ pub fn m3_applicator_surfaces() -> &'static [HookApplicatorSurface] {
         HookApplicatorSurface::DocShellStrictFirstDoc,
         HookApplicatorSurface::WebExtMainInjectGate,
     ]
+}
+
+/// Fine-grained M4 depth coverage surfaces (enums/APIs only — no live Gecko hooks).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum DepthSurface {
+    Canvas2d,
+    WebGl,
+    AudioContext,
+    OfflineAudioContext,
+    DedicatedWorker,
+    SharedWorker,
+}
+
+impl DepthSurface {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            DepthSurface::Canvas2d => "canvas_2d",
+            DepthSurface::WebGl => "webgl",
+            DepthSurface::AudioContext => "audio_context",
+            DepthSurface::OfflineAudioContext => "offline_audio_context",
+            DepthSurface::DedicatedWorker => "dedicated_worker",
+            DepthSurface::SharedWorker => "shared_worker",
+        }
+    }
+
+    /// Which PersonaSnapshot field seeds this surface (control-plane documentation).
+    pub fn seed_source(self) -> &'static str {
+        match self {
+            DepthSurface::Canvas2d => "canvas_seed",
+            DepthSurface::WebGl => "gpu",
+            DepthSurface::AudioContext | DepthSurface::OfflineAudioContext => "audio_seed",
+            DepthSurface::DedicatedWorker | DepthSurface::SharedWorker => "persona_snapshot",
+        }
+    }
+}
+
+/// M4 depth coverage set (canvas / Audio / WebGL / workers).
+pub fn m4_depth_surfaces() -> &'static [DepthSurface] {
+    &[
+        DepthSurface::Canvas2d,
+        DepthSurface::WebGl,
+        DepthSurface::AudioContext,
+        DepthSurface::OfflineAudioContext,
+        DepthSurface::DedicatedWorker,
+        DepthSurface::SharedWorker,
+    ]
+}
+
+/// M4 applicator surfaces: chaff scheduler + depth kickoff + DocShell strict-next-nav note.
+pub fn m4_applicator_surfaces() -> &'static [HookApplicatorSurface] {
+    &[
+        HookApplicatorSurface::ChaffNativeScheduler,
+        HookApplicatorSurface::DocShellStrictNextNav,
+        HookApplicatorSurface::Canvas2dNoise,
+        HookApplicatorSurface::WebGlRendererStrings,
+        HookApplicatorSurface::AudioFingerprint,
+        HookApplicatorSurface::WorkerGlobals,
+    ]
+}
+
+/// M4 hook sites (chaff + canvas/audio depth umbrella).
+pub fn m4_persona_hook_sites() -> &'static [HookSite] {
+    &[HookSite::CanvasAudio, HookSite::ChaffScheduler]
 }
 
 /// nsHttp actions for Firefox host (UA override + CH REMOVE only).
@@ -356,6 +453,7 @@ pub fn persona_hook_sites() -> &'static [HookSite] {
         HookSite::Navigator,
         HookSite::DocShell,
         HookSite::CanvasAudio,
+        HookSite::ChaffScheduler,
     ]
 }
 
@@ -404,6 +502,21 @@ pub fn should_disable_webext_main_inject(plan: &NativePersonaPlan) -> bool {
         plan.main_inject,
         WebExtMainInjectPolicy::DisableNativePathActive
     )
+}
+
+/// M4: whether native chaff scheduler may arm given a prefs apply plan.
+///
+/// Mirrors `PrefApplyPlan::allow_persona_chaff` — Homogeneous / Native-Compatible idle.
+pub fn allow_chaff_scheduler(plan: &PrefApplyPlan) -> bool {
+    plan.allow_persona_chaff()
+}
+
+/// Depth seeds readable only when `pollution_active` (same gate as cached persona).
+pub fn read_depth_seeds<'a>(
+    activation: &Activation,
+    cached: Option<&'a PersonaSnapshot>,
+) -> Option<&'a PersonaSnapshot> {
+    read_cached_persona(activation, cached)
 }
 
 #[cfg(test)]
@@ -658,5 +771,90 @@ mod tests {
         assert!(fields.contains(&NavigatorField::UserAgent));
         assert!(fields.contains(&NavigatorField::Platform));
         assert_eq!(NavigatorField::UserAgent.as_str(), "userAgent");
+    }
+
+    #[test]
+    fn m4_depth_surfaces_and_seed_sources() {
+        let depths = m4_depth_surfaces();
+        assert!(depths.contains(&DepthSurface::Canvas2d));
+        assert!(depths.contains(&DepthSurface::WebGl));
+        assert!(depths.contains(&DepthSurface::AudioContext));
+        assert!(depths.contains(&DepthSurface::OfflineAudioContext));
+        assert!(depths.contains(&DepthSurface::DedicatedWorker));
+        assert!(depths.contains(&DepthSurface::SharedWorker));
+        assert_eq!(DepthSurface::Canvas2d.seed_source(), "canvas_seed");
+        assert_eq!(DepthSurface::WebGl.seed_source(), "gpu");
+        assert_eq!(DepthSurface::AudioContext.seed_source(), "audio_seed");
+    }
+
+    #[test]
+    fn m4_applicator_surfaces_chaff_and_depth() {
+        let surfaces = m4_applicator_surfaces();
+        assert!(surfaces.contains(&HookApplicatorSurface::ChaffNativeScheduler));
+        assert!(surfaces.contains(&HookApplicatorSurface::DocShellStrictNextNav));
+        assert!(surfaces.contains(&HookApplicatorSurface::Canvas2dNoise));
+        assert!(surfaces.contains(&HookApplicatorSurface::WebGlRendererStrings));
+        assert!(surfaces.contains(&HookApplicatorSurface::AudioFingerprint));
+        assert!(surfaces.contains(&HookApplicatorSurface::WorkerGlobals));
+        assert_eq!(
+            HookApplicatorSurface::ChaffNativeScheduler.hook_site(),
+            HookSite::ChaffScheduler
+        );
+        assert_eq!(
+            HookApplicatorSurface::Canvas2dNoise.hook_site(),
+            HookSite::CanvasAudio
+        );
+        assert_eq!(
+            HookApplicatorSurface::DocShellStrictNextNav.hook_site(),
+            HookSite::DocShell
+        );
+        assert!(!m3_applicator_surfaces().contains(&HookApplicatorSurface::ChaffNativeScheduler));
+        assert!(m4_persona_hook_sites().contains(&HookSite::ChaffScheduler));
+        assert!(m4_persona_hook_sites().contains(&HookSite::CanvasAudio));
+    }
+
+    #[test]
+    fn m4_chaff_scheduler_gate_matches_allow_persona_chaff() {
+        let armed = PrefApplyPlan::for_mode(Mode::Pollution, false);
+        assert!(allow_chaff_scheduler(&armed));
+        let escaped = PrefApplyPlan::for_mode(Mode::Pollution, true);
+        assert!(!allow_chaff_scheduler(&escaped));
+        let homo = PrefApplyPlan::for_mode(Mode::Homogeneous, false);
+        assert!(!allow_chaff_scheduler(&homo));
+    }
+
+    #[test]
+    fn m4_depth_seeds_gated_on_pollution_active() {
+        use duppel_persona::{
+            generate_persona, resolve_activation, ActivationInput, Engine, HostOs, PersonaSeed,
+        };
+        let snap = generate_persona(PersonaSeed(7), Engine::Firefox, HostOs::Linux).unwrap();
+        let active = resolve_activation(ActivationInput {
+            mode: Mode::Pollution,
+            native_compatible: false,
+            rfp_likely: false,
+        });
+        let seeded = read_depth_seeds(&active, Some(&snap)).unwrap();
+        assert_eq!(seeded.depth_canvas_seed(), snap.canvas_seed);
+        assert_eq!(seeded.depth_audio_seed(), snap.audio_seed);
+        assert_eq!(seeded.depth_webgl_gpu().vendor, snap.gpu.vendor);
+
+        let homo = resolve_activation(ActivationInput {
+            mode: Mode::Homogeneous,
+            native_compatible: false,
+            rfp_likely: true,
+        });
+        assert!(read_depth_seeds(&homo, Some(&snap)).is_none());
+    }
+
+    #[test]
+    fn m4_hook_milestones() {
+        assert_eq!(HookSite::ChaffScheduler.milestone(), "M4");
+        assert_eq!(HookSite::ChaffScheduler.primary_crate(), "duppel-chaff");
+        assert_eq!(HookSite::CanvasAudio.milestone(), "M4");
+        assert!(HookSite::CanvasAudio
+            .gecko_path_hints()
+            .iter()
+            .any(|p| p.contains("WebGL") || p.contains("webaudio") || p.contains("workers")));
     }
 }

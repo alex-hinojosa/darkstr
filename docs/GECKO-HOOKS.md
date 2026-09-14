@@ -98,13 +98,16 @@ Glue reads cached `PersonaSnapshot` **only** when `pollution_active` (`read_cach
 
 ### 2.2 `duppel-chaff` — pollution scheduler
 
-| Surface | Gecko / LibreWolf area | When | Notes |
-|---------|------------------------|------|-------|
-| Native timer / scheduler | Chrome process service or content idle tasks | M4 | Quiet/Balanced/Loud parity with Phase 1 `poisoner.js` |
-| Beacon fetches | nsHttp (ordinary channels) | M4 | No TLS/JA3 games; no Cloudflare claims |
+| Surface | Gecko / LibreWolf area | When | M4 status |
+|---------|------------------------|------|-----------|
+| Native timer / scheduler | Chrome process service or content idle tasks | M4 | `ChaffSchedulerPlan` / `scheduler_armed` encoded; Quiet/Balanced/Loud parity unit-tested; **live timer not claimed** |
+| Volume + timing | Schedule plan only (Rust) | M4 | Interval / batch / stagger match Phase 1 `poisoner.js` |
+| Pref gate | `darkstr.chaosLevel` + mode / nativeCompatible | M4 | Arms only when `pollution_active` / `allow_persona_chaff` |
+| Beacon fetches | nsHttp (ordinary channels) | M4→fork | No TLS/JA3 games; no Cloudflare claims |
 | Until native ready | Phase 1 `bridge.js` / `poisoner.js` | now | Authoritative on WebExt-only path |
 
-**Idle when:** crates idle / XOR conflict (same gates as persona).
+**Idle when:** crates idle / XOR conflict (same gates as persona).  
+**Stub:** [`../patches/stubs/0004-darkstr-chaff-depth.patch.stub`](../patches/stubs/0004-darkstr-chaff-depth.patch.stub). Status: [`M4-STATUS.md`](M4-STATUS.md).
 
 ### 2.3 `duppel-coherence` — Proof harness
 
@@ -115,25 +118,29 @@ Glue reads cached `PersonaSnapshot` **only** when `pollution_active` (`read_cach
 
 Does **not** ship as user-facing UI. Does **not** reimplement CreepJS.
 
-### 2.4 DocShell — strict-first-doc / next-nav
+### 2.4 DocShell — strict-first-doc / strict-next-nav
 
-| Surface | Gecko area | When | M3 status |
-|---------|------------|------|-----------|
-| First document vs next nav | **DocShell** navigation / load state | M3→Phase 3 | `DocShellNavPhase::{FirstDocument, SubsequentNav}` + `persona_armed_for_nav` encoded; live DocShell patch **not** claimed |
+| Surface | Gecko area | When | Status |
+|---------|------------|------|--------|
+| First document vs next nav | **DocShell** navigation / load state | M3→Phase 3 | `DocShellNavPhase::{FirstDocument, SubsequentNav}` + `persona_armed_for_nav` / `strict_next_nav_armed` encoded; live DocShell patch **not** claimed |
 | Pref | `darkstr.strictFirstDoc` | M1+ chrome defaults | Semantics unchanged from Proof pin |
 
-Until live DocShell hooks land and `darkstr.nativePersonaHooks` is flipped on a fork build, WebExt tab-scoped DNR + MAIN inject remain the Phase 1 path (`WebExtMainInjectPolicy::AllowFallback`).
+M4 extends naming/notes for **strict-next-nav** (SubsequentNav arm); no new live C++. Until live DocShell hooks land and `darkstr.nativePersonaHooks` is flipped on a fork build, WebExt tab-scoped DNR + MAIN inject remain the Phase 1 path (`WebExtMainInjectPolicy::AllowFallback`).
 
-### 2.5 Canvas / WebGL / Audio (depth — not first milestone)
+### 2.5 Canvas / WebGL / Audio + workers (M4 depth kickoff)
 
-| Surface | Gecko area | When | Notes |
-|---------|------------|------|-------|
-| Canvas 2D noise | `CanvasRenderingContext2D` / related | Phase 2→3 (M4+) | Seed from `PersonaSnapshot::canvas_seed` |
-| WebGL renderer strings | WebGL bindings | M4+ | Correlate with persona GPU family |
-| Audio fingerprint | AudioContext / OfflineAudioContext | M4+ | Seed from `audio_seed` |
-| Workers | Dedicated/Shared worker globals | M4+ | Same persona coherence rules |
+| Surface | Gecko area | When | M4 status |
+|---------|------------|------|-----------|
+| Canvas 2D noise | `CanvasRenderingContext2D` / related | M4→Phase 3 | `DepthSurface::Canvas2d` + `depth_canvas_seed`; **live hook not claimed** |
+| WebGL renderer strings | WebGL bindings | M4→Phase 3 | `DepthSurface::WebGl` + `depth_webgl_gpu` (persona GPU family) |
+| Audio fingerprint | AudioContext / OfflineAudioContext | M4→Phase 3 | `DepthSurface::{AudioContext, OfflineAudioContext}` + `depth_audio_seed` |
+| Workers | Dedicated/Shared worker globals | M4→Phase 3 | `DepthSurface::{DedicatedWorker, SharedWorker}`; same persona coherence |
 
-Out of scope for the first native wins (M3 = UA/CH + navigator minimum set).
+Depth seeds are readable only when `pollution_active` (`duppel_bridge::read_depth_seeds`).  
+Enums: `duppel_bridge::m4_depth_surfaces` / `m4_applicator_surfaces`.  
+**Stub:** [`../patches/stubs/0004-darkstr-chaff-depth.patch.stub`](../patches/stubs/0004-darkstr-chaff-depth.patch.stub). Status: [`M4-STATUS.md`](M4-STATUS.md).
+
+M3 first native wins remain UA/CH + navigator minimum set; M4 starts depth coverage as control plane only.
 
 ---
 
@@ -152,12 +159,14 @@ duppel_bridge::PrefsApplicator::apply_mode_effects
         ▼
 If !crates_idle && Pollution:
         duppel_persona::generate_persona_if_active → cache snapshot
-        duppel_chaff scheduler arm (when native scheduler exists)
+        duppel_chaff::ChaffSchedulerPlan arm (control plane; live timer private-fork)
 Else:
         clear persona cache; cancel chaff
 ```
 
-nsHttp / Navigator / DocShell / canvas hooks **read** the cached snapshot only when activation says `pollution_active` — never invent a second seed. M3 API: `duppel_bridge::read_cached_persona` / `duppel_persona::cached_snapshot_readable`. Stub notes: [`../patches/stubs/0003-darkstr-hook-sites.patch.stub`](../patches/stubs/0003-darkstr-hook-sites.patch.stub). Status: [`M3-STATUS.md`](M3-STATUS.md).
+nsHttp / Navigator / DocShell / canvas hooks **read** the cached snapshot only when activation says `pollution_active` — never invent a second seed.  
+M3 API: `duppel_bridge::read_cached_persona` / `duppel_persona::cached_snapshot_readable`. Stub: [`0003-…`](../patches/stubs/0003-darkstr-hook-sites.patch.stub) · [`M3-STATUS.md`](M3-STATUS.md).  
+M4 API: `duppel_chaff::ChaffSchedulerPlan` / `duppel_bridge::read_depth_seeds` / `m4_depth_surfaces`. Stub: [`0004-…`](../patches/stubs/0004-darkstr-chaff-depth.patch.stub) · [`M4-STATUS.md`](M4-STATUS.md).
 
 ---
 

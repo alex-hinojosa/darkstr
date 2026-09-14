@@ -1,14 +1,17 @@
 # duppel-chaff
 
-**Status:** Phase 2 M0.5 control-plane API (no native network scheduler).
+**Status:** Phase 2 M4 control-plane API (no native network scheduler / no Gecko FFI).
 
-Rust source of truth for darkstr **chaff / poison** schedules: Quiet / Balanced / Loud intervals, batch sizes, endpoint templates, and pollution metrics.
+Rust source of truth for darkstr **chaff / poison** schedules: Quiet / Balanced / Loud intervals, batch sizes, stagger timing, endpoint templates, and pollution metrics.
 
-## API surface
+## API surface (M4)
 
-- `ChaosLevel`, `ChaffSchedule`, `IntervalRangeMinutes`, `BatchSizeRange` (Phase 1 `poisoner.js` parity)
-- `plan_batch` / `PollutionMetrics` — gated on `duppel_persona::resolve_activation`
+- `ChaosLevel`, `ChaffSchedule`, `IntervalRangeMinutes`, `BatchSizeRange`, `StaggerMs` (Phase 1 `poisoner.js` parity)
+- `ChaffSchedulerPlan` / `scheduler_armed` — gate on `pollution_active` / `allow_chaff` (bridge: `allow_persona_chaff`)
+- `plan_batch` / `plan_fire` / `ChaffFirePlan` — volume + timing when armed
+- `PollutionMetrics` — batches, beacons, arms/cancels
 - `ENDPOINT_TEMPLATES` — catalog only; no I/O
+- Pref pin: `darkstr.chaosLevel` (`CHAOS_LEVEL_PREF`)
 
 ## Boundaries
 
@@ -17,7 +20,7 @@ Rust source of truth for darkstr **chaff / poison** schedules: Quiet / Balanced 
 | Schedulers (Quiet / Balanced / Loud) | Tracker blocklist (LibreWolf uBO) |
 | Beacon endpoint templates | TLS / JA3 spoof marketing |
 | Metrics counters | “Beats Cloudflare” claims |
-| Native scheduler behind prefs (later) | Rewriting LibreWolf networking in Rust wholesale |
+| Native scheduler **plan** behind prefs | Live Gecko timer / channel fire (private fork) |
 
 ## Prefs / gating
 
