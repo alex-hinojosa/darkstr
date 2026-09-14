@@ -4,6 +4,19 @@
 **When:** Every PR that touches chrome prefs, RFP/FPP, persona/chaff activation, or WebExt↔chrome bridge.  
 **Pin:** [`PROOF-PIN.md`](PROOF-PIN.md) · Bridge: [`PREF-BRIDGE.md`](PREF-BRIDGE.md) · Plan: [`PHASE-2-PLAN.md`](PHASE-2-PLAN.md).
 
+## M2 applicator pin (prefs path)
+
+When the PR touches XOR mode→RFP application (even docs/Rust-only):
+
+- [ ] Table matches `duppel_persona::mode_pref_effects` / `duppel_bridge::PrefsApplicator::apply_mode_effects`
+- [ ] Pollution → RFP=false, FPP=false; persona/chaff unless `nativeCompatible`
+- [ ] Homogeneous → stock RFP true / FPP stock; idle crates; **no** RFP metric customization
+- [ ] Forbidden: Pollution with RFP still true via prefs path (`PrefApplyPlan::is_xor_safe`)
+- [ ] No claim that untested C++/Gecko observers landed unless Proof-checked on a fork artifact
+- [ ] Status: [`M2-STATUS.md`](M2-STATUS.md) · Hooks: [`GECKO-HOOKS.md`](GECKO-HOOKS.md) §1.2–1.3
+
+---
+
 Copy this checklist into the PR body (or link it) and check each applicable box. Unchecked release-fail items → do not merge.
 
 ---

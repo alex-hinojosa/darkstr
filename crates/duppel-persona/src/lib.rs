@@ -12,7 +12,7 @@
 #![forbid(unsafe_code)]
 
 /// Crate API version string (bumps when snapshot fields change).
-pub const VERSION: &str = "0.1.0-phase2-m0.5";
+pub const VERSION: &str = "0.1.0-phase2-m2";
 
 /// Chrome / about:config pref names (stable Phase 1 → 2 Proof pin).
 pub mod prefs {
@@ -285,9 +285,16 @@ pub struct ModePrefEffects {
 
 /// Map mode (+ native escape) to the chrome privacy prefs the fork writes.
 ///
-/// Pollution → RFP=false, FPP=false (auto-kill).  
-/// Homogeneous → RFP=true, FPP left to LibreWolf stock expectation (true-ish restore).  
-/// Native-Compatible does **not** rewrite mode; crates idle while escape is on.
+/// M2 observer XOR gates (authoritative table for prefs-path apply):
+/// - **Pollution** → `privacy.resistFingerprinting=false`,
+///   `privacy.fingerprintingProtection=false`; enable persona/chaff unless
+///   `native_compatible` (crates_idle when escape is on).
+/// - **Homogeneous** → stock RFP true / FPP stock-on restore; idle crates;
+///   **no** RFP metric customization.
+/// - **Forbidden:** Pollution with RFP still true via this prefs path
+///   (`resist_fingerprinting` is always false under Pollution).
+///
+/// Native-Compatible does **not** rewrite mode; it only idles crates under Pollution.
 pub fn mode_pref_effects(mode: Mode, native_compatible: bool) -> ModePrefEffects {
     match mode {
         Mode::Pollution => ModePrefEffects {
@@ -614,6 +621,38 @@ mod tests {
         assert!(e.resist_fingerprinting);
         assert!(e.fingerprinting_protection);
         assert!(e.crates_idle);
+    }
+
+    /// M2: Pollution + nativeCompatible keeps RFP/FPP off and idles crates.
+    #[test]
+    fn m2_pollution_native_compatible_idles_keeps_rfp_off() {
+        let e = mode_pref_effects(Mode::Pollution, true);
+        assert!(!e.resist_fingerprinting);
+        assert!(!e.fingerprinting_protection);
+        assert!(e.crates_idle);
+    }
+
+    /// M2: Homogeneous never enables persona/chaff regardless of native escape.
+    #[test]
+    fn m2_homogeneous_always_idles_crates() {
+        assert!(mode_pref_effects(Mode::Homogeneous, false).crates_idle);
+        assert!(mode_pref_effects(Mode::Homogeneous, true).crates_idle);
+    }
+
+    /// M2 forbidden combo: mode_pref_effects never returns RFP=true under Pollution.
+    #[test]
+    fn m2_forbidden_pollution_rfp_true_not_emitted() {
+        for native in [false, true] {
+            let e = mode_pref_effects(Mode::Pollution, native);
+            assert!(
+                !e.resist_fingerprinting,
+                "Pollution must not emit RFP=true (native={native})"
+            );
+            assert!(
+                !e.fingerprinting_protection,
+                "Pollution must not emit FPP=true (native={native})"
+            );
+        }
     }
 
     #[test]

@@ -102,18 +102,19 @@ Native-Compatible is for banking / SSO — **not** a Cloudflare-defeat switch.
 
 ---
 
-## 6. Bridge implementation sketch (M2 — not this PR)
+## 6. Bridge implementation sketch (M2)
 
 | Step | Owner | Notes |
 |------|-------|-------|
-| Ship `darkstr.cfg` defaults | Builder (M1) | Homogeneous + nativeCompatible=false |
-| Static prefs / observers for `darkstr.*` | Builder (M2) | Log mode changes before full necko wiring |
-| On Pollution: force RFP/FPP false | Builder (M2) | Single code path; Proof exclusivity matrix |
+| Ship `darkstr.cfg` defaults | Builder (M1) | Homogeneous + nativeCompatible=false — **done** (#14) |
+| XOR applicator table + unit tests | Builder (M2) | `mode_pref_effects` + `PrefsApplicator` + `is_xor_safe` — **done** (control plane) |
+| Static prefs / live C++ observers for `darkstr.*` | Builder (M2+) | Private fork; call `apply_mode_effects` — **not claimed** in public M2 |
+| On Pollution: force RFP/FPP false | Builder (M2) | Single Rust prefs path; Proof exclusivity matrix |
 | On Homogeneous: restore stock RFP/FPP | Builder (M2) | No metric patches |
-| WebExt mirror sync | Builder (M2) | storage ↔ chrome; fork-only privileged API |
+| WebExt mirror sync | Builder (M2+) | storage ↔ chrome; fork-only privileged API — deferred |
 | Disable WebExt MAIN inject when native path on | Builder (M3+) | Feature flag |
 | Gecko call sites (nsHttp / DocShell / canvas) | Builder (M3+) | [`GECKO-HOOKS.md`](GECKO-HOOKS.md); stubs in [`../patches/`](../patches/) |
-| `PrefsApplicator` XPCOM adapter | Builder (M2+) | `duppel_bridge` trait; recording mock for CI |
+| `PrefsApplicator` XPCOM adapter | Builder (M2+) | Trait + recording mock landed; XPCOM glue still fork |
 
 ---
 
@@ -127,7 +128,7 @@ Phase 2-aligned UI lives at `extension/settings/` (also Firefox `options_ui`). I
 - Lists chrome / `about:config` key names from this document (read-only education for Proof + PM).
 - Points at `patches/scripts/apply-darkstr-patches.sh` for fork builds.
 
-It does **not** write `privacy.*` on stock LibreWolf. Chrome authority remains fork M2+.
+It does **not** write `privacy.*` on stock LibreWolf. Chrome authority + live observers remain fork M2+; public M2 ships the Rust XOR applicator only ([`M2-STATUS.md`](M2-STATUS.md)).
 
 ## 7. Proof hooks
 

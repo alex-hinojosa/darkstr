@@ -273,9 +273,11 @@ Still **no** Mozilla/LibreWolf vendor:
 
 ### M2 — Pref bridge + XOR auto-RFP
 
-- WebExt ↔ chrome pref sync for mode / nativeCompatible.
-- Pollution selection auto-disables RFP/FPP; Homogeneous restores.
-- Proof: mode exclusivity matrix on fork builds (no UTC letterbox under Pollution).
+- [x] XOR mode→RFP applicator control plane (`mode_pref_effects` / `PrefsApplicator` / `is_xor_safe`) + docs (`M2-STATUS.md`, GECKO-HOOKS §1.2–1.3)
+- [x] Pollution selection auto-disables RFP/FPP; Homogeneous restores stock RFP (Rust prefs path; unit-tested)
+- [ ] Live chrome pref observer / XPCOM glue on private fork (train-pinned patch — not invented in public stubs)
+- [ ] WebExt ↔ chrome pref sync for mode / nativeCompatible (fork-only privileged API)
+- [ ] Proof: mode exclusivity matrix on **fork builds** (no UTC letterbox under Pollution) — still requires fork artifact
 
 ### M3 — First native wins (`duppel-persona`)
 

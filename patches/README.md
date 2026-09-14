@@ -7,7 +7,7 @@ These stubs document *how* a real bsys6 / LibreWolf recipe would layer darkstr p
 |------|------|
 | [`stubs/darkstr.cfg`](stubs/darkstr.cfg) | Chrome pref defaults (`darkstr.mode`, …) — same as `docs/darkstr.cfg.example` |
 | [`stubs/0001-darkstr-prefs-defaults.patch.stub`](stubs/0001-darkstr-prefs-defaults.patch.stub) | Prefs / cfg wiring sketch |
-| [`stubs/0002-darkstr-mode-xor-rfp.patch.stub`](stubs/0002-darkstr-mode-xor-rfp.patch.stub) | Pollution kills RFP/FPP; Homogeneous restores stock RFP |
+| [`stubs/0002-darkstr-mode-xor-rfp.patch.stub`](stubs/0002-darkstr-mode-xor-rfp.patch.stub) | Pollution kills RFP/FPP; Homogeneous restores stock RFP — **M2 notes upgraded**; still not a real C++ patch |
 | [`stubs/0003-darkstr-hook-sites.patch.stub`](stubs/0003-darkstr-hook-sites.patch.stub) | Call-site comments for nsHttp / DocShell / canvas (no logic yet) |
 | [`scripts/apply-darkstr-patches.sh`](scripts/apply-darkstr-patches.sh) | Example apply order for a real tree |
 
@@ -54,3 +54,7 @@ grep -n 'darkstr.mode\|BEGIN darkstr-m1-prefs' "$DARKSTR_GECKO_ROOT/lw/librewolf
 ```
 
 The script copies `stubs/darkstr.cfg` → `lw/darkstr.cfg` and appends an idempotent `defaultPref` block into `lw/librewolf.cfg` so chrome prefs load. It does **not** run `make bootstrap` / `make build`. `.patch.stub` files remain sketches until replaced with train-pinned unified diffs.
+
+## M2 control-plane (2026-09-14)
+
+Rust XOR applicator is the public source of truth (`duppel_bridge` / `duppel_persona`). Stub `0002` notes document the observer→applicator contract. **No** untested C++ bodies in this repo. See `docs/M2-STATUS.md`.

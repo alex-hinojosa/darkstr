@@ -165,4 +165,4 @@ fi
 
 echo "Done (cfg path). No make bootstrap / make build invoked."
 echo "Remember XOR: Pollution kills RFP/FPP; Homogeneous restores stock RFP (no metric customization)."
-echo "Next (M2): pref observers + auto-XOR — see docs/GECKO-HOOKS.md and patches/stubs/0002-*.stub"
+echo "M2 control-plane: Rust XOR applicator landed (docs/M2-STATUS.md). Next: private-fork live pref observer — stubs/0002-*.stub (no invented C++ here)."
