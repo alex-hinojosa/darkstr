@@ -126,6 +126,7 @@ impl NsHttpAction {
 
 /// Navigator DOM fields driven from the same persona seed as HTTP UA (M3 minimum set).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// Live C++ call-ins: patches/0006 (Navigator) after 0005 (nsHttp).
 pub enum NavigatorField {
     UserAgent,
     Platform,

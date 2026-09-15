@@ -1,0 +1,406 @@
+# darkstr M3-CPP-NAV — train-pinned C++ Navigator + DocShell stub (155.0.1-1)
+# Train: Firefox FIREFOX_155_0_1_RELEASE / LibreWolf 155.0.1-1
+# Brand: darkstr — not official LibreWolf. No Cloudflare/TLS/JA3 claims.
+# Prerequisite: M3 chrome 0003 + M3-CPP nsHttp 0005 (persona.ua mirror).
+# Apply: patch -d "$DARKSTR_GECKO_ROOT" -p1 < patches/0006-darkstr-cpp-navigator-docshell.patch
+# Rebuild: ./mach build dom/base docshell/base
+# Honesty: DocShell first/subsequent chrome counter remains SoT; C++ stub reads mirror pref.
+# CH REMOVE stays in 0005 — this drop does not touch nsHttp.
+#
+diff -ruN a/browser/components/DarkstrNativePersona.sys.mjs b/browser/components/DarkstrNativePersona.sys.mjs
+--- a/browser/components/DarkstrNativePersona.sys.mjs
++++ b/browser/components/DarkstrNativePersona.sys.mjs
+@@ -30,6 +30,11 @@
+ const SEED_PREF = "darkstr.persona.seed";
+ /** Mirror for C++ nsHttp hooks (0005) — plain UA string, no JSON. */
+ const UA_MIRROR_PREF = "darkstr.persona.ua";
++/** Mirrors for C++ Navigator / DocShell stub (0006). */
++const PLATFORM_MIRROR_PREF = "darkstr.persona.platform";
++const HW_MIRROR_PREF = "darkstr.persona.hardwareConcurrency";
++const LANGS_MIRROR_PREF = "darkstr.persona.languages";
++const DOCSHELL_PHASE_MIRROR_PREF = "darkstr.persona.docShellPhase";
+ 
+ const CLIENT_HINT_HEADERS = [
+   "sec-ch-ua",
+@@ -290,6 +295,36 @@
+       }
+     } catch (_e) {}
+ 
++
++    // Mirrors for C++ DarkstrNavigatorHooks / DarkstrDocShellHooks (patches/0006).
++    try {
++      if (this._plan.applyNativeBase && snapshot?.userAgent) {
++        Services.prefs.setStringPref(
++          PLATFORM_MIRROR_PREF,
++          snapshot.platform || "MacIntel"
++        );
++        Services.prefs.setIntPref(
++          HW_MIRROR_PREF,
++          Number(snapshot.hardwareConcurrency) || 8
++        );
++        const langs = Array.isArray(snapshot.languages)
++          ? snapshot.languages.join(",")
++          : "en-US,en";
++        Services.prefs.setStringPref(LANGS_MIRROR_PREF, langs);
++      } else {
++        for (const p of [
++          PLATFORM_MIRROR_PREF,
++          HW_MIRROR_PREF,
++          LANGS_MIRROR_PREF,
++          DOCSHELL_PHASE_MIRROR_PREF,
++        ]) {
++          if (Services.prefs.prefHasUserValue(p)) {
++            Services.prefs.clearUserPref(p);
++          }
++        }
++      }
++    } catch (_e) {}
++
+     return this._plan;
+   },
+ 
+@@ -353,9 +388,18 @@
+       if (bc && this._bcTopLoads) {
+         const n = this._bcTopLoads.get(bc.id) || 0;
+         if (n <= 1) {
++          try {
++            Services.prefs.setStringPref(
++              DOCSHELL_PHASE_MIRROR_PREF,
++              "first_document"
++            );
++          } catch (_e) {}
+           return "first_document";
+         }
+       }
++    } catch (_e) {}
++    try {
++      Services.prefs.setStringPref(DOCSHELL_PHASE_MIRROR_PREF, "subsequent_nav");
+     } catch (_e) {}
+     return "subsequent_nav";
+   },
+diff -ruN a/dom/base/DarkstrNavigatorHooks.h b/dom/base/DarkstrNavigatorHooks.h
+--- a/dom/base/DarkstrNavigatorHooks.h
++++ b/dom/base/DarkstrNavigatorHooks.h
+@@ -0,0 +1,49 @@
++/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
++/* vim: set sw=2 ts=8 et tw=80 : */
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
++
++/**
++ * darkstr M3-CPP-NAV — thin Navigator call-ins (train-pinned LibreWolf/Firefox 155.0.1-1).
++ *
++ * Brand: darkstr — not official LibreWolf. Pollution browser, not Cloudflare bypass.
++ * No Rust FFI. Client Hints REMOVE remains in DarkstrNsHttpHooks (0005).
++ *
++ * Minimum field set (chrome DarkstrNativePersonaChild parity, sans deviceMemory /
++ * userAgentData which stay chrome-JS on Firefox host):
++ *   userAgent, platform, hardwareConcurrency, languages
++ *
++ * Reads chrome-mirrored prefs written by DarkstrNativePersona (0006).
++ * Gate: pollution + darkstr.nativePersonaHooks (default false) + !nativeCompatible.
++ */
++
++#ifndef mozilla_dom_DarkstrNavigatorHooks_h
++#define mozilla_dom_DarkstrNavigatorHooks_h
++
++#include "nsStringFwd.h"
++#include "nsTArray.h"
++
++namespace mozilla::dom {
++
++class DarkstrNavigatorHooks final {
++ public:
++  static bool PollutionNativeHooksActive();
++
++  /** true → aOut filled from darkstr.persona.ua */
++  static bool TryGetUserAgent(nsAString& aOut);
++  /** true → aOut filled from darkstr.persona.platform */
++  static bool TryGetPlatform(nsAString& aOut);
++  /** true → aOut from darkstr.persona.hardwareConcurrency (>0) */
++  static bool TryGetHardwareConcurrency(uint64_t& aOut);
++  /** true → aOut from darkstr.persona.languages (comma-separated) */
++  static bool TryGetLanguages(nsTArray<nsString>& aOut);
++
++ private:
++  DarkstrNavigatorHooks() = delete;
++  ~DarkstrNavigatorHooks() = delete;
++};
++
++}  // namespace mozilla::dom
++
++#endif  // mozilla_dom_DarkstrNavigatorHooks_h
+diff -ruN a/dom/base/DarkstrNavigatorHooks.cpp b/dom/base/DarkstrNavigatorHooks.cpp
+--- a/dom/base/DarkstrNavigatorHooks.cpp
++++ b/dom/base/DarkstrNavigatorHooks.cpp
+@@ -0,0 +1,88 @@
++/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
++/* vim: set sw=2 ts=8 et tw=80 : */
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
++
++#include "DarkstrNavigatorHooks.h"
++
++#include "mozilla/Preferences.h"
++#include "nsCharSeparatedTokenizer.h"
++#include "nsReadableUtils.h"
++#include "nsString.h"
++
++namespace mozilla::dom {
++
++bool DarkstrNavigatorHooks::PollutionNativeHooksActive() {
++  if (!Preferences::GetBool("darkstr.nativePersonaHooks", false)) {
++    return false;
++  }
++  if (Preferences::GetBool("darkstr.nativeCompatible", false)) {
++    return false;
++  }
++  nsAutoCString mode;
++  Preferences::GetCString("darkstr.mode", mode);
++  return mode.EqualsLiteral("pollution");
++}
++
++bool DarkstrNavigatorHooks::TryGetUserAgent(nsAString& aOut) {
++  aOut.Truncate();
++  if (!PollutionNativeHooksActive()) {
++    return false;
++  }
++  nsAutoCString ua;
++  if (NS_FAILED(Preferences::GetCString("darkstr.persona.ua", ua)) ||
++      ua.IsEmpty()) {
++    return false;
++  }
++  CopyASCIItoUTF16(ua, aOut);
++  return !aOut.IsEmpty();
++}
++
++bool DarkstrNavigatorHooks::TryGetPlatform(nsAString& aOut) {
++  aOut.Truncate();
++  if (!PollutionNativeHooksActive()) {
++    return false;
++  }
++  nsAutoCString platform;
++  if (NS_FAILED(Preferences::GetCString("darkstr.persona.platform", platform)) ||
++      platform.IsEmpty()) {
++    return false;
++  }
++  CopyASCIItoUTF16(platform, aOut);
++  return !aOut.IsEmpty();
++}
++
++bool DarkstrNavigatorHooks::TryGetHardwareConcurrency(uint64_t& aOut) {
++  aOut = 0;
++  if (!PollutionNativeHooksActive()) {
++    return false;
++  }
++  int32_t hw = Preferences::GetInt("darkstr.persona.hardwareConcurrency", 0);
++  if (hw <= 0) {
++    return false;
++  }
++  aOut = static_cast<uint64_t>(hw);
++  return true;
++}
++
++bool DarkstrNavigatorHooks::TryGetLanguages(nsTArray<nsString>& aOut) {
++  aOut.Clear();
++  if (!PollutionNativeHooksActive()) {
++    return false;
++  }
++  nsAutoCString langs;
++  if (NS_FAILED(Preferences::GetCString("darkstr.persona.languages", langs)) ||
++      langs.IsEmpty()) {
++    return false;
++  }
++  for (const nsDependentCSubstring& tok :
++       nsCCharSeparatedTokenizer(langs, ',').ToRange()) {
++    if (!tok.IsEmpty()) {
++      aOut.AppendElement(NS_ConvertUTF8toUTF16(tok));
++    }
++  }
++  return !aOut.IsEmpty();
++}
++
++}  // namespace mozilla::dom
+diff -ruN a/dom/base/Navigator.cpp b/dom/base/Navigator.cpp
+--- a/dom/base/Navigator.cpp
++++ b/dom/base/Navigator.cpp
+@@ -6,3 +6,4 @@
+ #include "Navigator.h"
++#include "DarkstrNavigatorHooks.h"
+ 
+ #include "Geolocation.h"
+@@ -271,4 +271,9 @@
+ void Navigator::GetUserAgent(nsAString& aUserAgent, CallerType aCallerType,
+                              ErrorResult& aRv) const {
++  // darkstr M3-CPP-NAV: persona UA when pollution + nativePersonaHooks.
++  if (DarkstrNavigatorHooks::TryGetUserAgent(aUserAgent)) {
++    return;
++  }
++
+   nsCOMPtr<nsPIDOMWindowInner> window;
+ 
+@@ -413,3 +413,8 @@
+ void Navigator::GetLanguages(nsTArray<nsString>& aLanguages) {
++  // darkstr M3-CPP-NAV: persona languages when pollution + hooks.
++  if (DarkstrNavigatorHooks::TryGetLanguages(aLanguages)) {
++    return;
++  }
++
+   BrowsingContext* bc = mWindow ? mWindow->GetBrowsingContext() : nullptr;
+   if (bc) {
+@@ -433,4 +433,9 @@
+ void Navigator::GetPlatform(nsAString& aPlatform, CallerType aCallerType,
+                             ErrorResult& aRv) const {
++  // darkstr M3-CPP-NAV: persona platform when pollution + hooks.
++  if (DarkstrNavigatorHooks::TryGetPlatform(aPlatform)) {
++    return;
++  }
++
+   if (mWindow) {
+     BrowsingContext* bc = mWindow->GetBrowsingContext();
+@@ -698,4 +698,10 @@
+ uint64_t Navigator::HardwareConcurrency() {
++  // darkstr M3-CPP-NAV: persona HW concurrency when pollution + hooks.
++  uint64_t darkstrHw = 0;
++  if (DarkstrNavigatorHooks::TryGetHardwareConcurrency(darkstrHw)) {
++    return darkstrHw;
++  }
++
+   workerinternals::RuntimeService* rts =
+       workerinternals::RuntimeService::GetOrCreateService();
+   if (!rts) {
+diff -ruN a/dom/base/moz.build b/dom/base/moz.build
+--- a/dom/base/moz.build
++++ b/dom/base/moz.build
+@@ -367,3 +367,4 @@
+     "CustomElementRegistry.cpp",
++    "DarkstrNavigatorHooks.cpp",  # darkstr M3-CPP-NAV Navigator overrides
+     "DirectionalityUtils.cpp",
+     "DocGroup.cpp",
+diff -ruN a/docshell/base/DarkstrDocShellHooks.h b/docshell/base/DarkstrDocShellHooks.h
+--- a/docshell/base/DarkstrDocShellHooks.h
++++ b/docshell/base/DarkstrDocShellHooks.h
+@@ -0,0 +1,45 @@
++/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
++/* vim: set sw=2 ts=8 et tw=80 : */
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
++
++/**
++ * darkstr M3-CPP-NAV — honest DocShell stub (train-pinned LibreWolf/Firefox 155.0.1-1).
++ *
++ * Brand: darkstr — not official LibreWolf. Pollution browser, not Cloudflare bypass.
++ *
++ * Honesty: first vs subsequent top-level doc counting remains chrome-JS SoT
++ * (`DarkstrNativePersona` / 0003). This stub only:
++ *   - shares the pollution+hooks gate
++ *   - reads chrome-mirrored `darkstr.persona.docShellPhase`
++ *   - provides a no-op NoteTopLevelDocumentLoadAttempt call-in site
++ *
++ * Full C++ load-counter port is deferred (smallest compiling surface first).
++ */
++
++#ifndef mozilla_DarkstrDocShellHooks_h
++#define mozilla_DarkstrDocShellHooks_h
++
++namespace mozilla {
++
++class DarkstrDocShellHooks final {
++ public:
++  enum class NavPhase { FirstDocument, SubsequentNav };
++
++  static bool PollutionNativeHooksActive();
++
++  /** Chrome-mirrored phase; default SubsequentNav when idle / unset. */
++  static NavPhase PhaseFromChromeMirror();
++
++  /** Call-in from nsDocShell — currently a no-op (chrome SoT). */
++  static void NoteTopLevelDocumentLoadAttempt();
++
++ private:
++  DarkstrDocShellHooks() = delete;
++  ~DarkstrDocShellHooks() = delete;
++};
++
++}  // namespace mozilla
++
++#endif  // mozilla_DarkstrDocShellHooks_h
+diff -ruN a/docshell/base/DarkstrDocShellHooks.cpp b/docshell/base/DarkstrDocShellHooks.cpp
+--- a/docshell/base/DarkstrDocShellHooks.cpp
++++ b/docshell/base/DarkstrDocShellHooks.cpp
+@@ -0,0 +1,45 @@
++/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
++/* vim: set sw=2 ts=8 et tw=80 : */
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
++
++#include "DarkstrDocShellHooks.h"
++
++#include "mozilla/Preferences.h"
++#include "nsString.h"
++
++namespace mozilla {
++
++bool DarkstrDocShellHooks::PollutionNativeHooksActive() {
++  if (!Preferences::GetBool("darkstr.nativePersonaHooks", false)) {
++    return false;
++  }
++  if (Preferences::GetBool("darkstr.nativeCompatible", false)) {
++    return false;
++  }
++  nsAutoCString mode;
++  Preferences::GetCString("darkstr.mode", mode);
++  return mode.EqualsLiteral("pollution");
++}
++
++DarkstrDocShellHooks::NavPhase DarkstrDocShellHooks::PhaseFromChromeMirror() {
++  // Honest stub: chrome DarkstrNativePersona counter remains SoT (0003).
++  if (!PollutionNativeHooksActive()) {
++    return NavPhase::SubsequentNav;
++  }
++  nsAutoCString phase;
++  if (NS_SUCCEEDED(
++          Preferences::GetCString("darkstr.persona.docShellPhase", phase)) &&
++      phase.EqualsLiteral("first_document")) {
++    return NavPhase::FirstDocument;
++  }
++  return NavPhase::SubsequentNav;
++}
++
++void DarkstrDocShellHooks::NoteTopLevelDocumentLoadAttempt() {
++  // No-op behavioral stub: chrome counter + mirror remain SoT.
++  (void)PhaseFromChromeMirror();
++}
++
++}  // namespace mozilla
+diff -ruN a/docshell/base/moz.build b/docshell/base/moz.build
+--- a/docshell/base/moz.build
++++ b/docshell/base/moz.build
+@@ -86,3 +86,4 @@
+     "ChildProcessChannelListener.cpp",
++    "DarkstrDocShellHooks.cpp",  # darkstr M3-CPP-NAV DocShell stub
+     "LoadContext.cpp",
+     "nsAboutRedirector.cpp",
+diff -ruN a/docshell/base/nsDocShell.cpp b/docshell/base/nsDocShell.cpp
+--- a/docshell/base/nsDocShell.cpp
++++ b/docshell/base/nsDocShell.cpp
+@@ -5,3 +5,4 @@
+ #include "nsDocShell.h"
++#include "DarkstrDocShellHooks.h"
+ 
+ #include <algorithm>
+@@ -722,5 +722,10 @@
+ nsresult nsDocShell::LoadURI(nsDocShellLoadState* aLoadState,
+                              bool aSetNavigating,
+                              bool aContinueHandlingSubframeHistory) {
++  // darkstr M3-CPP-NAV: honest DocShell stub (chrome counter remains SoT).
++  if (mBrowsingContext && mBrowsingContext->IsTopContent()) {
++    DarkstrDocShellHooks::NoteTopLevelDocumentLoadAttempt();
++  }
++
+   MOZ_ASSERT(aLoadState, "Must have a valid load state!");
+   // NOTE: This comparison between what appears to be internal/external load

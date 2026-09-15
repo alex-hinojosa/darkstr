@@ -175,6 +175,17 @@ patch_markers_present() {
         && grep -Fq "DarkstrNsHttpHooks.cpp" "${DARKSTR_GECKO_ROOT}/netwerk/protocol/http/moz.build" \
         && grep -Fq "darkstr.persona.ua" "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrNativePersona.sys.mjs"
       ;;
+    0006-darkstr-cpp-navigator-docshell.patch)
+      [[ -f "${DARKSTR_GECKO_ROOT}/dom/base/DarkstrNavigatorHooks.cpp" ]] \
+        && [[ -f "${DARKSTR_GECKO_ROOT}/dom/base/DarkstrNavigatorHooks.h" ]] \
+        && [[ -f "${DARKSTR_GECKO_ROOT}/docshell/base/DarkstrDocShellHooks.cpp" ]] \
+        && [[ -f "${DARKSTR_GECKO_ROOT}/docshell/base/DarkstrDocShellHooks.h" ]] \
+        && grep -Fq "DarkstrNavigatorHooks" "${DARKSTR_GECKO_ROOT}/dom/base/Navigator.cpp" \
+        && grep -Fq "DarkstrNavigatorHooks.cpp" "${DARKSTR_GECKO_ROOT}/dom/base/moz.build" \
+        && grep -Fq "DarkstrDocShellHooks" "${DARKSTR_GECKO_ROOT}/docshell/base/nsDocShell.cpp" \
+        && grep -Fq "DarkstrDocShellHooks.cpp" "${DARKSTR_GECKO_ROOT}/docshell/base/moz.build" \
+        && grep -Fq "darkstr.persona.platform" "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrNativePersona.sys.mjs"
+      ;;
     *)
       return 1
       ;;
@@ -214,7 +225,7 @@ for stub in "${STUBS}"/000*.patch.stub; do
 done
 if [[ "${stub_count}" -gt 0 ]]; then
   echo "Note: ${stub_count} .patch.stub file(s) present — sketches only, not applied."
-  echo "Remaining stubs are sketches; real patches: 0002 XOR, 0003 chrome persona, 0005 C++ nsHttp when present (0004 stub=chaff)."
+  echo "Remaining stubs are sketches; real patches: 0002 XOR, 0003 chrome persona, 0005 C++ nsHttp, 0006 C++ Navigator/DocShell when present (0004 stub=chaff)."
 fi
 
 echo "Done. Cfg path always; real unified diffs under patches/000*.patch applied when present."
@@ -222,3 +233,4 @@ echo "Remember XOR: Pollution kills RFP/FPP; Homogeneous restores stock RFP (no 
 echo "M2 live observer: patches/0002-darkstr-mode-xor-rfp.patch (DarkstrModeXor.sys.mjs)."
 echo "M3 native hooks: patches/0003-darkstr-native-persona-hooks.patch (DarkstrNativePersona*.sys.mjs). Rebuild: ./mach build browser/components (see docs/M3-STATUS.md)."
 echo "M3-CPP nsHttp hooks: patches/0005-darkstr-cpp-native-hooks.patch (DarkstrNsHttpHooks). Rebuild: ./mach build netwerk/protocol/http (see docs/M3-CPP-STATUS.md)."
+echo "M3-CPP-NAV Navigator/DocShell: patches/0006-darkstr-cpp-navigator-docshell.patch. Rebuild: ./mach build dom/base docshell/base (see docs/M3-CPP-NAV-STATUS.md)."

@@ -171,3 +171,10 @@ See `docs/M4-STATUS.md`, `docs/GECKO-HOOKS.md` §2.2 / §2.5, stub `patches/stub
 ## M3-CPP note (C++ nsHttp)
 
 Train-pinned C++ call-ins: `patches/0005-darkstr-cpp-native-hooks.patch` (`DarkstrNsHttpHooks`). Gates on `darkstr.nativePersonaHooks` (default **false**) + pollution XOR. CH = REMOVE only. Navigator/DocShell remain chrome-JS (`0003`). No Cloudflare/TLS/JA3 claims. Status: `docs/M3-CPP-STATUS.md`.
+
+## M3-CPP-NAV pin (2026-09-15)
+
+- Patch: `patches/0006-darkstr-cpp-navigator-docshell.patch`
+- Gates unchanged: pollution + `darkstr.nativePersonaHooks` (default false)
+- CH REMOVE remains `0005` only; Navigator C++ mirrors same persona seed/UA
+- DocShell: chrome counter SoT; C++ stub only

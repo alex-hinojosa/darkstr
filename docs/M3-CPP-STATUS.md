@@ -18,7 +18,7 @@ Land **real** train-pinned C++ call-ins on LibreWolf / Firefox **155.0.1-1** for
 | `nsHttpHandler::UserAgent` persona override path | **In patch** |
 | Client Hints **REMOVE** only in `AddStandardRequestHeaders` | **In patch** |
 | Chrome mirror pref `darkstr.persona.ua` (0003 `DarkstrNativePersona`) | **In patch** |
-| Navigator.cpp / nsDocShell.cpp edits | **Not in this PR** — chrome-JS SoT (`0003`) |
+| Navigator.cpp / nsDocShell.cpp edits | **Not in this PR** — see follow-up `0006` / [`M3-CPP-NAV-STATUS.md`](M3-CPP-NAV-STATUS.md) |
 | Rust FFI / XPCOM crate link | **Not claimed** |
 | Mini `./mach build` EXIT from this authoring executor | See honesty |
 
