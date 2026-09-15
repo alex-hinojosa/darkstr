@@ -8,7 +8,7 @@
 #          Chrome Map remains fallback when hooks idle or mirror unset.
 #          No RFP metric patches. No CF/TLS. CH REMOVE stays in 0005.
 #
-diff -ruN before/browser/components/DarkstrNativePersona.sys.mjs after/browser/components/DarkstrNativePersona.sys.mjs
+diff -ruN a/browser/components/DarkstrNativePersona.sys.mjs b/browser/components/DarkstrNativePersona.sys.mjs
 --- a/browser/components/DarkstrNativePersona.sys.mjs
 +++ b/browser/components/DarkstrNativePersona.sys.mjs
 @@ -17,7 +17,8 @@
@@ -45,7 +45,7 @@ diff -ruN before/browser/components/DarkstrNativePersona.sys.mjs after/browser/c
        if (bc && this._bcTopLoads) {
          const n = this._bcTopLoads.get(bc.id) || 0;
          if (n <= 1) {
-diff -ruN before/docshell/base/DarkstrDocShellHooks.cpp after/docshell/base/DarkstrDocShellHooks.cpp
+diff -ruN a/docshell/base/DarkstrDocShellHooks.cpp b/docshell/base/DarkstrDocShellHooks.cpp
 --- a/docshell/base/DarkstrDocShellHooks.cpp
 +++ b/docshell/base/DarkstrDocShellHooks.cpp
 @@ -7,10 +7,29 @@
@@ -178,7 +178,7 @@ diff -ruN before/docshell/base/DarkstrDocShellHooks.cpp after/docshell/base/Dark
    (void)PhaseFromChromeMirror();
  }
  
-diff -ruN before/docshell/base/DarkstrDocShellHooks.h after/docshell/base/DarkstrDocShellHooks.h
+diff -ruN a/docshell/base/DarkstrDocShellHooks.h b/docshell/base/DarkstrDocShellHooks.h
 --- a/docshell/base/DarkstrDocShellHooks.h
 +++ b/docshell/base/DarkstrDocShellHooks.h
 @@ -5,22 +5,25 @@
@@ -279,7 +279,7 @@ diff -ruN before/docshell/base/DarkstrDocShellHooks.h after/docshell/base/Darkst
    static void NoteTopLevelDocumentLoadAttempt();
  
   private:
-diff -ruN before/docshell/base/nsDocShell.cpp after/docshell/base/nsDocShell.cpp
+diff -ruN a/docshell/base/nsDocShell.cpp b/docshell/base/nsDocShell.cpp
 --- a/docshell/base/nsDocShell.cpp
 +++ b/docshell/base/nsDocShell.cpp
 @@ -6,9 +6,11 @@
