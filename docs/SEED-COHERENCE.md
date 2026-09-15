@@ -7,7 +7,7 @@
 | `duppel-persona::generate_persona` | **Rust SoT** for correlated snapshot fields |
 | `darkstr.persona.snapshot` JSON | What chrome `DarkstrNativePersona` prefers when hooks apply |
 | `darkstr.persona.seed` fallback | Thinner chrome-only RNG path in `0003` — **not** Proof-SoT |
-| Gecko Rust FFI | **Not claimed** — crates remain control plane |
+| Gecko Rust FFI | **Boundary crate** `duppel-ffi` (C ABI) — live Gecko link **not claimed** |
 
 ## Why seed-only can drift
 
