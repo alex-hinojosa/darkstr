@@ -186,6 +186,15 @@ patch_markers_present() {
         && grep -Fq "DarkstrDocShellHooks.cpp" "${DARKSTR_GECKO_ROOT}/docshell/base/moz.build" \
         && grep -Fq "darkstr.persona.platform" "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrNativePersona.sys.mjs"
       ;;
+    0007-darkstr-cpp-docshell-nav-sot.patch)
+      [[ -f "${DARKSTR_GECKO_ROOT}/docshell/base/DarkstrDocShellHooks.cpp" ]] \
+        && [[ -f "${DARKSTR_GECKO_ROOT}/docshell/base/DarkstrDocShellHooks.h" ]] \
+        && grep -Fq "ShouldApplyPersona" "${DARKSTR_GECKO_ROOT}/docshell/base/DarkstrDocShellHooks.h" \
+        && grep -Fq "CurrentPhase" "${DARKSTR_GECKO_ROOT}/docshell/base/DarkstrDocShellHooks.h" \
+        && grep -Fq "mBrowsingContext->Id()" "${DARKSTR_GECKO_ROOT}/docshell/base/nsDocShell.cpp" \
+        && grep -Fq "M3-CPP-DOCSHELL" "${DARKSTR_GECKO_ROOT}/docshell/base/nsDocShell.cpp" \
+        && grep -Fq "Prefer C++ SoT mirror" "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrNativePersona.sys.mjs"
+      ;;
     *)
       return 1
       ;;

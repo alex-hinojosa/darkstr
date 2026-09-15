@@ -168,7 +168,7 @@ Chrome key names and the activation matrix above remain the pin. M4 first drop s
 
 See `docs/M4-STATUS.md`, `docs/GECKO-HOOKS.md` §2.2 / §2.5, stub `patches/stubs/0004-darkstr-chaff-depth.patch.stub`. Live Mini tree is for path checks only until a train-pinned patch is Proof-verified.
 
-## M3-CPP note (C++ nsHttp) + M3-CPP-NAV honesty
+## M3-CPP note (C++ nsHttp) + M3-CPP-NAV + M3-CPP-DOCSHELL honesty
 
 Train-pinned C++ call-ins:
 
@@ -176,13 +176,21 @@ Train-pinned C++ call-ins:
 |-------|---------|--------|
 | `patches/0005-darkstr-cpp-native-hooks.patch` (`DarkstrNsHttpHooks`) | nsHttp UA + CH **REMOVE** only | Landed (#22) |
 | `patches/0006-darkstr-cpp-navigator-docshell.patch` (`DarkstrNavigatorHooks` + DocShell stub) | Navigator minimum fields + DocShell stub | Landed (#23) |
+| `patches/0007-darkstr-cpp-docshell-nav-sot.patch` (`DarkstrDocShellHooks` SoT) | DocShell first vs subsequent **C++ SoT** | This PR |
 
-Gates: `darkstr.nativePersonaHooks` (default **false**) + pollution XOR. Chrome `0003` remains the live JS path and DocShell **counter SoT** (C++ DocShell is stub/mirror only — first/next still chrome). No Cloudflare/TLS/JA3 claims. Status: `docs/M3-CPP-STATUS.md`, `docs/M3-CPP-NAV-STATUS.md`.
+Gates: `darkstr.nativePersonaHooks` (default **false**) + pollution XOR. Chrome `0003` remains the live JS path for UA/CH/Navigator when hooks off. **DocShell counter SoT is C++** when hooks on (`0007`); chrome Map is fallback only. No Cloudflare/TLS/JA3 claims. Status: `docs/M3-CPP-STATUS.md`, `docs/M3-CPP-NAV-STATUS.md`, `docs/M3-CPP-DOCSHELL-STATUS.md`.
 
 ## M3-CPP-NAV pin (2026-09-15)
 
 - Patch: `patches/0006-darkstr-cpp-navigator-docshell.patch`
 - Gates unchanged: pollution + `darkstr.nativePersonaHooks` (default false)
 - CH REMOVE remains `0005` only; Navigator C++ mirrors same persona seed/UA
-- DocShell: chrome counter SoT for first/next; C++ stub only
+- DocShell: stub in `0006` — **superseded for SoT by `0007`**
 - Headed skim: avoid `general.useragent.override` contamination (nsHttpHandler falls through to it when darkstr hooks are idle)
+
+## M3-CPP-DOCSHELL pin (2026-09-15)
+
+- Patch: `patches/0007-darkstr-cpp-docshell-nav-sot.patch`
+- C++ per-BC top-level `LoadURI` counter is SoT for `darkstr.strictFirstDoc` phase when hooks on
+- Chrome `navPhaseForChannel` prefers `darkstr.persona.docShellPhase` written by C++; Map = fallback
+- Same gates; no RFP metric patches; no CF/TLS; CH stays `0005`
