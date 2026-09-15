@@ -80,7 +80,7 @@ Static tracking ruleset follows global `pollutionActive` (mode + global native +
 ### Seed coherence + NC banking (Phase 2 exit hygiene)
 - Rust SoT goldens: `fixtures/seed-goldens.json` + `cargo run -p duppel-persona --example print_persona_snapshot`.
 - Chrome `0003` seed-only fallback is **thinner** than Rust — Proof XOR should paste **snapshot JSON**, not rely on seed parity (`docs/SEED-COHERENCE.md`).
-- Gecko Rust FFI: **boundary crate** `duppel-ffi` ([`M-FFI-STATUS.md`](M-FFI-STATUS.md)) — live `moz.build` / Mini link still **not claimed**.
+- Gecko Rust FFI: boundary crate + **0008 Approach B** patch authored ([`M-FFI-STATUS.md`](M-FFI-STATUS.md), [`M-FFI-0008-STATUS.md`](M-FFI-0008-STATUS.md)) — Mini apply/`mach`/symbol EXIT still operator-recorded; headed Proof XOR not claimed.
 - NC banking/SSO headed checklist: `docs/NC-BANKING-SMOKE.md` (+ `NC-BANKING-MINI-VERIFY.sh` doc/pref presence).
 - FPP soft residual: **no** static `defaultPref(FPP=false)` in `darkstr.cfg` (Homogeneous stock). Pollution FPP=false remains ModeXor `0002` / applicator SoT.
 

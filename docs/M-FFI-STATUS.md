@@ -1,38 +1,33 @@
-# Phase 2 M-FFI status — Gecko FFI boundary (first pin)
+# Phase 2 M-FFI status — Gecko FFI boundary → live link
 
 **Brand:** darkstr — not official LibreWolf.  
-**Train target (later live patch):** LibreWolf / Firefox **155.0.1-1**.
+**Train target:** LibreWolf / Firefox **155.0.1-1**.
 
 ## Goal
 
-Introduce a **reviewed** Rust→C ABI boundary so Pollution HTTP+JS can eventually consume `duppel-persona` without hand-pasted snapshot JSON — without claiming live Gecko linkage in this PR.
+Reviewed Rust→C ABI (`duppel-ffi`) consumed by Pollution chrome without hand-pasted snapshot JSON.
 
-## What this pin ships
+## What shipped
 
 | Item | Status |
 |------|--------|
-| `crates/duppel-ffi` (`rlib` + `staticlib` + `cdylib`) | **New** |
-| C ABI: `darkstr_ffi_abi_version`, `darkstr_ffi_persona_snapshot_json`, `darkstr_ffi_string_free` | **New** |
-| `darkstr_ffi.h` | **New** |
-| `patches/stubs/0008-darkstr-gecko-ffi-link.stub` | Sketch only |
-| Live `moz.build` / `mach` link on Mini | **Not claimed** |
-| Chrome/C++ calling the ABI | **Not claimed** |
-| `unsafe` outside `duppel-ffi` | **Forbidden** (other crates stay `forbid(unsafe_code)`) |
+| `crates/duppel-ffi` (`rlib` + `staticlib` + `cdylib`) | **Landed** (#27) |
+| C ABI: `darkstr_ffi_abi_version`, `darkstr_ffi_persona_snapshot_json`, `darkstr_ffi_string_free` | **Landed** |
+| `darkstr_ffi.h` | **Landed** |
+| Train-pinned `patches/0008-darkstr-gecko-ffi-link.patch` (Approach **B**) | **This pin** |
+| Chrome `DarkstrFfi.sys.mjs` + `_readSnapshot` prefers FFI | **This pin** |
+| Approach A (gkrust path-dep into libxul) | **Deferred** (Cargo.lock) |
+| Mini apply + `mach` + symbol smoke EXIT recorded from authoring executor | **See M-FFI-0008-STATUS** |
+| `darkstr.nativePersonaHooks` default | **Still false** (unchanged) |
+| Headed Proof XOR / PM copy | **Not claimed** |
 
 ## Honesty
 
-- Snapshot JSON matches `docs/SEED-COHERENCE.md` / `fixtures/seed-goldens.json` SoT.
-- Chrome `0003` seed-only fallback remains thinner until a parity or FFI-backed refresh.
-- `darkstr.nativePersonaHooks` stays **default-off**; no PM first-run copy in this PR.
+- Snapshot JSON matches `docs/SEED-COHERENCE.md` / `fixtures/seed-goldens.json` SoT (Rust `generate_persona`).
+- JS mulberry `_generateFromSeed` remains fallback when the cdylib is missing.
 - No Cloudflare / TLS / JA3 / RFP metric customization.
+- Brand: darkstr — not official LibreWolf.
 
-## Proof XOR
+## Details
 
-1. `cargo test -p duppel-ffi`
-2. ABI version == 1; seed 42 macos JSON matches goldens (Firefox UA, MacIntel, Europe/Berlin).
-3. STATUS / GECKO-HOOKS say **boundary crate only** — no Mini linkage claim.
-4. Stub `0008` is not a real patch.
-
-## Next (follow-up)
-
-Train-pinned `0008` moz.build + Mini `mach` link; chrome prefers FFI snapshot over seed fallback; then Proof live XOR.
+See [`M-FFI-0008-STATUS.md`](M-FFI-0008-STATUS.md).
