@@ -108,3 +108,5 @@ Real unified diff [`0007-darkstr-cpp-docshell-nav-sot.patch`](0007-darkstr-cpp-d
 - `nsDocShell::LoadURI` notes top-content navigations with `BrowsingContext::Id()`
 - Chrome prefers C++ `docShellPhase` mirror when hooks on
 - **Not** claimed: Rust FFI, Cloudflare/TLS/JA3, RFP metric patches, full parent/content IPC mirror
+
+| [`stubs/0008-darkstr-gecko-ffi-link.stub`](stubs/0008-darkstr-gecko-ffi-link.stub) | Future moz.build link for `duppel-ffi` — **not** train-pinned yet |

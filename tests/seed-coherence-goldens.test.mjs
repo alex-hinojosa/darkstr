@@ -51,7 +51,7 @@ test("chrome 0003 seed UA lists are subsets of Rust goldens families", () => {
 test("SEED-COHERENCE + NC banking docs exist", () => {
   assert.match(
     readFileSync(join(root, "docs/SEED-COHERENCE.md"), "utf8"),
-    /Not claimed/
+    /not claimed/i
   );
   assert.match(
     readFileSync(join(root, "docs/NC-BANKING-SMOKE.md"), "utf8"),

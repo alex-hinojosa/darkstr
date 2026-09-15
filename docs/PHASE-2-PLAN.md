@@ -106,7 +106,7 @@ crates/
 
 ### Shared rules
 
-- `#![forbid(unsafe_code)]` in stubs; any future FFI boundary crate is separate and reviewed.
+- `#![forbid(unsafe_code)]` in control-plane crates; FFI boundary is **`duppel-ffi`** (reviewed `unsafe` only there) — see `docs/M-FFI-STATUS.md`. Live Gecko link still follow-up.
 - GPL-3.0-only (same as Duppel / darkstr). Firefox/LibreWolf MPL patches stay MPL; counsel pass before distribution (Phase 4).
 - Crates must no-op when Homogeneous or Native-Compatible escape is active.
 

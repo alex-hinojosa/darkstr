@@ -10,6 +10,7 @@ members = [
     "duppel-chaff",
     "duppel-coherence",
     "duppel-bridge",
+    "duppel-ffi",
 ]
 
 [workspace.package]
