@@ -255,4 +255,4 @@ echo "M2 live observer: patches/0002-darkstr-mode-xor-rfp.patch (DarkstrModeXor.
 echo "M3 native hooks: patches/0003-darkstr-native-persona-hooks.patch (DarkstrNativePersona*.sys.mjs). Rebuild: ./mach build browser/components (see docs/M3-STATUS.md)."
 echo "M3-CPP nsHttp hooks: patches/0005-darkstr-cpp-native-hooks.patch (DarkstrNsHttpHooks). Rebuild: ./mach build netwerk/protocol/http (see docs/M3-CPP-STATUS.md)."
 echo "M3-CPP-NAV Navigator/DocShell: patches/0006-darkstr-cpp-navigator-docshell.patch. Rebuild: ./mach build dom/base docshell/base (see docs/M3-CPP-NAV-STATUS.md)."
-echo "M-FFI-0008 gecko FFI link: patches/0008-darkstr-gecko-ffi-link.patch (Approach B cdylib). Build FFI: third_party/darkstr/build-and-install-ffi.sh --prefix \"$objdir/dist/bin\". Rebuild chrome: ./mach build browser/components (see docs/M-FFI-0008-STATUS.md)."
+echo "M-FFI-0008 gecko FFI link: patches/0008-darkstr-gecko-ffi-link.patch (Approach B cdylib). Build FFI: third_party/darkstr/build-and-install-ffi.sh --prefix \"\${DARKSTR_GECKO_OBJDIR:-obj-*}/dist/bin\". Rebuild chrome: ./mach build browser/components (see docs/M-FFI-0008-STATUS.md)."

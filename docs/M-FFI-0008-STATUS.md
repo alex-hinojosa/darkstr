@@ -75,3 +75,19 @@ Also: `docs/M-FFI-0008-MINI-VERIFY.sh` when present.
 
 - FFI artifact: `third_party/darkstr/build-and-install-ffi.sh`
 - Chrome: `./mach build browser/components`
+
+## Mini verify (Builder — 2026-09-15 CDT)
+
+| Step | Result |
+|------|--------|
+| `apply-darkstr-patches.sh` (0008) | **Applied** (prior 0002–0007 markers skip) |
+| `build-and-install-ffi.sh --prefix obj-*/dist/bin` | **EXIT 0** after fix: pin `--target-dir` (ignore ambient `CARGO_TARGET_DIR`); `install_name_tool -id @executable_path/…` |
+| `nm -gU libduppel_ffi.dylib` | `_darkstr_ffi_abi_version`, `_darkstr_ffi_persona_snapshot_json`, `_darkstr_ffi_string_free` |
+| Python dlopen seed 42 macos | **OK** — `platform=MacIntel`, `timezone=Europe/Berlin`, Firefox UA |
+| `./mach build --allow-subdirectory-build browser/components` | **SUCCESS** (EXIT 0); moz.build backend regen |
+| `DarkstrFfi.sys.mjs` in `dist/bin/moz-src/...` | Present (symlink to source; also copied dylib into `LibreWolf.app/Contents/MacOS`) |
+
+**Soft:** first post-apply subdirectory build may need a one-shot symlink for new `MOZ_SRC_FILES` entries if install manifests lag — tree sources + dylib are the SoT for this pin.
+
+**Still not claimed:** headed Proof XOR; Approach A libxul; PM copy; hooks default-on.
+

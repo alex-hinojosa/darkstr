@@ -5,7 +5,7 @@
 # Approach: B — vendored third_party/darkstr crates → release cdylib → DarkstrFfi.sys.mjs ctypes.
 #   A (gkrust path-dep) deferred: Cargo.lock update not exercised on Mini this pin.
 # Apply: patch -d "$DARKSTR_GECKO_ROOT" -p1 < patches/0008-darkstr-gecko-ffi-link.patch
-# Build FFI: $DARKSTR_GECKO_ROOT/third_party/darkstr/build-and-install-ffi.sh --prefix "$objdir/dist/bin"
+# Build FFI: $DARKSTR_GECKO_ROOT/third_party/darkstr/build-and-install-ffi.sh --prefix "${DARKSTR_GECKO_OBJDIR:-obj-*}/dist/bin"
 # Rebuild chrome: ./mach build browser/components  (or full ./mach build)
 # Honesty: no headed Proof XOR / merge-ready claim until Builder pings Proof.
 #
@@ -276,8 +276,8 @@ diff -ruN a/third_party/darkstr/README.md gecko-b/third_party/darkstr/README.md
 +Brand: darkstr — not official LibreWolf.
 diff -ruN a/third_party/darkstr/build-and-install-ffi.sh gecko-b/third_party/darkstr/build-and-install-ffi.sh
 --- a/third_party/darkstr/build-and-install-ffi.sh	1970-01-01 00:00:00.000000000 +0000
-+++ b/third_party/darkstr/build-and-install-ffi.sh	2026-09-15 23:18:48.456734905 +0000
-@@ -0,0 +1,65 @@
++++ b/third_party/darkstr/build-and-install-ffi.sh	2026-09-15 18:22:52.394078 +0000
+@@ -0,0 +1,74 @@
 +#!/usr/bin/env bash
 +# build-and-install-ffi.sh — Approach B cdylib for darkstr 0008 (LibreWolf 155.0.1-1).
 +# Builds libduppel_ffi and installs into MOZ_DIST/bin (or --prefix).
@@ -300,7 +300,6 @@ diff -ruN a/third_party/darkstr/build-and-install-ffi.sh gecko-b/third_party/dar
 +  elif [[ -n "${DARKSTR_GECKO_OBJDIR:-}" ]]; then
 +    PREFIX="${DARKSTR_GECKO_OBJDIR}/dist/bin"
 +  else
-+    # Best-effort: sibling obj-* under gecko root
 +    if [[ -n "${DARKSTR_GECKO_ROOT:-}" ]]; then
 +      cand="$(ls -d "${DARKSTR_GECKO_ROOT}"/obj-*/dist/bin 2>/dev/null | head -n1 || true)"
 +      PREFIX="${cand}"
@@ -308,33 +307,43 @@ diff -ruN a/third_party/darkstr/build-and-install-ffi.sh gecko-b/third_party/dar
 +  fi
 +fi
 +
-+echo "darkstr-ffi: cargo build --release -p duppel-ffi (in ${HERE})"
-+cargo build --release --manifest-path "${HERE}/Cargo.toml" -p duppel-ffi
++# Ignore ambient CARGO_TARGET_DIR (e.g. leftover /tmp) so artifacts land next to HERE.
++TARGET_DIR="${HERE}/target"
++echo "darkstr-ffi: cargo build --release -p duppel-ffi (in ${HERE}, target-dir=${TARGET_DIR})"
++cargo build --release --manifest-path "${HERE}/Cargo.toml" -p duppel-ffi --target-dir "${TARGET_DIR}"
 +
 +shopt -s nullglob
-+arts=( "${HERE}/target/release/libduppel_ffi.dylib" \
-+       "${HERE}/target/release/libduppel_ffi.so" \
-+       "${HERE}/target/release/duppel_ffi.dll" \
-+       "${HERE}/target/release/libduppel_ffi.dll" )
++arts=( "${TARGET_DIR}/release/libduppel_ffi.dylib" \
++       "${TARGET_DIR}/release/libduppel_ffi.so" \
++       "${TARGET_DIR}/release/duppel_ffi.dll" \
++       "${TARGET_DIR}/release/libduppel_ffi.dll" )
 +ART=""
 +for f in "${arts[@]}"; do
 +  if [[ -f "$f" ]]; then ART="$f"; break; fi
 +done
 +if [[ -z "${ART}" ]]; then
-+  echo "darkstr-ffi: no cdylib artifact found under ${HERE}/target/release" >&2
++  echo "darkstr-ffi: no cdylib artifact found under ${TARGET_DIR}/release" >&2
++  ls -la "${TARGET_DIR}/release" 2>/dev/null | head -n 40 >&2 || true
 +  exit 1
 +fi
 +echo "darkstr-ffi: built ${ART}"
 +
++# macOS: make the dylib relocatable next to librewolf (ctypes / dyld).
++if [[ "$(uname -s)" == "Darwin" ]] && command -v install_name_tool >/dev/null 2>&1; then
++  install_name_tool -id "@executable_path/$(basename "${ART}")" "${ART}" || true
++fi
++
 +if [[ -n "${PREFIX}" && -d "${PREFIX}" ]]; then
 +  cp "${ART}" "${PREFIX}/"
++  if [[ "$(uname -s)" == "Darwin" ]] && command -v install_name_tool >/dev/null 2>&1; then
++    install_name_tool -id "@executable_path/$(basename "${ART}")" "${PREFIX}/$(basename "${ART}")" || true
++  fi
 +  echo "darkstr-ffi: installed $(basename "${ART}") -> ${PREFIX}/"
 +else
 +  echo "darkstr-ffi: PREFIX unset/missing — artifact left at ${ART}"
 +  echo "  Re-run with --prefix \"\$objdir/dist/bin\" or export MOZ_DIST / DARKSTR_GECKO_OBJDIR."
 +fi
 +
-+# Smoke: nm/otool/symbols when tools exist
 +if command -v nm >/dev/null 2>&1; then
 +  echo "darkstr-ffi: nm symbols (filtered):"
 +  nm -gU "${ART}" 2>/dev/null | grep -E 'darkstr_ffi_' || nm -g "${ART}" 2>/dev/null | grep -E 'darkstr_ffi_' || true

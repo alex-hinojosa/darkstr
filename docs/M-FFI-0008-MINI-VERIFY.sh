@@ -27,6 +27,7 @@ fi
 
 if [[ -n "${OBJBIN}" && -d "${OBJBIN}" ]]; then
   echo "## build-and-install-ffi --prefix ${OBJBIN}"
+  # build script pins --target-dir; ambient CARGO_TARGET_DIR is ignored
   chmod +x "${DARKSTR_GECKO_ROOT}/third_party/darkstr/build-and-install-ffi.sh"
   "${DARKSTR_GECKO_ROOT}/third_party/darkstr/build-and-install-ffi.sh" --prefix "${OBJBIN}"
   echo "FFI_BUILD_EXIT=$?"
