@@ -50,9 +50,9 @@ LibreWolf does **not** patch `BrowserGlue.sys.mjs` in its 155 patch set (verifie
 Not invented C++. A thin ESM chrome module:
 
 1. `Services.prefs.addObserver` on `darkstr.mode` + `darkstr.nativeCompatible`
-2. Also observes `privacy.resistFingerprinting` + `privacy.fingerprintingProtection`: under **Pollution** only, re-call `applyModeEffects` when those change (counter ContentBlockingPrefs / CB category stomps). **Homogeneous** ignores RFP/FPP observer callbacks (do not fight user/stock).
+2. Also observes `privacy.resistFingerprinting` + `privacy.fingerprintingProtection` + `browser.contentblocking.category` (ContentBlockingPrefs.PREF_CB_CATEGORY on 155.0.1): under **Pollution** only, re-call `applyModeEffects` when those change (counter CB category stomps / strict `fpp` re-apply). **Homogeneous** ignores RFP/FPP/CB-category observer callbacks (do not fight user/stock).
 3. On mode/native change (+ once at `BrowserGlue._init`): write only `privacy.resistFingerprinting` / `privacy.fingerprintingProtection` per the table above
-4. After first `applyModeEffects` in `init`, schedule deferred re-apply (`Services.tm.dispatchToMainThread` + `idleDispatchToMainThread`) so CB settle after BrowserGlue init is overridden under Pollution
+4. After first `applyModeEffects` in `init`, schedule deferred re-apply (`Services.tm.dispatchToMainThread` + **dual** `idleDispatchToMainThread`) so early and late CB settle after BrowserGlue init is overridden under Pollution
 5. Does **not** rewrite `darkstr.*` (no re-entrancy); keeps `_applying` guard
 6. Does **not** customize RFP metrics / letterboxing
 7. `nativeCompatible` is read for control-plane parity; persona/chaff stay WebExt until M3 native hooks
@@ -61,7 +61,7 @@ Semantics intentionally mirror `duppel_bridge::PrefsApplicator::apply_mode_effec
 
 ### Soft residual (Proof skim) — closed in this drop
 
-Proof soft residual after M2 XOR skim PASS: under Pollution, `DarkstrModeXor` set FPP=false but CB category re-applied FPP=true afterward (`xorSafe` wants `!rfp && !fpp`). RFP path already held. **Closed** by observing FPP (+RFP) and deferred re-apply under Pollution only — honesty: soft residual closed by observing FPP+deferred apply; not a claim of Full CB rewrite or FFI.
+Proof soft residual: under Pollution, FPP may still read true in test profiles when CB category (strict features include `fpp`) settles after ModeXor init, or when Proof skims stock LibreWolf / WebExt-only without `0002` applied+rebuilt. #21 added FPP/RFP observe + deferred apply; post-#23 soft residual strengthen also observes `browser.contentblocking.category` + dual idle. Honesty: prefs-path counter only — not a Full CB rewrite, FFI, or Mini re-Proof claim.
 
 ## Apply + rebuild (Mini SSD)
 
@@ -88,7 +88,7 @@ Runtime skim after rebuild: Homogeneous → RFP true; set `darkstr.mode=pollutio
 
 ## Soft residual closure (2026-09-14)
 
-Proof soft residual (FPP re-assert after CB settle under Pollution) closed by: observe `privacy.fingerprintingProtection` + `privacy.resistFingerprinting`; re-assert both false only when `darkstr.mode===pollution`; deferred apply after `init`. Homogeneous does not fight user/stock on RFP/FPP prefs. Not claimed: CB rewrite, C++/FFI, Mini binary re-Proof.
+FPP under Pollution (soft residual hygiene): observe `privacy.fingerprintingProtection` + `privacy.resistFingerprinting` + `browser.contentblocking.category`; re-assert RFP/FPP false only when `darkstr.mode===pollution`; dual-idle deferred apply after `init`. Homogeneous does not fight user/stock on RFP/FPP/CB prefs. If Proof still sees FPP=true: confirm fork `0002` is on the binary and wait past CB settle — WebExt pollution mode alone does not clear chrome FPP. Not claimed: CB rewrite, C++/FFI, Mini binary re-Proof.
 
 ## Honesty / non-claims
 

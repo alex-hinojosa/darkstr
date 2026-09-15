@@ -135,7 +135,7 @@ Chrome key names and the activation matrix above remain the pin. M2 ships:
 
 **Forbidden via prefs path:** Pollution with RFP still true. Enforced in `duppel_bridge::PrefApplyPlan::is_xor_safe` and mirrored by the chrome observer writes.
 
-See `docs/M2-STATUS.md`, `docs/GECKO-HOOKS.md` §1.2–1.3, `docs/M2-MINI-VERIFY.sh`. Soft residual (FPP re-assert after CB settle under Pollution) closed by observing FPP+RFP + deferred apply — honesty only; not a Mini re-Proof claim. Stock LibreWolf **without** the fork patch still cannot auto-kill RFP (manual about:config + UTC probe). Mini apply + `mach build` proof is operator-side until recorded.
+See `docs/M2-STATUS.md`, `docs/GECKO-HOOKS.md` §1.2–1.3, `docs/M2-MINI-VERIFY.sh`. Soft residual (FPP=true under Pollution in test profiles): #21 observe FPP/RFP + deferred apply; post-#23 strengthen observes `browser.contentblocking.category` (ContentBlockingPrefs on 155) + dual idle re-assert under Pollution only. **Hygiene:** Proof may still see FPP=true on stock LibreWolf / WebExt-only profiles without `0002` applied+rebuilt, or if about:config is read before CB settle completes — not a WebExt XOR fail. Stock LibreWolf **without** the fork patch still cannot auto-kill RFP (manual about:config + UTC probe). Mini apply + `mach build` proof is operator-side until recorded.
 
 ## Phase 2 M3 note (train-pinned live native persona hooks — 2026-09-14)
 
@@ -168,13 +168,21 @@ Chrome key names and the activation matrix above remain the pin. M4 first drop s
 
 See `docs/M4-STATUS.md`, `docs/GECKO-HOOKS.md` §2.2 / §2.5, stub `patches/stubs/0004-darkstr-chaff-depth.patch.stub`. Live Mini tree is for path checks only until a train-pinned patch is Proof-verified.
 
-## M3-CPP note (C++ nsHttp)
+## M3-CPP note (C++ nsHttp) + M3-CPP-NAV honesty
 
-Train-pinned C++ call-ins: `patches/0005-darkstr-cpp-native-hooks.patch` (`DarkstrNsHttpHooks`). Gates on `darkstr.nativePersonaHooks` (default **false**) + pollution XOR. CH = REMOVE only. Navigator/DocShell remain chrome-JS (`0003`). No Cloudflare/TLS/JA3 claims. Status: `docs/M3-CPP-STATUS.md`.
+Train-pinned C++ call-ins:
+
+| Patch | Surface | Status |
+|-------|---------|--------|
+| `patches/0005-darkstr-cpp-native-hooks.patch` (`DarkstrNsHttpHooks`) | nsHttp UA + CH **REMOVE** only | Landed (#22) |
+| `patches/0006-darkstr-cpp-navigator-docshell.patch` (`DarkstrNavigatorHooks` + DocShell stub) | Navigator minimum fields + DocShell stub | Landed (#23) |
+
+Gates: `darkstr.nativePersonaHooks` (default **false**) + pollution XOR. Chrome `0003` remains the live JS path and DocShell **counter SoT** (C++ DocShell is stub/mirror only — first/next still chrome). No Cloudflare/TLS/JA3 claims. Status: `docs/M3-CPP-STATUS.md`, `docs/M3-CPP-NAV-STATUS.md`.
 
 ## M3-CPP-NAV pin (2026-09-15)
 
 - Patch: `patches/0006-darkstr-cpp-navigator-docshell.patch`
 - Gates unchanged: pollution + `darkstr.nativePersonaHooks` (default false)
 - CH REMOVE remains `0005` only; Navigator C++ mirrors same persona seed/UA
-- DocShell: chrome counter SoT; C++ stub only
+- DocShell: chrome counter SoT for first/next; C++ stub only
+- Headed skim: avoid `general.useragent.override` contamination (nsHttpHandler falls through to it when darkstr hooks are idle)

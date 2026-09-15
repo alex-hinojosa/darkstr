@@ -35,7 +35,7 @@ Ship path in fork tree (illustrative): `browser/app/profile/darkstr.js` **or** a
 | Integration | Upstream area (Firefox/LibreWolf) | darkstr action | M2 status |
 |-------------|-----------------------------------|----------------|-----------|
 | Declare prefs | `modules/libpref/init/StaticPrefList.yaml` **or** `all.js` / product `.js` | Add `darkstr.mode` (String), `darkstr.nativeCompatible` (Bool), later `darkstr.strictFirstDoc` | Defaults via M1 `darkstr.cfg`; StaticPrefList still private-fork |
-| Observe changes | Pref observer in chrome process (chrome JS ESM on 155.0.1-1) | On `darkstr.mode` / `darkstr.nativeCompatible` change → XOR write `privacy.resistFingerprinting` / `privacy.fingerprintingProtection` (same table as `PrefsApplicator::apply_mode_effects`). Also observes RFP/FPP: under Pollution only, re-assert both false after CB stomps; deferred apply after init for CB settle. Homogeneous ignores RFP/FPP callbacks. | **Rust applicator landed**; **live chrome JS observer** in `patches/0002-darkstr-mode-xor-rfp.patch` (`DarkstrModeXor.sys.mjs` via `BrowserGlue`); FPP soft residual closed by observe+deferred; C++/Rust FFI **not** claimed |
+| Observe changes | Pref observer in chrome process (chrome JS ESM on 155.0.1-1) | On `darkstr.mode` / `darkstr.nativeCompatible` change → XOR write `privacy.resistFingerprinting` / `privacy.fingerprintingProtection` (same table as `PrefsApplicator::apply_mode_effects`). Also observes RFP/FPP + `browser.contentblocking.category`: under Pollution only, re-assert both false after CB stomps; dual-idle deferred apply after init. Homogeneous ignores RFP/FPP/CB-category callbacks. | **Rust applicator landed**; **live chrome JS observer** in `patches/0002-darkstr-mode-xor-rfp.patch` (`DarkstrModeXor.sys.mjs` via `BrowserGlue`); FPP soft residual = observe+dual-idle (+ CB category on 155); C++/Rust FFI **not** claimed |
 | Mirror WebExt | Fork-only experimental API / native messaging | Bidirectional sync per [`PREF-BRIDGE.md`](PREF-BRIDGE.md) §2 | Deferred (fork wiring) |
 
 **Authoritative in fork:** chrome prefs. WebExt `browser.storage.local` is a UI mirror until bridge lands.
@@ -93,6 +93,8 @@ Glue reads cached `PersonaSnapshot` **only** when `pollution_active` (`read_cach
 | Client Hints | nsHttp request header policy | M3 / M3-CPP | REMOVE in `0003` + C++ `0005` (never SET); Rust `ClientHintsPolicy::Remove` |
 | `navigator.*` / platform / HW | JSWindowActor child + **C++** `Navigator.cpp` | M3 / M3-CPP-NAV | Live chrome `0003` + C++ `0006` (`DarkstrNavigatorHooks`); `deviceMemory`/`userAgentData` stay chrome on Firefox host |
 | Feature flag | `darkstr.nativePersonaHooks` | M3 | Pref + WebExt MAIN inject gate + chrome plan |
+
+**Headed skim:** avoid `general.useragent.override` contamination — nsHttpHandler falls through to it when darkstr hooks are idle; clear it for CreepJS/BrowserLeaks on fork profiles.
 
 **Idle when:** Homogeneous, Native-Compatible escape, or `rfp_xor_pollution`.
 

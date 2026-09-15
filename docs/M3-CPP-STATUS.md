@@ -68,8 +68,8 @@ bash docs/M3-CPP-MINI-VERIFY.sh
 ## Honesty / non-claims
 
 - **Does** ship a real unified diff vs post-M3 155.0.1 nsHttp + chrome mirror hunk; dry-run apply verified on a pristine post-0003 slice of those files.
-- **Does not** claim: Navigator.cpp / DocShell C++ overrides, Rust FFI, Proof-PASS binary from this authoring box, Cloudflare/TLS/JA3/bypass.
-- Navigator + DocShell-ish first vs subsequent remain chrome-JS (`0003`) — intentional focused PR.
+- **Does not** claim (this `0005` drop): Navigator.cpp / DocShell C++ overrides — those landed separately as `0006` / M3-CPP-NAV (#23); DocShell first/next chrome counter remains SoT.
+- **Does not** claim: Rust FFI, Proof-PASS binary from this authoring box, Cloudflare/TLS/JA3/bypass.
 - C++ cannot easily consume full persona JSON; chrome writes `darkstr.persona.ua` when plan applies.
 
 ## Proof gates for this PR
