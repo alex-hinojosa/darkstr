@@ -1,0 +1,57 @@
+{
+  "version": 1,
+  "generator": "cargo run -p duppel-persona --example print_persona_snapshot -- <seed> <macos|linux|windows>",
+  "note": "Paste snapshot into about:config darkstr.persona.snapshot for Mini XOR. Rust generate_persona is SoT for these vectors. Chrome 0003 seed-only fallback uses thinner tables/RNG order and is NOT Proof-SoT until a parity patch.",
+  "vectors": [
+    {
+      "seed": 42,
+      "os": "macos",
+      "engine": "firefox",
+      "snapshot": {
+        "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:140.0) Gecko/20100101 Firefox/140.0",
+        "platform": "MacIntel",
+        "hardwareConcurrency": 8,
+        "deviceMemory": 4,
+        "languages": [
+          "en-US",
+          "en",
+          "es"
+        ],
+        "timezone": "Europe/Berlin"
+      }
+    },
+    {
+      "seed": 1,
+      "os": "linux",
+      "engine": "firefox",
+      "snapshot": {
+        "userAgent": "Mozilla/5.0 (X11; Linux x86_64; rv:140.0) Gecko/20100101 Firefox/140.0",
+        "platform": "Linux x86_64",
+        "hardwareConcurrency": 4,
+        "deviceMemory": 8,
+        "languages": [
+          "en-US",
+          "en",
+          "de"
+        ],
+        "timezone": "America/Los_Angeles"
+      }
+    },
+    {
+      "seed": 3735928559,
+      "os": "windows",
+      "engine": "firefox",
+      "snapshot": {
+        "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:140.0) Gecko/20100101 Firefox/140.0",
+        "platform": "Win32",
+        "hardwareConcurrency": 12,
+        "deviceMemory": 4,
+        "languages": [
+          "en-GB",
+          "en"
+        ],
+        "timezone": "America/New_York"
+      }
+    }
+  ]
+}
