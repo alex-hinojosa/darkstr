@@ -1,0 +1,4 @@
+# STUB POINTER — superseded by real patches/0006-darkstr-cpp-navigator-docshell.patch
+# Train-pinned C++ Navigator overrides + honest DocShell stub (LibreWolf/Firefox 155.0.1-1).
+# Brand: darkstr — not official LibreWolf. No Cloudflare/TLS/JA3. No Rust FFI.
+# DocShell first/subsequent chrome counter remains SoT; C++ reads mirror pref only.

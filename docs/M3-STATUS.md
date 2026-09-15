@@ -97,3 +97,5 @@ bash docs/M3-MINI-VERIFY.sh
 | Proof | `docs/PROOF-XOR-CHECKLIST.md` M3 pin, `docs/PROOF-PIN.md` M3 note, this file |
 | PM | Goal + honesty (no CF/TLS/bypass) |
 | Builder Mini | `$DARKSTR_GECKO_ROOT`, `docs/M3-MINI-VERIFY.sh` |
+
+Follow-up: C++ Navigator + DocShell stub — see [`M3-CPP-NAV-STATUS.md`](M3-CPP-NAV-STATUS.md) / patch `0006`.

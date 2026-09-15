@@ -77,3 +77,34 @@ test("apply script has 0005 content markers", () => {
   assert.match(sh, /0005-darkstr-cpp-native-hooks\.patch/);
   assert.match(sh, /DarkstrNsHttpHooks\.cpp/);
 });
+
+test("0006 C++ Navigator/DocShell patch is a real unified diff", () => {
+  const patch = readFileSync(
+    join(root, "patches/0006-darkstr-cpp-navigator-docshell.patch"),
+    "utf8"
+  );
+  assert.match(patch, /DarkstrNavigatorHooks/);
+  assert.match(patch, /Navigator\.cpp/);
+  assert.match(patch, /DarkstrDocShellHooks/);
+  assert.match(patch, /nsDocShell\.cpp/);
+  assert.match(patch, /darkstr\.persona\.platform/);
+  assert.match(patch, /chrome counter remains SoT|chrome remains SoT|Honest stub/i);
+  // Must not touch nsHttp sources / regress CH (mentions of 0005 in comments OK)
+  assert.doesNotMatch(patch, /nsHttpHandler\.cpp/);
+  assert.doesNotMatch(patch, /^\+.*DarkstrNsHttpHooks\.(cpp|h)/m);
+  assert.doesNotMatch(patch, /diff -ruN a\/netwerk\//);
+  assert.match(patch, /No Cloudflare\/TLS\/JA3 claims|not Cloudflare/i);
+  assert.doesNotMatch(patch, /bypass Cloudflare|spoof JA3|defeat TLS/i);
+  assert.doesNotMatch(patch, /^# STUB/m);
+  assert.ok(patch.length > 4000, "0006 patch should be substantial");
+});
+
+test("apply script has 0006 content markers", () => {
+  const sh = readFileSync(
+    join(root, "patches/scripts/apply-darkstr-patches.sh"),
+    "utf8"
+  );
+  assert.match(sh, /0006-darkstr-cpp-navigator-docshell\.patch/);
+  assert.match(sh, /DarkstrNavigatorHooks\.cpp/);
+  assert.match(sh, /DarkstrDocShellHooks\.cpp/);
+});
