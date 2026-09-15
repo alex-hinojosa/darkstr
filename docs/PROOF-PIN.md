@@ -77,6 +77,13 @@ Static tracking ruleset follows global `pollutionActive` (mode + global native +
 
 ## Deferred / residuals (still not a Proof fail for this PR)
 
+### Seed coherence + NC banking (Phase 2 exit hygiene)
+- Rust SoT goldens: `fixtures/seed-goldens.json` + `cargo run -p duppel-persona --example print_persona_snapshot`.
+- Chrome `0003` seed-only fallback is **thinner** than Rust — Proof XOR should paste **snapshot JSON**, not rely on seed parity (`docs/SEED-COHERENCE.md`).
+- Gecko Rust FFI still **not claimed**.
+- NC banking/SSO headed checklist: `docs/NC-BANKING-SMOKE.md` (+ `NC-BANKING-MINI-VERIFY.sh` doc/pref presence).
+- FPP soft residual: **no** static `defaultPref(FPP=false)` in `darkstr.cfg` (Homogeneous stock). Pollution FPP=false remains ModeXor `0002` / applicator SoT.
+
 - Cookie-jar browser UI / per-site cookie allowlist / selective keep
 - Chromium Client Hints SET (Firefox host never selects Chromium personas)
 - Full uBO-parity blocklist (LibreWolf still ships uBO; ours is a slim Pollution companion)

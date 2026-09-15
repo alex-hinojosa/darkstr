@@ -224,3 +224,66 @@ mod tests {
         assert!(h.crates_idle);
     }
 }
+
+#[cfg(test)]
+mod seed_goldens {
+    use super::*;
+    use duppel_persona::{generate_persona, Engine, HostOs, PersonaSeed};
+
+    /// Fixed seeds Proof/operators can XOR against chrome snapshot JSON.
+    const SEEDS: &[u32] = &[1, 42, 0xdead_beef];
+
+    fn observed_from_persona(p: &PersonaSnapshot) -> ObservedSurfaces {
+        ObservedSurfaces {
+            http_user_agent: p.user_agent.to_string(),
+            js_user_agent: p.user_agent.to_string(),
+            js_platform: p.platform.to_string(),
+            js_timezone: p.timezone.to_string(),
+            http_client_hints_present: false,
+        }
+    }
+
+    #[test]
+    fn rust_seed_http_js_coherent_for_fixed_seeds() {
+        for &seed in SEEDS {
+            for os in [HostOs::Macos, HostOs::Linux, HostOs::Windows] {
+                let p = generate_persona(PersonaSeed::new(seed), Engine::Firefox, os)
+                    .expect("firefox host family must exist");
+                assert_http_js_coherent(&p, &observed_from_persona(&p)).unwrap();
+                assert_eq!(p.seed.value(), seed);
+                assert!(p.user_agent.contains("Firefox"));
+                assert!(!p.languages.is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn pollution_pref_effects_kill_fpp_without_static_cfg() {
+        // Soft residual close: ModeXor/applicator SoT — not darkstr.cfg defaultPref(FPP=false).
+        let effects = assert_pollution_kills_rfp().unwrap();
+        assert!(!effects.fingerprinting_protection);
+        assert!(!effects.resist_fingerprinting);
+        let homo = assert_homogeneous_stock_rfp().unwrap();
+        assert!(homo.fingerprinting_protection);
+        assert!(homo.resist_fingerprinting);
+    }
+
+    #[test]
+    fn golden_snapshot_json_shape_stable() {
+        // Shape operators paste into darkstr.persona.snapshot for Mini XOR.
+        let p = generate_persona(PersonaSeed::new(42), Engine::Firefox, HostOs::Macos).unwrap();
+        let json = format!(
+            r#"{{"userAgent":"{}","platform":"{}","hardwareConcurrency":{},"deviceMemory":{},"languages":{:?},"timezone":"{}"}}"#,
+            p.user_agent,
+            p.platform,
+            p.hardware_concurrency,
+            p.device_memory,
+            p.languages,
+            p.timezone
+        );
+        assert!(json.contains("Firefox"));
+        assert!(json.contains("MacIntel"));
+        // languages Debug uses ["en-US", ...] — fine for fixture pin
+        assert!(json.contains("en-"));
+    }
+}

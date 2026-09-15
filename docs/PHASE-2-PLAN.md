@@ -301,8 +301,8 @@ Still **no** Mozilla/LibreWolf vendor:
 ### Exit criteria for “Phase 2 done”
 
 1. Fork builds reproducibly; Homogeneous ≈ LibreWolf RFP expectations (documented deltas only).
-2. Pollution: coherent HTTP+JS persona from Rust seed; RFP contradiction impossible via prefs path.
-3. Native-Compatible usable for banking/SSO without manual about:config.
+2. Pollution: coherent HTTP+JS persona from Rust seed; RFP contradiction impossible via prefs path. (**control-plane goldens + snapshot JSON SoT** — `docs/SEED-COHERENCE.md`; Gecko FFI still open.)
+3. Native-Compatible usable for banking/SSO without manual about:config. (**checklist:** `docs/NC-BANKING-SMOKE.md` — headed Proof still operator-side.)
 4. WebExt still ships as companion UI; stock LibreWolf temporary-load path documented as **limited** (no auto-RFP).
 5. Public positioning unchanged: pollution, not bypass, not official LibreWolf.
 
