@@ -1,0 +1,298 @@
+# darkstr M3-CPP-DOCSHELL — C++ DocShell first vs subsequent SoT (155.0.1-1)
+# Train: Firefox FIREFOX_155_0_1_RELEASE / LibreWolf 155.0.1-1
+# Brand: darkstr — not official LibreWolf. No Cloudflare/TLS/JA3 claims.
+# Prerequisite: 0003 + 0005 + 0006 (Navigator C++ + DocShell stub).
+# Apply: patch -d "$DARKSTR_GECKO_ROOT" -p1 < patches/0007-darkstr-cpp-docshell-nav-sot.patch
+# Rebuild: ./mach build docshell/base   (+ full relink if needed)
+# Honesty: C++ per-BC counter is SoT for DocShell phase API / hooks gating.
+#          Chrome Map remains fallback when hooks idle or mirror unset.
+#          No RFP metric patches. No CF/TLS. CH REMOVE stays in 0005.
+#
+diff -ruN before/browser/components/DarkstrNativePersona.sys.mjs after/browser/components/DarkstrNativePersona.sys.mjs
+--- a/browser/components/DarkstrNativePersona.sys.mjs
++++ b/browser/components/DarkstrNativePersona.sys.mjs
+@@ -17,7 +17,8 @@
+  *   2) Client Hints REMOVE only (never SET) on Firefox host
+  *   3) Minimum Navigator fields (platform / HW / languages / UA) via JSWindowActor
+  *   4) Feature flag darkstr.nativePersonaHooks (WebExt MAIN inject should stay off)
+- *   5) DocShell-ish first vs subsequent nav via tab top-level load counting
++ *   5) DocShell first vs subsequent: C++ DarkstrDocShellHooks SoT when hooks on
++ *      (0007); chrome Map is fallback when hooks idle / mirror unset
+  *
+  * Idle when Homogeneous / nativeCompatible / hooks false / empty snapshot.
+  */
+@@ -386,6 +387,23 @@
+   navPhaseForChannel(channel) {
+     try {
+       const bc = channel.loadInfo?.browsingContext?.top;
++      // Prefer C++ SoT mirror (DarkstrDocShellHooks writes on top LoadURI).
++      try {
++        const plan = this.getPlan();
++        if (plan?.nativeHooks && plan?.pollutionActive) {
++          const cppPhase = Services.prefs.getStringPref(
++            DOCSHELL_PHASE_MIRROR_PREF,
++            ""
++          );
++          if (
++            cppPhase === "first_document" ||
++            cppPhase === "subsequent_nav"
++          ) {
++            return cppPhase;
++          }
++        }
++      } catch (_e) {}
++      // Fallback: chrome Map (WebExt-only / pre-C++ / mirror race).
+       if (bc && this._bcTopLoads) {
+         const n = this._bcTopLoads.get(bc.id) || 0;
+         if (n <= 1) {
+diff -ruN before/docshell/base/DarkstrDocShellHooks.cpp after/docshell/base/DarkstrDocShellHooks.cpp
+--- a/docshell/base/DarkstrDocShellHooks.cpp
++++ b/docshell/base/DarkstrDocShellHooks.cpp
+@@ -7,10 +7,29 @@
+ #include "DarkstrDocShellHooks.h"
+ 
+ #include "mozilla/Preferences.h"
++#include "nsTHashMap.h"
+ #include "nsString.h"
+ 
+ namespace mozilla {
+ 
++namespace {
++
++// Per-BrowsingContext top-level document load counts (main-thread DocShell).
++// Key: BrowsingContext::Id(). Value: number of top LoadURI notes.
++static nsTHashMap<nsUint64HashKey, uint32_t>& TopLoads() {
++  static nsTHashMap<nsUint64HashKey, uint32_t> sTopLoads;
++  return sTopLoads;
++}
++
++static void SyncPhaseMirror(uint32_t aCount) {
++  // Best-effort chrome/nsHttp mirror. Global pref (same limitation as 0006).
++  const char* phase = (aCount <= 1) ? "first_document" : "subsequent_nav";
++  Preferences::SetCString("darkstr.persona.docShellPhase",
++                          nsDependentCString(phase));
++}
++
++}  // namespace
++
+ bool DarkstrDocShellHooks::PollutionNativeHooksActive() {
+   if (!Preferences::GetBool("darkstr.nativePersonaHooks", false)) {
+     return false;
+@@ -23,8 +42,21 @@
+   return mode.EqualsLiteral("pollution");
+ }
+ 
++DarkstrDocShellHooks::NavPhase DarkstrDocShellHooks::CurrentPhase(
++    uint64_t aBrowsingContextId) {
++  if (!PollutionNativeHooksActive()) {
++    return NavPhase::SubsequentNav;
++  }
++  uint32_t n = 0;
++  if (!TopLoads().Get(aBrowsingContextId, &n) || n == 0) {
++    // No note yet — treat as first until a LoadURI lands.
++    return NavPhase::FirstDocument;
++  }
++  return (n <= 1) ? NavPhase::FirstDocument : NavPhase::SubsequentNav;
++}
++
+ DarkstrDocShellHooks::NavPhase DarkstrDocShellHooks::PhaseFromChromeMirror() {
+-  // Honest stub: chrome DarkstrNativePersona counter remains SoT (0003).
++  // Kept for call-site compat; prefer CurrentPhase(bcId) when BC is known.
+   if (!PollutionNativeHooksActive()) {
+     return NavPhase::SubsequentNav;
+   }
+@@ -37,53 +69,41 @@
+   return NavPhase::SubsequentNav;
+ }
+ 
+-void DarkstrDocShellHooks::NoteTopLevelDocumentLoadAttempt() {
+-  // No-op behavioral stub: chrome counter + mirror remain SoT.
+-  (void)PhaseFromChromeMirror();
+-}
+-
+-}  // namespace mozilla
+-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+-/* vim: set sw=2 ts=8 et tw=80 : */
+-/* This Source Code Form is subject to the terms of the Mozilla Public
+- * License, v. 2.0. If a copy of the MPL was not distributed with this
+- * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+-
+-#include "DarkstrDocShellHooks.h"
+-
+-#include "mozilla/Preferences.h"
+-#include "nsString.h"
+-
+-namespace mozilla {
+-
+-bool DarkstrDocShellHooks::PollutionNativeHooksActive() {
+-  if (!Preferences::GetBool("darkstr.nativePersonaHooks", false)) {
++bool DarkstrDocShellHooks::ShouldApplyPersona(uint64_t aBrowsingContextId) {
++  if (!PollutionNativeHooksActive()) {
+     return false;
+   }
+-  if (Preferences::GetBool("darkstr.nativeCompatible", false)) {
++  // strictFirstDoc default true: first top document stays native.
++  if (Preferences::GetBool("darkstr.strictFirstDoc", true) &&
++      CurrentPhase(aBrowsingContextId) == NavPhase::FirstDocument) {
+     return false;
+   }
+-  nsAutoCString mode;
+-  Preferences::GetCString("darkstr.mode", mode);
+-  return mode.EqualsLiteral("pollution");
++  return true;
+ }
+ 
+-DarkstrDocShellHooks::NavPhase DarkstrDocShellHooks::PhaseFromChromeMirror() {
+-  // Honest stub: chrome DarkstrNativePersona counter remains SoT (0003).
++void DarkstrDocShellHooks::NoteTopLevelDocumentLoadAttempt(
++    uint64_t aBrowsingContextId) {
+   if (!PollutionNativeHooksActive()) {
+-    return NavPhase::SubsequentNav;
++    return;
+   }
+-  nsAutoCString phase;
+-  if (NS_SUCCEEDED(
+-          Preferences::GetCString("darkstr.persona.docShellPhase", phase)) &&
+-      phase.EqualsLiteral("first_document")) {
+-    return NavPhase::FirstDocument;
++  if (aBrowsingContextId == 0) {
++    return;
+   }
+-  return NavPhase::SubsequentNav;
++  // Top-level document LoadURI note (TYPE_DOCUMENT analogue: DocShell
++  // LoadURI on IsTopContent is document navigation).
++  uint32_t n = 0;
++  (void)TopLoads().Get(aBrowsingContextId, &n);
++  n += 1;
++  TopLoads().InsertOrUpdate(aBrowsingContextId, n);
++  SyncPhaseMirror(n);
+ }
+ 
+ void DarkstrDocShellHooks::NoteTopLevelDocumentLoadAttempt() {
+-  // No-op behavioral stub: chrome counter + mirror remain SoT.
++  // Legacy no-arg call-in — no BC id; cannot increment SoT map.
++  // Prefer NoteTopLevelDocumentLoadAttempt(bcId) from nsDocShell.
++  if (!PollutionNativeHooksActive()) {
++    return;
++  }
+   (void)PhaseFromChromeMirror();
+ }
+ 
+diff -ruN before/docshell/base/DarkstrDocShellHooks.h after/docshell/base/DarkstrDocShellHooks.h
+--- a/docshell/base/DarkstrDocShellHooks.h
++++ b/docshell/base/DarkstrDocShellHooks.h
+@@ -5,22 +5,25 @@
+  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+ 
+ /**
+- * darkstr M3-CPP-NAV — honest DocShell stub (train-pinned LibreWolf/Firefox 155.0.1-1).
++ * darkstr M3-CPP-DOCSHELL — C++ first vs subsequent SoT
++ * (train-pinned LibreWolf/Firefox 155.0.1-1).
+  *
+  * Brand: darkstr — not official LibreWolf. Pollution browser, not Cloudflare bypass.
+  *
+- * Honesty: first vs subsequent top-level doc counting remains chrome-JS SoT
+- * (`DarkstrNativePersona` / 0003). This stub only:
+- *   - shares the pollution+hooks gate
+- *   - reads chrome-mirrored `darkstr.persona.docShellPhase`
+- *   - provides a no-op NoteTopLevelDocumentLoadAttempt call-in site
++ * SoT: per-BrowsingContext top-level document LoadURI counter in this file.
++ * Gate: pollution + darkstr.nativePersonaHooks (default false) + !nativeCompatible.
++ * Exposes NavPhase / ShouldApplyPersona for hooks; writes
++ * `darkstr.persona.docShellPhase` mirror for chrome/nsHttp coherence.
+  *
+- * Full C++ load-counter port is deferred (smallest compiling surface first).
++ * Chrome Map (0003) is fallback when hooks idle or mirror unset — not SoT
++ * when nativePersonaHooks is on.
+  */
+ 
+ #ifndef mozilla_DarkstrDocShellHooks_h
+ #define mozilla_DarkstrDocShellHooks_h
+ 
++#include <stdint.h>
++
+ namespace mozilla {
+ 
+ class DarkstrDocShellHooks final {
+@@ -29,55 +32,19 @@
+ 
+   static bool PollutionNativeHooksActive();
+ 
+-  /** Chrome-mirrored phase; default SubsequentNav when idle / unset. */
+-  static NavPhase PhaseFromChromeMirror();
+-
+-  /** Call-in from nsDocShell — currently a no-op (chrome SoT). */
+-  static void NoteTopLevelDocumentLoadAttempt();
+-
+- private:
+-  DarkstrDocShellHooks() = delete;
+-  ~DarkstrDocShellHooks() = delete;
+-};
+-
+-}  // namespace mozilla
+-
+-#endif  // mozilla_DarkstrDocShellHooks_h
+-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+-/* vim: set sw=2 ts=8 et tw=80 : */
+-/* This Source Code Form is subject to the terms of the Mozilla Public
+- * License, v. 2.0. If a copy of the MPL was not distributed with this
+- * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
++  /** C++ SoT phase for a BrowsingContext id. */
++  static NavPhase CurrentPhase(uint64_t aBrowsingContextId);
+ 
+-/**
+- * darkstr M3-CPP-NAV — honest DocShell stub (train-pinned LibreWolf/Firefox 155.0.1-1).
+- *
+- * Brand: darkstr — not official LibreWolf. Pollution browser, not Cloudflare bypass.
+- *
+- * Honesty: first vs subsequent top-level doc counting remains chrome-JS SoT
+- * (`DarkstrNativePersona` / 0003). This stub only:
+- *   - shares the pollution+hooks gate
+- *   - reads chrome-mirrored `darkstr.persona.docShellPhase`
+- *   - provides a no-op NoteTopLevelDocumentLoadAttempt call-in site
+- *
+- * Full C++ load-counter port is deferred (smallest compiling surface first).
+- */
+-
+-#ifndef mozilla_DarkstrDocShellHooks_h
+-#define mozilla_DarkstrDocShellHooks_h
+-
+-namespace mozilla {
+-
+-class DarkstrDocShellHooks final {
+- public:
+-  enum class NavPhase { FirstDocument, SubsequentNav };
++  /** Pref mirror fallback (compat); prefer CurrentPhase(bcId). */
++  static NavPhase PhaseFromChromeMirror();
+ 
+-  static bool PollutionNativeHooksActive();
++  /** true when persona surfaces should apply (respects strictFirstDoc). */
++  static bool ShouldApplyPersona(uint64_t aBrowsingContextId);
+ 
+-  /** Chrome-mirrored phase; default SubsequentNav when idle / unset. */
+-  static NavPhase PhaseFromChromeMirror();
++  /** Call-in from nsDocShell::LoadURI for top-content document navigations. */
++  static void NoteTopLevelDocumentLoadAttempt(uint64_t aBrowsingContextId);
+ 
+-  /** Call-in from nsDocShell — currently a no-op (chrome SoT). */
++  /** Legacy no-arg overload — does not increment (prefer bcId form). */
+   static void NoteTopLevelDocumentLoadAttempt();
+ 
+  private:
+diff -ruN before/docshell/base/nsDocShell.cpp after/docshell/base/nsDocShell.cpp
+--- a/docshell/base/nsDocShell.cpp
++++ b/docshell/base/nsDocShell.cpp
+@@ -6,9 +6,11 @@
+ nsresult nsDocShell::LoadURI(nsDocShellLoadState* aLoadState,
+                              bool aSetNavigating,
+                              bool aContinueHandlingSubframeHistory) {
+-  // darkstr M3-CPP-NAV: honest DocShell stub (chrome counter remains SoT).
++  // darkstr M3-CPP-DOCSHELL: C++ first/subsequent SoT on top-level document
++  // LoadURI (TYPE_DOCUMENT analogue — DocShell navigations are documents).
+   if (mBrowsingContext && mBrowsingContext->IsTopContent()) {
+-    DarkstrDocShellHooks::NoteTopLevelDocumentLoadAttempt();
++    DarkstrDocShellHooks::NoteTopLevelDocumentLoadAttempt(
++        mBrowsingContext->Id());
+   }
+ 
+   MOZ_ASSERT(aLoadState, "Must have a valid load state!");

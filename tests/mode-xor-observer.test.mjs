@@ -32,12 +32,13 @@ test("0002 ModeXor observes CB category + dual idle under Pollution", () => {
   assert.match(patch, /not official LibreWolf|not Cloudflare/i);
 });
 
-test("PROOF-PIN M3-CPP honesty names landed 0005+0006 (not chrome-JS-only)", () => {
+test("PROOF-PIN M3-CPP honesty names landed 0005+0006+0007 (C++ DocShell SoT)", () => {
   const pin = readFileSync(join(root, "docs/PROOF-PIN.md"), "utf8");
   assert.match(pin, /0005-darkstr-cpp-native-hooks\.patch/);
   assert.match(pin, /0006-darkstr-cpp-navigator-docshell\.patch/);
-  assert.match(pin, /DocShell.*chrome counter SoT|chrome counter SoT.*DocShell/s);
-  // Stale chrome-JS-only claim above M3-CPP-NAV must be gone
+  assert.match(pin, /0007-darkstr-cpp-docshell-nav-sot\.patch/);
+  // DocShell counter SoT is C++ when hooks on; chrome Map is fallback
+  assert.match(pin, /DocShell counter SoT is C\+\+|C\+\+ SoT.*DocShell|DocShell first vs subsequent \*\*C\+\+ SoT\*\*/s);
   assert.doesNotMatch(
     pin,
     /Navigator\/DocShell remain chrome-JS \(`0003`\)/

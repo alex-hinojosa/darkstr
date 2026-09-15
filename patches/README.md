@@ -12,8 +12,10 @@ These stubs document *how* a real bsys6 / LibreWolf recipe would layer darkstr p
 | [`0003-darkstr-native-persona-hooks.patch`](0003-darkstr-native-persona-hooks.patch) | **Real** train-pinned chrome JS native persona hooks (155.0.1-1 / `DarkstrNativePersona*.sys.mjs`) |
 | [`stubs/0003-darkstr-hook-sites.patch.stub`](stubs/0003-darkstr-hook-sites.patch.stub) | Pointer only — superseded by real `0003-…patch` |
 | [`0005-darkstr-cpp-native-hooks.patch`](0005-darkstr-cpp-native-hooks.patch) | **Real** train-pinned C++ nsHttp UA + CH REMOVE (155.0.1-1 / `DarkstrNsHttpHooks`) — Navigator/DocShell still chrome-JS |
-| [`0006-darkstr-cpp-navigator-docshell.patch`](0006-darkstr-cpp-navigator-docshell.patch) | **Real** train-pinned C++ Navigator overrides + honest DocShell stub (155.0.1-1) — CH stays in 0005; DocShell counter chrome SoT |
+| [`0006-darkstr-cpp-navigator-docshell.patch`](0006-darkstr-cpp-navigator-docshell.patch) | **Real** train-pinned C++ Navigator overrides + honest DocShell stub (155.0.1-1) — CH stays in 0005; DocShell stub superseded by 0007 SoT |
 | [`stubs/0006-darkstr-cpp-navigator-docshell.patch.stub`](stubs/0006-darkstr-cpp-navigator-docshell.patch.stub) | Pointer only — superseded by real `0006-…patch` |
+| [`0007-darkstr-cpp-docshell-nav-sot.patch`](0007-darkstr-cpp-docshell-nav-sot.patch) | **Real** train-pinned C++ DocShell first/subsequent SoT (155.0.1-1) — chrome Map fallback |
+| [`stubs/0007-darkstr-cpp-docshell-nav-sot.patch.stub`](stubs/0007-darkstr-cpp-docshell-nav-sot.patch.stub) | Pointer only — superseded by real `0007-…patch` |
 | [`stubs/0004-darkstr-chaff-depth.patch.stub`](stubs/0004-darkstr-chaff-depth.patch.stub) | M4: chaff scheduler + canvas/Audio/WebGL/worker depth notes (enums in Rust; still not a real patch) |
 | [`scripts/apply-darkstr-patches.sh`](scripts/apply-darkstr-patches.sh) | Example apply order for a real tree |
 
@@ -96,3 +98,13 @@ Real unified diff [`0006-darkstr-cpp-navigator-docshell.patch`](0006-darkstr-cpp
 - CH REMOVE unchanged in `0005`
 
 Rebuild: `./mach build dom/base docshell/base`. See `docs/M3-CPP-NAV-STATUS.md`.
+
+
+## M3-CPP-DOCSHELL first/subsequent SoT (2026-09-15)
+
+Real unified diff [`0007-darkstr-cpp-docshell-nav-sot.patch`](0007-darkstr-cpp-docshell-nav-sot.patch) against post-0006 155.0.1-1:
+
+- Replaces `DarkstrDocShellHooks` stub with per-BC LoadURI counter + `CurrentPhase` / `ShouldApplyPersona`
+- `nsDocShell::LoadURI` notes top-content navigations with `BrowsingContext::Id()`
+- Chrome prefers C++ `docShellPhase` mirror when hooks on
+- **Not** claimed: Rust FFI, Cloudflare/TLS/JA3, RFP metric patches, full parent/content IPC mirror

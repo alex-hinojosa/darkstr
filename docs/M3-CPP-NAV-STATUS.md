@@ -53,6 +53,10 @@ df -h .   # Atlas: never mv under /Volumes/Mesh
 bash docs/M3-CPP-NAV-MINI-VERIFY.sh
 ```
 
+## Supersession note
+
+DocShell **stub** SoT claim in this file is **superseded** by [`M3-CPP-DOCSHELL-STATUS.md`](M3-CPP-DOCSHELL-STATUS.md) / `patches/0007-darkstr-cpp-docshell-nav-sot.patch` (C++ counter is SoT when hooks on).
+
 ## Honesty / non-claims
 
 - **Does** ship a real unified diff vs post-0005 155.0.1 Navigator + DocShell stub + chrome mirrors; dry-run/apply verified on a pristine post-0005 slice of those files.

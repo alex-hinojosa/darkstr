@@ -1,6 +1,6 @@
 # Gecko / LibreWolf integration hooks (Phase 2 sketch)
 
-**Status:** Design pin for M1–M3 (+M3-CPP / M3-CPP-NAV). M2 XOR observer + **M3 live chrome native persona hooks** + **M3-CPP nsHttp C++** + **M3-CPP-NAV Navigator C++ + DocShell stub** landed — see [`M2-STATUS.md`](M2-STATUS.md), [`M3-STATUS.md`](M3-STATUS.md), [`M3-CPP-STATUS.md`](M3-CPP-STATUS.md), [`M3-CPP-NAV-STATUS.md`](M3-CPP-NAV-STATUS.md). **No** Mozilla/LibreWolf source is vendored in this repo. Rust FFI still not claimed; DocShell first/subsequent chrome counter remains SoT.  
+**Status:** Design pin for M1–M3 (+M3-CPP / M3-CPP-NAV / M3-CPP-DOCSHELL). M2 XOR observer + **M3 live chrome native persona hooks** + **M3-CPP nsHttp C++** + **M3-CPP-NAV Navigator C++** + **M3-CPP-DOCSHELL C++ first/subsequent SoT** landed — see [`M2-STATUS.md`](M2-STATUS.md), [`M3-STATUS.md`](M3-STATUS.md), [`M3-CPP-STATUS.md`](M3-CPP-STATUS.md), [`M3-CPP-NAV-STATUS.md`](M3-CPP-NAV-STATUS.md), [`M3-CPP-DOCSHELL-STATUS.md`](M3-CPP-DOCSHELL-STATUS.md). **No** Mozilla/LibreWolf source is vendored in this repo. Rust FFI still not claimed; DocShell first/subsequent **C++ counter is SoT** when `nativePersonaHooks` (chrome Map = fallback).  
 **Brand:** darkstr — not official LibreWolf. Pollution browser, not Cloudflare bypass.  
 **License note:** Our crates = GPL-3.0-only. Upstream Gecko patches remain MPL-2.0; counsel before binary distribution.
 
@@ -70,7 +70,7 @@ Real train-pinned patch: [`../patches/0002-darkstr-mode-xor-rfp.patch`](../patch
 
 Hooks below are **call sites**, not “rewrite Gecko in Rust.” Thin C++/XPCOM or Rust-in-Gecko glue calls into GPL crates; keep patch surface small.
 
-**M3 public-repo status:** Rust enums/APIs on main (#16) + chrome `0003` + C++ nsHttp `0005` + C++ Navigator/DocShell stub [`../patches/0006-darkstr-cpp-navigator-docshell.patch`](../patches/0006-darkstr-cpp-navigator-docshell.patch). Rust FFI **not** claimed. DocShell load-counter SoT remains chrome. See [`M3-STATUS.md`](M3-STATUS.md) / [`M3-CPP-STATUS.md`](M3-CPP-STATUS.md) / [`M3-CPP-NAV-STATUS.md`](M3-CPP-NAV-STATUS.md).
+**M3 public-repo status:** Rust enums/APIs on main (#16) + chrome `0003` + C++ nsHttp `0005` + C++ Navigator [`../patches/0006-darkstr-cpp-navigator-docshell.patch`](../patches/0006-darkstr-cpp-navigator-docshell.patch) + C++ DocShell SoT [`../patches/0007-darkstr-cpp-docshell-nav-sot.patch`](../patches/0007-darkstr-cpp-docshell-nav-sot.patch). Rust FFI **not** claimed. DocShell load-counter **C++ SoT** when hooks on. See [`M3-STATUS.md`](M3-STATUS.md) / [`M3-CPP-STATUS.md`](M3-CPP-STATUS.md) / [`M3-CPP-NAV-STATUS.md`](M3-CPP-NAV-STATUS.md) / [`M3-CPP-DOCSHELL-STATUS.md`](M3-CPP-DOCSHELL-STATUS.md).
 
 Rust labels (no FFI yet):
 
@@ -124,10 +124,10 @@ Does **not** ship as user-facing UI. Does **not** reimplement CreepJS.
 
 | Surface | Gecko area | When | Status |
 |---------|------------|------|--------|
-| First document vs next nav | Top-level document load count (chrome) + C++ stub | M3 / M3-CPP-NAV | Live cheap counter in `0003` remains SoT; C++ `0006` `DarkstrDocShellHooks` reads mirror pref only |
+| First document vs next nav | Top-level document LoadURI count (C++) + chrome fallback | M3 / M3-CPP-NAV / M3-CPP-DOCSHELL | **C++ SoT** in `0007` `DarkstrDocShellHooks` when hooks on; chrome Map/`0003` fallback; `0006` stub superseded |
 | Pref | `darkstr.strictFirstDoc` | M1+ chrome defaults | Semantics unchanged from Proof pin |
 
-M4 extends naming/notes for **strict-next-nav** (SubsequentNav arm); no new live C++. Until live DocShell hooks land and `darkstr.nativePersonaHooks` is flipped on a fork build, WebExt tab-scoped DNR + MAIN inject remain the Phase 1 path (`WebExtMainInjectPolicy::AllowFallback`).
+M4 extends naming/notes for **strict-next-nav** (SubsequentNav arm). Until `darkstr.nativePersonaHooks` is flipped on a fork build, WebExt tab-scoped DNR + MAIN inject remain the Phase 1 path (`WebExtMainInjectPolicy::AllowFallback`).
 
 ### 2.5 Canvas / WebGL / Audio + workers (M4 depth kickoff)
 
@@ -177,7 +177,7 @@ M4 API: `duppel_chaff::ChaffSchedulerPlan` / `duppel_bridge::read_depth_seeds` /
 | In `alex-hinojosa/darkstr` (public) | Private fork / Builder machine |
 |-------------------------------------|--------------------------------|
 | `docs/GECKO-HOOKS.md` (this file) | Full Firefox/LibreWolf source tree |
-| `patches/` stubs + **real** `0002`/`0003`/`0005`/`0006` + apply README | Apply / rebuild on private 155.0.1-1 tree (`mach build` touched dirs) |
+| `patches/` stubs + **real** `0002`/`0003`/`0005`/`0006`/`0007` + apply README | Apply / rebuild on private 155.0.1-1 tree (`mach build` touched dirs) |
 | `docs/darkstr.cfg.example` | Shipped `darkstr.cfg` in product |
 | `crates/duppel-*` + `duppel-bridge` | `moz.build` / workspace link into Gecko |
 | Phase 1 `extension/` companion | Branding, about:, icons |

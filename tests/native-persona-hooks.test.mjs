@@ -108,3 +108,29 @@ test("apply script has 0006 content markers", () => {
   assert.match(sh, /DarkstrNavigatorHooks\.cpp/);
   assert.match(sh, /DarkstrDocShellHooks\.cpp/);
 });
+
+test("0007 C++ DocShell SoT patch is a real unified diff", () => {
+  const patch = readFileSync(
+    join(root, "patches/0007-darkstr-cpp-docshell-nav-sot.patch"),
+    "utf8"
+  );
+  assert.match(patch, /DarkstrDocShellHooks/);
+  assert.match(patch, /ShouldApplyPersona/);
+  assert.match(patch, /CurrentPhase/);
+  assert.match(patch, /mBrowsingContext->Id\(\)/);
+  assert.match(patch, /M3-CPP-DOCSHELL/);
+  assert.match(patch, /Prefer C\+\+ SoT mirror/);
+  assert.doesNotMatch(patch, /nsHttpHandler/);
+  assert.doesNotMatch(patch, /^# STUB/m);
+  assert.ok(patch.length > 3000, "0007 patch should be substantial");
+});
+
+test("apply script has 0007 content markers", () => {
+  const sh = readFileSync(
+    join(root, "patches/scripts/apply-darkstr-patches.sh"),
+    "utf8"
+  );
+  assert.match(sh, /0007-darkstr-cpp-docshell-nav-sot\.patch/);
+  assert.match(sh, /ShouldApplyPersona/);
+  assert.match(sh, /M3-CPP-DOCSHELL/);
+});
