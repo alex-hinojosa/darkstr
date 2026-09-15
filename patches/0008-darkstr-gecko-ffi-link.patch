@@ -1,0 +1,1548 @@
+# darkstr M-FFI-0008 — train-pinned live Gecko FFI link (Approach B: cdylib + chrome ctypes)
+# Train: Firefox FIREFOX_155_0_1_RELEASE / LibreWolf 155.0.1-1
+# Brand: darkstr — not official LibreWolf. No Cloudflare/TLS/JA3 claims.
+# Prerequisite: M3 chrome 0003 (+0005/0006/0007 mirrors OK). Do NOT flip nativePersonaHooks default.
+# Approach: B — vendored third_party/darkstr crates → release cdylib → DarkstrFfi.sys.mjs ctypes.
+#   A (gkrust path-dep) deferred: Cargo.lock update not exercised on Mini this pin.
+# Apply: patch -d "$DARKSTR_GECKO_ROOT" -p1 < patches/0008-darkstr-gecko-ffi-link.patch
+# Build FFI: $DARKSTR_GECKO_ROOT/third_party/darkstr/build-and-install-ffi.sh --prefix "$objdir/dist/bin"
+# Rebuild chrome: ./mach build browser/components  (or full ./mach build)
+# Honesty: no headed Proof XOR / merge-ready claim until Builder pings Proof.
+#
+diff -ruN a/browser/components/DarkstrFfi.sys.mjs gecko-b/browser/components/DarkstrFfi.sys.mjs
+--- a/browser/components/DarkstrFfi.sys.mjs	1970-01-01 00:00:00.000000000 +0000
++++ b/browser/components/DarkstrFfi.sys.mjs	2026-09-15 23:18:48.456734905 +0000
+@@ -0,0 +1,159 @@
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
++
++/**
++ * darkstr M-FFI-0008 — privileged chrome loader for duppel-ffi C ABI (Approach B).
++ *
++ * Train: LibreWolf / Firefox 155.0.1-1. Brand: darkstr — not official LibreWolf.
++ * Loads libduppel_ffi.{dylib,so,dll} from the application directory (dist/bin)
++ * via js-ctypes and calls darkstr_ffi_persona_snapshot_json.
++ *
++ * Honesty: fails soft when the dylib is missing or symbols unavailable;
++ * callers must keep JS seed fallback. nativePersonaHooks stays default-off.
++ * No Cloudflare/TLS/JA3/RFP metric customization.
++ */
++
++const { ctypes } = ChromeUtils.importESModule(
++  "resource://gre/modules/ctypes.sys.mjs"
++);
++
++let gLib = null;
++let gAbiVersion = null;
++let gSnapshot = null;
++let gFree = null;
++let gLoadAttempted = false;
++let gLoadError = null;
++
++function libraryFileName() {
++  const abi = ctypes.libraryName("duppel_ffi");
++  // ctypes.libraryName("duppel_ffi") → libduppel_ffi.dylib / .so / duppel_ffi.dll
++  return abi;
++}
++
++function candidatePaths() {
++  const name = libraryFileName();
++  const paths = [];
++  try {
++    const cur = Services.dirsvc.get("CurProcD", Ci.nsIFile);
++    paths.push(PathUtils.join(cur.path, name));
++  } catch (_e) {}
++  try {
++    const gre = Services.dirsvc.get("GreD", Ci.nsIFile);
++    paths.push(PathUtils.join(gre.path, name));
++  } catch (_e) {}
++  return paths;
++}
++
++function ensureLoaded() {
++  if (gLib) {
++    return true;
++  }
++  if (gLoadAttempted) {
++    return false;
++  }
++  gLoadAttempted = true;
++  for (const path of candidatePaths()) {
++    try {
++      gLib = ctypes.open(path);
++      gAbiVersion = gLib.declare(
++        "darkstr_ffi_abi_version",
++        ctypes.default_abi,
++        ctypes.uint32_t
++      );
++      gSnapshot = gLib.declare(
++        "darkstr_ffi_persona_snapshot_json",
++        ctypes.default_abi,
++        ctypes.char.ptr,
++        ctypes.uint32_t,
++        ctypes.char.ptr
++      );
++      gFree = gLib.declare(
++        "darkstr_ffi_string_free",
++        ctypes.default_abi,
++        ctypes.void_t,
++        ctypes.char.ptr
++      );
++      const ver = gAbiVersion();
++      if (ver !== 1) {
++        gLoadError = `unexpected ABI version ${ver}`;
++        try {
++          gLib.close();
++        } catch (_e) {}
++        gLib = null;
++        continue;
++      }
++      gLoadError = null;
++      return true;
++    } catch (e) {
++      gLoadError = String(e);
++      gLib = null;
++      gAbiVersion = gSnapshot = gFree = null;
++    }
++  }
++  return false;
++}
++
++function parseSnapshotJson(json) {
++  const parsed = JSON.parse(json);
++  if (!parsed || typeof parsed.userAgent !== "string") {
++    return null;
++  }
++  return {
++    userAgent: parsed.userAgent,
++    platform: parsed.platform || "MacIntel",
++    hardwareConcurrency: parsed.hardwareConcurrency || 8,
++    deviceMemory: parsed.deviceMemory || 8,
++    languages: Array.isArray(parsed.languages)
++      ? parsed.languages
++      : ["en-US", "en"],
++    timezone: parsed.timezone || undefined,
++  };
++}
++
++/**
++ * @param {number} seed unsigned seed
++ * @param {string} os "macos"|"linux"|"windows"
++ * @returns {object|null}
++ */
++export function personaSnapshotFromSeed(seed, os = "macos") {
++  if (!ensureLoaded()) {
++    return null;
++  }
++  const osC = ctypes.char.array()(String(os || "macos"));
++  const ptr = gSnapshot(seed >>> 0, osC);
++  if (ptr.isNull()) {
++    return null;
++  }
++  try {
++    const json = ptr.readString();
++    return parseSnapshotJson(json);
++  } catch (_e) {
++    return null;
++  } finally {
++    try {
++      gFree(ptr);
++    } catch (_e) {}
++  }
++}
++
++export function abiVersion() {
++  if (!ensureLoaded()) {
++    return 0;
++  }
++  try {
++    return gAbiVersion();
++  } catch (_e) {
++    return 0;
++  }
++}
++
++export function lastLoadError() {
++  return gLoadError;
++}
++
++export var DarkstrFfi = {
++  personaSnapshotFromSeed,
++  abiVersion,
++  lastLoadError,
++};
+diff -ruN a/browser/components/DarkstrNativePersona.sys.mjs gecko-b/browser/components/DarkstrNativePersona.sys.mjs
+--- a/browser/components/DarkstrNativePersona.sys.mjs	2026-09-15 23:18:48.452734909 +0000
++++ b/browser/components/DarkstrNativePersona.sys.mjs	2026-09-15 23:18:48.456734905 +0000
+@@ -8,7 +8,7 @@
+  * Train pin: Firefox / LibreWolf 155.0.1-1 (FIREFOX_155_0_1_RELEASE).
+  * Brand: darkstr — not official LibreWolf. Pollution browser, not Cloudflare bypass.
+  *
+- * Mirrors public control plane (no Rust FFI in this drop):
++ * Mirrors public control plane; 0008 prefers duppel-ffi snapshot when seed set:
+  *   duppel_persona::NativePersonaPlan / DocShellNavPhase / ClientHintsPolicy::Remove
+  *   duppel_bridge::read_cached_persona / NsHttpAction / NavigatorField
+  *
+@@ -352,7 +352,7 @@
+       }
+     } catch (_e) {}
+ 
+-    // Seed fallback when snapshot pref empty but pollution+hooks want a persona.
++    // Seed path when snapshot pref empty: prefer Rust FFI SoT (0008), else JS mulberry.
+     let seed = 0;
+     try {
+       seed = Services.prefs.getIntPref(SEED_PREF, 0);
+@@ -362,9 +362,30 @@
+     if (!seed) {
+       return null;
+     }
++    const ffiSnap = this._readSnapshotFromFfi(seed >>> 0);
++    if (ffiSnap) {
++      return ffiSnap;
++    }
+     return this._generateFromSeed(seed >>> 0);
+   },
+ 
++  /**
++   * Approach B: ctypes → libduppel_ffi in CurProcD/GreD (darkstr_ffi_* ABI).
++   * Soft-fail when dylib missing so JS seed fallback remains.
++   */
++  _readSnapshotFromFfi(seed) {
++    try {
++      const { DarkstrFfi } = ChromeUtils.importESModule(
++        "moz-src:///browser/components/DarkstrFfi.sys.mjs"
++      );
++      const snap = DarkstrFfi.personaSnapshotFromSeed(seed, detectHostOs());
++      if (snap && typeof snap.userAgent === "string") {
++        return snap;
++      }
++    } catch (_e) {}
++    return null;
++  },
++
+   _generateFromSeed(seed) {
+     const rng = mulberry32(seed);
+     const os = detectHostOs();
+diff -ruN a/browser/components/moz.build gecko-b/browser/components/moz.build
+--- a/browser/components/moz.build	2026-09-15 23:18:48.452734909 +0000
++++ b/browser/components/moz.build	2026-09-15 23:18:48.456734905 +0000
+@@ -3,6 +3,7 @@
+ # Synthetic 155.0.1-1 context after 0003 (MOZ_SRC_FILES only — train pin).
+ 
+ MOZ_SRC_FILES += [
++    "DarkstrFfi.sys.mjs",
+     "DarkstrModeXor.sys.mjs",
+     "DarkstrNativePersona.sys.mjs",
+     "DarkstrNativePersonaChild.sys.mjs",
+diff -ruN a/third_party/darkstr/Cargo.toml gecko-b/third_party/darkstr/Cargo.toml
+--- a/third_party/darkstr/Cargo.toml	1970-01-01 00:00:00.000000000 +0000
++++ b/third_party/darkstr/Cargo.toml	2026-09-15 23:18:48.456734905 +0000
+@@ -0,0 +1,8 @@
++# darkstr third_party workspace — vendored into LibreWolf 155.0.1-1 by patch 0008.
++# Brand: darkstr — not official LibreWolf. Approach B: cdylib for chrome ctypes.
++[workspace]
++resolver = "2"
++members = [
++    "duppel-persona",
++    "duppel-ffi",
++]
+diff -ruN a/third_party/darkstr/README.md gecko-b/third_party/darkstr/README.md
+--- a/third_party/darkstr/README.md	1970-01-01 00:00:00.000000000 +0000
++++ b/third_party/darkstr/README.md	2026-09-15 23:18:48.456734905 +0000
+@@ -0,0 +1,23 @@
++# third_party/darkstr — Approach B FFI (patch 0008)
++
++Vendored, flattened `duppel-persona` + `duppel-ffi` for LibreWolf / Firefox **155.0.1-1**.
++
++## Why not Approach A (gkrust path-dep)?
++
++Path-dep into `toolkit/library/rust/shared` requires a live `cargo update -p gkrust-shared`
++against the train `Cargo.lock`. This pin ships **Approach B** (release cdylib + chrome
++ctypes) so symbols are reachable without rewriting the Gecko lockfile. Revisit A when
++Mini `Cargo.lock` update is proven green.
++
++## Build / install
++
++```bash
++source ~/src/darkstr-gecko/DARKSTR_GECKO_ROOT.env
++# after ./mach build at least once (dist/bin exists), or pass --prefix:
++./third_party/darkstr/build-and-install-ffi.sh --prefix "$objdir/dist/bin"
++```
++
++Chrome `DarkstrFfi.sys.mjs` dlopens `libduppel_ffi` from CurProcD/GreD and calls
++`darkstr_ffi_persona_snapshot_json` / `darkstr_ffi_abi_version` / `darkstr_ffi_string_free`.
++
++Brand: darkstr — not official LibreWolf.
+diff -ruN a/third_party/darkstr/build-and-install-ffi.sh gecko-b/third_party/darkstr/build-and-install-ffi.sh
+--- a/third_party/darkstr/build-and-install-ffi.sh	1970-01-01 00:00:00.000000000 +0000
++++ b/third_party/darkstr/build-and-install-ffi.sh	2026-09-15 23:18:48.456734905 +0000
+@@ -0,0 +1,65 @@
++#!/usr/bin/env bash
++# build-and-install-ffi.sh — Approach B cdylib for darkstr 0008 (LibreWolf 155.0.1-1).
++# Builds libduppel_ffi and installs into MOZ_DIST/bin (or --prefix).
++# Brand: darkstr — not official LibreWolf.
++set -euo pipefail
++HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
++PREFIX=""
++while [[ $# -gt 0 ]]; do
++  case "$1" in
++    --prefix) PREFIX="${2:-}"; shift 2 ;;
++    -h|--help)
++      echo "Usage: $0 [--prefix DIR]"; exit 0 ;;
++    *) echo "Unknown: $1" >&2; exit 2 ;;
++  esac
++done
++
++if [[ -z "${PREFIX}" ]]; then
++  if [[ -n "${MOZ_DIST:-}" ]]; then
++    PREFIX="${MOZ_DIST}/bin"
++  elif [[ -n "${DARKSTR_GECKO_OBJDIR:-}" ]]; then
++    PREFIX="${DARKSTR_GECKO_OBJDIR}/dist/bin"
++  else
++    # Best-effort: sibling obj-* under gecko root
++    if [[ -n "${DARKSTR_GECKO_ROOT:-}" ]]; then
++      cand="$(ls -d "${DARKSTR_GECKO_ROOT}"/obj-*/dist/bin 2>/dev/null | head -n1 || true)"
++      PREFIX="${cand}"
++    fi
++  fi
++fi
++
++echo "darkstr-ffi: cargo build --release -p duppel-ffi (in ${HERE})"
++cargo build --release --manifest-path "${HERE}/Cargo.toml" -p duppel-ffi
++
++shopt -s nullglob
++arts=( "${HERE}/target/release/libduppel_ffi.dylib" \
++       "${HERE}/target/release/libduppel_ffi.so" \
++       "${HERE}/target/release/duppel_ffi.dll" \
++       "${HERE}/target/release/libduppel_ffi.dll" )
++ART=""
++for f in "${arts[@]}"; do
++  if [[ -f "$f" ]]; then ART="$f"; break; fi
++done
++if [[ -z "${ART}" ]]; then
++  echo "darkstr-ffi: no cdylib artifact found under ${HERE}/target/release" >&2
++  exit 1
++fi
++echo "darkstr-ffi: built ${ART}"
++
++if [[ -n "${PREFIX}" && -d "${PREFIX}" ]]; then
++  cp "${ART}" "${PREFIX}/"
++  echo "darkstr-ffi: installed $(basename "${ART}") -> ${PREFIX}/"
++else
++  echo "darkstr-ffi: PREFIX unset/missing — artifact left at ${ART}"
++  echo "  Re-run with --prefix \"\$objdir/dist/bin\" or export MOZ_DIST / DARKSTR_GECKO_OBJDIR."
++fi
++
++# Smoke: nm/otool/symbols when tools exist
++if command -v nm >/dev/null 2>&1; then
++  echo "darkstr-ffi: nm symbols (filtered):"
++  nm -gU "${ART}" 2>/dev/null | grep -E 'darkstr_ffi_' || nm -g "${ART}" 2>/dev/null | grep -E 'darkstr_ffi_' || true
++fi
++if command -v otool >/dev/null 2>&1; then
++  otool -L "${ART}" 2>/dev/null | head -n 5 || true
++fi
++echo "darkstr-ffi: EXIT=0"
+diff -ruN a/third_party/darkstr/duppel-ffi/Cargo.toml gecko-b/third_party/darkstr/duppel-ffi/Cargo.toml
+--- a/third_party/darkstr/duppel-ffi/Cargo.toml	1970-01-01 00:00:00.000000000 +0000
++++ b/third_party/darkstr/duppel-ffi/Cargo.toml	2026-09-15 23:18:48.456734905 +0000
+@@ -0,0 +1,13 @@
++[package]
++name = "duppel-ffi"
++version = "0.0.0"
++edition = "2021"
++license = "GPL-3.0-only"
++publish = false
++
++[lib]
++path = "src/lib.rs"
++crate-type = ["rlib", "staticlib", "cdylib"]
++
++[dependencies]
++duppel-persona = { path = "../duppel-persona" }
+diff -ruN a/third_party/darkstr/duppel-ffi/darkstr_ffi.h gecko-b/third_party/darkstr/duppel-ffi/darkstr_ffi.h
+--- a/third_party/darkstr/duppel-ffi/darkstr_ffi.h	1970-01-01 00:00:00.000000000 +0000
++++ b/third_party/darkstr/duppel-ffi/darkstr_ffi.h	2026-09-15 23:18:48.456734905 +0000
+@@ -0,0 +1,17 @@
++/* darkstr_ffi.h — C ABI sketch for Gecko link-in (Phase 2).
++ * Not official LibreWolf. Shipped beside the binary via third_party/darkstr build-and-install-ffi.sh (Approach B).
++ */
++#pragma once
++#include <stdint.h>
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++uint32_t darkstr_ffi_abi_version(void);
++char *darkstr_ffi_persona_snapshot_json(uint32_t seed, const char *os);
++void darkstr_ffi_string_free(char *s);
++
++#ifdef __cplusplus
++}
++#endif
+diff -ruN a/third_party/darkstr/duppel-ffi/src/lib.rs gecko-b/third_party/darkstr/duppel-ffi/src/lib.rs
+--- a/third_party/darkstr/duppel-ffi/src/lib.rs	1970-01-01 00:00:00.000000000 +0000
++++ b/third_party/darkstr/duppel-ffi/src/lib.rs	2026-09-15 23:09:19.433046052 +0000
+@@ -0,0 +1,148 @@
++//! `duppel-ffi` — **reviewed** Gecko FFI boundary for darkstr.
++//!
++//! This is the **only** crate allowed to use `unsafe`. Control-plane crates
++//! (`duppel-persona`, `duppel-bridge`, …) stay `#![forbid(unsafe_code)]`.
++//!
++//! ## Honesty (Proof pin)
++//! - Ships a stable C ABI + header sketch for future `moz.build` link-in.
++//! - Does **not** claim live Gecko/`mach` linkage, XPCOM, or chrome calling this yet.
++//! - Snapshot JSON shape matches `darkstr.persona.snapshot` / `print_persona_snapshot`.
++//! - No Cloudflare/TLS/JA3, no RFP metric customization, hooks stay default-off upstream.
++//!
++//! License: GPL-3.0-only. Brand: darkstr — not official LibreWolf.
++
++use duppel_persona::{generate_persona, Engine, HostOs, PersonaSeed};
++use std::ffi::{CStr, CString};
++use std::os::raw::c_char;
++use std::ptr;
++
++/// Crate API version (control-plane + ABI sketch).
++pub const VERSION: &str = "0.1.0-phase2-ffi-boundary";
++
++/// ABI version bump when exported symbols / JSON shape change.
++pub const ABI_VERSION: u32 = 1;
++
++#[repr(C)]
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++pub enum DarkstrHostOs {
++    Macos = 0,
++    Linux = 1,
++    Windows = 2,
++}
++
++impl DarkstrHostOs {
++    fn to_host(self) -> HostOs {
++        match self {
++            DarkstrHostOs::Macos => HostOs::Macos,
++            DarkstrHostOs::Linux => HostOs::Linux,
++            DarkstrHostOs::Windows => HostOs::Windows,
++        }
++    }
++
++    fn from_cstr(raw: *const c_char) -> Option<Self> {
++        if raw.is_null() {
++            return Some(DarkstrHostOs::Macos);
++        }
++        // SAFETY: caller must pass a valid NUL-terminated C string or null.
++        let s = unsafe { CStr::from_ptr(raw) }.to_str().ok()?;
++        Some(match s {
++            "linux" => DarkstrHostOs::Linux,
++            "windows" | "win" => DarkstrHostOs::Windows,
++            _ => DarkstrHostOs::Macos,
++        })
++    }
++}
++
++fn snapshot_json(seed: u32, os: HostOs) -> Option<CString> {
++    let p = generate_persona(PersonaSeed::new(seed), Engine::Firefox, os)?;
++    let langs = p
++        .languages
++        .iter()
++        .map(|s| format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\"")))
++        .collect::<Vec<_>>()
++        .join(",");
++    let json = format!(
++        "{{\"userAgent\":\"{}\",\"platform\":\"{}\",\"hardwareConcurrency\":{},\"deviceMemory\":{},\"languages\":[{}],\"timezone\":\"{}\"}}",
++        escape(p.user_agent),
++        escape(p.platform),
++        p.hardware_concurrency,
++        p.device_memory,
++        langs,
++        escape(p.timezone),
++    );
++    CString::new(json).ok()
++}
++
++fn escape(s: &str) -> String {
++    s.replace('\\', "\\\\").replace('"', "\\\"")
++}
++
++/// Returns ABI version (`1` for this pin).
++#[no_mangle]
++pub extern "C" fn darkstr_ffi_abi_version() -> u32 {
++    ABI_VERSION
++}
++
++/// Allocate a NUL-terminated snapshot JSON string for `seed` + host OS name.
++///
++/// `os` is `"macos"` | `"linux"` | `"windows"` (null ⇒ macos).
++/// Returns null on failure. Caller **must** free with [`darkstr_ffi_string_free`].
++#[no_mangle]
++pub extern "C" fn darkstr_ffi_persona_snapshot_json(
++    seed: u32,
++    os: *const c_char,
++) -> *mut c_char {
++    let Some(host) = DarkstrHostOs::from_cstr(os) else {
++        return ptr::null_mut();
++    };
++    match snapshot_json(seed, host.to_host()) {
++        Some(c) => c.into_raw(),
++        None => ptr::null_mut(),
++    }
++}
++
++/// Free a string returned by [`darkstr_ffi_persona_snapshot_json`].
++///
++/// # Safety
++/// `s` must be null or a pointer previously returned by this crate's allocators.
++#[no_mangle]
++pub unsafe extern "C" fn darkstr_ffi_string_free(s: *mut c_char) {
++    if s.is_null() {
++        return;
++    }
++    drop(unsafe { CString::from_raw(s) });
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use std::ffi::CString;
++
++    #[test]
++    fn abi_version_is_one() {
++        assert_eq!(darkstr_ffi_abi_version(), 1);
++    }
++
++    #[test]
++    fn snapshot_matches_persona_golden_seed_42_macos() {
++        let os = CString::new("macos").unwrap();
++        let ptr = darkstr_ffi_persona_snapshot_json(42, os.as_ptr());
++        assert!(!ptr.is_null());
++        let json = unsafe { CStr::from_ptr(ptr) }.to_str().unwrap().to_string();
++        unsafe { darkstr_ffi_string_free(ptr) };
++        assert!(json.contains("Firefox/140.0"));
++        assert!(json.contains("MacIntel"));
++        assert!(json.contains("\"hardwareConcurrency\":8"));
++        // Match fixtures/seed-goldens.json vector seed=42 macos
++        assert!(json.contains("Europe/Berlin"));
++    }
++
++    #[test]
++    fn null_os_defaults_macos() {
++        let ptr = darkstr_ffi_persona_snapshot_json(42, ptr::null());
++        assert!(!ptr.is_null());
++        let json = unsafe { CStr::from_ptr(ptr) }.to_str().unwrap().to_string();
++        unsafe { darkstr_ffi_string_free(ptr) };
++        assert!(json.contains("MacIntel"));
++    }
++}
+diff -ruN a/third_party/darkstr/duppel-persona/Cargo.toml gecko-b/third_party/darkstr/duppel-persona/Cargo.toml
+--- a/third_party/darkstr/duppel-persona/Cargo.toml	1970-01-01 00:00:00.000000000 +0000
++++ b/third_party/darkstr/duppel-persona/Cargo.toml	2026-09-15 23:18:48.456734905 +0000
+@@ -0,0 +1,10 @@
++[package]
++name = "duppel-persona"
++version = "0.0.0"
++edition = "2021"
++license = "GPL-3.0-only"
++publish = false
++
++[lib]
++path = "src/lib.rs"
++
+diff -ruN a/third_party/darkstr/duppel-persona/src/lib.rs gecko-b/third_party/darkstr/duppel-persona/src/lib.rs
+--- a/third_party/darkstr/duppel-persona/src/lib.rs	1970-01-01 00:00:00.000000000 +0000
++++ b/third_party/darkstr/duppel-persona/src/lib.rs	2026-09-14 20:00:57.349671940 +0000
+@@ -0,0 +1,995 @@
++//! `duppel-persona` — correlated fingerprint persona families for darkstr Pollution mode.
++//!
++//! Phase 2 control-plane API (no Gecko FFI yet). Source of truth for persona seed /
++//! snapshot types that the fork will consume behind chrome prefs.
++//!
++//! Prefs (chrome / about:config, mirrored from Phase 1 WebExt storage keys):
++//! - `darkstr.mode` = `homogeneous` | `pollution`
++//! - `darkstr.nativeCompatible` = bool
++//!
++//! License: GPL-3.0-only. Brand: darkstr — not official LibreWolf.
++
++#![forbid(unsafe_code)]
++
++/// Crate API version string (bumps when snapshot fields change).
++pub const VERSION: &str = "0.1.0-phase2-m4";
++
++/// Chrome / about:config pref names (stable Phase 1 → 2 Proof pin).
++pub mod prefs {
++    /// XOR mode: `"homogeneous"` | `"pollution"`.
++    pub const MODE: &str = "darkstr.mode";
++    /// Global Native-Compatible escape (bool). Independent of mode.
++    pub const NATIVE_COMPATIBLE: &str = "darkstr.nativeCompatible";
++    /// Per-site escape map (JSON object / profile file). Still WebExt-primary early.
++    pub const NATIVE_COMPAT_SITES: &str = "darkstr.nativeCompatSites";
++    /// Strict-first-document / next-nav coherence (bool, default true).
++    pub const STRICT_FIRST_DOC: &str = "darkstr.strictFirstDoc";
++    /// Feature flag: native persona hooks (nsHttp/Navigator/DocShell) are active.
++    /// When true, WebExt MAIN inject should disable (fork companion). Default false
++    /// until private-fork wiring is Proof-checked.
++    pub const NATIVE_PERSONA_HOOKS: &str = "darkstr.nativePersonaHooks";
++    /// Quiet / Balanced / Loud chaff intensity (Phase 1 `darkstr.chaosLevel`).
++    /// Consumed by `duppel-chaff` scheduler; internal product pref (may stay storage longer).
++    pub const CHAOS_LEVEL: &str = "darkstr.chaosLevel";
++
++    /// Browser prefs the fork auto-manages on mode change (not darkstr.* keys).
++    pub const PRIVACY_RFP: &str = "privacy.resistFingerprinting";
++    pub const PRIVACY_FPP: &str = "privacy.fingerprintingProtection";
++
++    /// Legal string values for [`MODE`].
++    pub const MODE_HOMOGENEOUS: &str = "homogeneous";
++    pub const MODE_POLLUTION: &str = "pollution";
++}
++
++/// Product XOR mode. Illegal strings coerce to Homogeneous (safe default).
++#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
++pub enum Mode {
++    Homogeneous,
++    Pollution,
++}
++
++impl Mode {
++    pub fn parse(raw: &str) -> Self {
++        match raw {
++            prefs::MODE_POLLUTION => Mode::Pollution,
++            _ => Mode::Homogeneous,
++        }
++    }
++
++    pub fn as_str(self) -> &'static str {
++        match self {
++            Mode::Homogeneous => prefs::MODE_HOMOGENEOUS,
++            Mode::Pollution => prefs::MODE_POLLUTION,
++        }
++    }
++}
++
++/// Host engine filter. darkstr Phase 1/2 ships on Firefox/LibreWolf → Firefox families.
++#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
++pub enum Engine {
++    Firefox,
++    Chromium,
++}
++
++impl Engine {
++    pub fn as_str(self) -> &'static str {
++        match self {
++            Engine::Firefox => "firefox",
++            Engine::Chromium => "chromium",
++        }
++    }
++}
++
++/// Host OS filter for persona family selection.
++#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
++pub enum HostOs {
++    Windows,
++    Macos,
++    Linux,
++}
++
++impl HostOs {
++    pub fn as_str(self) -> &'static str {
++        match self {
++            HostOs::Windows => "windows",
++            HostOs::Macos => "macos",
++            HostOs::Linux => "linux",
++        }
++    }
++
++    pub fn parse(raw: &str) -> Option<Self> {
++        match raw.to_ascii_lowercase().as_str() {
++            "windows" | "win32" | "win64" => Some(HostOs::Windows),
++            "macos" | "mac" | "darwin" | "macintosh" => Some(HostOs::Macos),
++            "linux" | "chromeos" | "cros" | "x11" => Some(HostOs::Linux),
++            _ => None,
++        }
++    }
++}
++
++/// Session seed that drives deterministic persona generation (Phase 1 `darkstr.sessionSeed`).
++#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
++pub struct PersonaSeed(pub u32);
++
++impl PersonaSeed {
++    pub fn new(value: u32) -> Self {
++        Self(value)
++    }
++
++    pub fn value(self) -> u32 {
++        self.0
++    }
++}
++
++/// GPU vendor/renderer pair correlated with the UA family.
++#[derive(Debug, Clone, PartialEq, Eq)]
++pub struct GpuInfo {
++    pub vendor: &'static str,
++    pub renderer: &'static str,
++}
++
++/// Screen geometry correlated into the persona snapshot.
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++pub struct ScreenInfo {
++    pub width: u32,
++    pub height: u32,
++    pub avail_height: u32,
++}
++
++/// Correlated persona snapshot — HTTP UA and JS navigator surfaces must agree.
++#[derive(Debug, Clone, PartialEq, Eq)]
++pub struct PersonaSnapshot {
++    pub seed: PersonaSeed,
++    pub engine: Engine,
++    pub os: HostOs,
++    pub user_agent: &'static str,
++    pub platform: &'static str,
++    pub hardware_concurrency: u32,
++    pub device_memory: u32,
++    pub screen: ScreenInfo,
++    pub color_depth: u32,
++    pub gpu: GpuInfo,
++    pub languages: &'static [&'static str],
++    pub timezone: &'static str,
++    pub canvas_seed: u32,
++    pub audio_seed: u32,
++}
++
++impl PersonaSnapshot {
++    /// Firefox personas never SET Client Hints (REMOVE / absent) — A1 coherence.
++    pub fn client_hints_policy(&self) -> ClientHintsPolicy {
++        match self.engine {
++            Engine::Firefox => ClientHintsPolicy::Remove,
++            Engine::Chromium => ClientHintsPolicy::SetFromUa,
++        }
++    }
++
++    /// Basic internal coherence: platform string matches OS family; UA mentions Firefox when engine is Firefox.
++    pub fn validate_internal(&self) -> Result<(), CoherenceError> {
++        let ua = self.user_agent;
++        match self.engine {
++            Engine::Firefox if !ua.contains("Firefox/") => {
++                return Err(CoherenceError::UaEngineMismatch);
++            }
++            Engine::Chromium if !ua.contains("Chrome/") => {
++                return Err(CoherenceError::UaEngineMismatch);
++            }
++            _ => {}
++        }
++        match self.os {
++            HostOs::Windows if !self.platform.contains("Win") => {
++                return Err(CoherenceError::PlatformOsMismatch);
++            }
++            HostOs::Macos if !self.platform.contains("Mac") => {
++                return Err(CoherenceError::PlatformOsMismatch);
++            }
++            HostOs::Linux if !self.platform.contains("Linux") => {
++                return Err(CoherenceError::PlatformOsMismatch);
++            }
++            _ => {}
++        }
++        if self.timezone == "UTC" {
++            // Pollution must not look like stock RFP UTC letterbox.
++            return Err(CoherenceError::UtcTimezoneForbidden);
++        }
++        Ok(())
++    }
++
++    /// Canvas 2D noise seed (M4 depth surface — control plane only).
++    pub fn depth_canvas_seed(&self) -> u32 {
++        self.canvas_seed
++    }
++
++    /// AudioContext / OfflineAudioContext seed (M4 depth surface).
++    pub fn depth_audio_seed(&self) -> u32 {
++        self.audio_seed
++    }
++
++    /// WebGL vendor/renderer correlated with persona GPU family (M4 depth).
++    pub fn depth_webgl_gpu(&self) -> &GpuInfo {
++        &self.gpu
++    }
++}
++
++/// Client Hints wire policy for a persona (Firefox host → REMOVE).
++///
++/// M3 nsHttp applicator must **never SET** Client Hints for Firefox personas
++/// (Phase 1 A1 parity). `SetFromUa` exists for Chromium family completeness only;
++/// darkstr host ships Firefox families.
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++pub enum ClientHintsPolicy {
++    /// Strip / omit Sec-CH-UA* (Firefox personas).
++    Remove,
++    /// Chromium-only: derive CH from UA (not used on darkstr Firefox host).
++    SetFromUa,
++}
++
++impl ClientHintsPolicy {
++    pub fn as_str(self) -> &'static str {
++        match self {
++            ClientHintsPolicy::Remove => "remove",
++            ClientHintsPolicy::SetFromUa => "set_from_ua",
++        }
++    }
++
++    /// Firefox host policy: SET is forbidden.
++    pub fn allows_set(self) -> bool {
++        matches!(self, ClientHintsPolicy::SetFromUa)
++    }
++
++    /// nsHttp action label for glue (M3).
++    pub fn nshttp_action(self) -> &'static str {
++        match self {
++            ClientHintsPolicy::Remove => "remove_client_hints",
++            ClientHintsPolicy::SetFromUa => "set_client_hints_from_ua",
++        }
++    }
++}
++
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++pub enum CoherenceError {
++    UaEngineMismatch,
++    PlatformOsMismatch,
++    UtcTimezoneForbidden,
++}
++
++/// Inputs that decide whether persona / chaff surfaces may run.
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++pub struct ActivationInput {
++    pub mode: Mode,
++    pub native_compatible: bool,
++    /// True when RFP (or fork-equivalent) is still on — Phase 1 heuristic / fork pref.
++    pub rfp_likely: bool,
++}
++
++/// Resolved activation — mirrors `extension/lib/modes.js` `resolveActivation`.
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++pub struct Activation {
++    pub mode: Mode,
++    pub native_compatible: bool,
++    pub rfp_likely: bool,
++    pub rfp_conflict: bool,
++    pub pollution_active: bool,
++    pub homogeneous_active: bool,
++    pub allow_persona: bool,
++    pub allow_chaff: bool,
++    pub reason: ActivationReason,
++}
++
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++pub enum ActivationReason {
++    Homogeneous,
++    Pollution,
++    NativeCompatible,
++    RfpXorPollution,
++}
++
++impl ActivationReason {
++    pub fn as_str(self) -> &'static str {
++        match self {
++            ActivationReason::Homogeneous => "homogeneous",
++            ActivationReason::Pollution => "pollution",
++            ActivationReason::NativeCompatible => "native_compatible",
++            ActivationReason::RfpXorPollution => "rfp_xor_pollution",
++        }
++    }
++}
++
++/// Decide which Duppel surfaces may run. Crates must no-op unless `pollution_active`.
++pub fn resolve_activation(input: ActivationInput) -> Activation {
++    let rfp_conflict = input.mode == Mode::Pollution && input.rfp_likely;
++    let pollution_active =
++        input.mode == Mode::Pollution && !input.native_compatible && !rfp_conflict;
++    let homogeneous_active = input.mode == Mode::Homogeneous;
++    let reason = if rfp_conflict {
++        ActivationReason::RfpXorPollution
++    } else if input.native_compatible {
++        ActivationReason::NativeCompatible
++    } else if homogeneous_active {
++        ActivationReason::Homogeneous
++    } else {
++        ActivationReason::Pollution
++    };
++    Activation {
++        mode: input.mode,
++        native_compatible: input.native_compatible,
++        rfp_likely: input.rfp_likely,
++        rfp_conflict,
++        pollution_active,
++        homogeneous_active,
++        allow_persona: pollution_active,
++        allow_chaff: pollution_active,
++        reason,
++    }
++}
++
++/// Pref side-effects the fork must apply when `darkstr.mode` changes.
++/// Homogeneous restores stock LibreWolf RFP expectations — **no metric customization**.
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++pub struct ModePrefEffects {
++    pub resist_fingerprinting: bool,
++    pub fingerprinting_protection: bool,
++    /// When true, persona/chaff crates stay idle.
++    pub crates_idle: bool,
++}
++
++/// Map mode (+ native escape) to the chrome privacy prefs the fork writes.
++///
++/// M2 observer XOR gates (authoritative table for prefs-path apply):
++/// - **Pollution** → `privacy.resistFingerprinting=false`,
++///   `privacy.fingerprintingProtection=false`; enable persona/chaff unless
++///   `native_compatible` (crates_idle when escape is on).
++/// - **Homogeneous** → stock RFP true / FPP stock-on restore; idle crates;
++///   **no** RFP metric customization.
++/// - **Forbidden:** Pollution with RFP still true via this prefs path
++///   (`resist_fingerprinting` is always false under Pollution).
++///
++/// Native-Compatible does **not** rewrite mode; it only idles crates under Pollution.
++pub fn mode_pref_effects(mode: Mode, native_compatible: bool) -> ModePrefEffects {
++    match mode {
++        Mode::Pollution => ModePrefEffects {
++            resist_fingerprinting: false,
++            fingerprinting_protection: false,
++            crates_idle: native_compatible,
++        },
++        Mode::Homogeneous => ModePrefEffects {
++            resist_fingerprinting: true,
++            // Leave FPP aligned with LibreWolf stock RFP path (do not customize metrics).
++            fingerprinting_protection: true,
++            crates_idle: true,
++        },
++    }
++}
++
++// --- Seeded generation (mulberry32, parity with Phase 1 profiles.js) ---
++
++struct Mulberry32 {
++    state: u32,
++}
++
++impl Mulberry32 {
++    fn new(seed: u32) -> Self {
++        Self { state: seed }
++    }
++
++    fn next_f64(&mut self) -> f64 {
++        self.state = self.state.wrapping_add(0x6d2b79f5);
++        let mut t = self.state;
++        t = (t ^ (t >> 15)).wrapping_mul(t | 1);
++        t ^= t.wrapping_add((t ^ (t >> 7)).wrapping_mul(t | 61));
++        ((t ^ (t >> 14)) as u32 as f64) / 4294967296.0
++    }
++
++    fn next_u32(&mut self) -> u32 {
++        (self.next_f64() * 0xffff_ffff_u32 as f64) as u32
++    }
++
++    fn pick<'a, T>(&mut self, items: &'a [T]) -> &'a T {
++        let idx = (self.next_f64() * items.len() as f64).floor() as usize;
++        &items[idx.min(items.len() - 1)]
++    }
++}
++
++#[derive(Clone, Copy)]
++struct UaGroup {
++    engine: Engine,
++    os: HostOs,
++    uas: &'static [&'static str],
++    platform: &'static str,
++    gpus: &'static [GpuInfo],
++}
++
++static FIREFOX_WINDOWS: UaGroup = UaGroup {
++    engine: Engine::Firefox,
++    os: HostOs::Windows,
++    uas: &[
++        "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:140.0) Gecko/20100101 Firefox/140.0",
++        "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:139.0) Gecko/20100101 Firefox/139.0",
++    ],
++    platform: "Win32",
++    gpus: &[
++        GpuInfo {
++            vendor: "Intel",
++            renderer: "Intel(R) UHD Graphics 630",
++        },
++        GpuInfo {
++            vendor: "NVIDIA Corporation",
++            renderer: "NVIDIA GeForce RTX 3060/PCIe/SSE2",
++        },
++        GpuInfo {
++            vendor: "ATI Technologies Inc.",
++            renderer: "AMD Radeon RX 580",
++        },
++    ],
++};
++
++static FIREFOX_MACOS: UaGroup = UaGroup {
++    engine: Engine::Firefox,
++    os: HostOs::Macos,
++    uas: &["Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:140.0) Gecko/20100101 Firefox/140.0"],
++    platform: "MacIntel",
++    gpus: &[
++        GpuInfo {
++            vendor: "Apple",
++            renderer: "Apple M1",
++        },
++        GpuInfo {
++            vendor: "Apple",
++            renderer: "Apple M2",
++        },
++        GpuInfo {
++            vendor: "Intel Inc.",
++            renderer: "Intel(R) Iris(R) Plus Graphics",
++        },
++    ],
++};
++
++static FIREFOX_LINUX: UaGroup = UaGroup {
++    engine: Engine::Firefox,
++    os: HostOs::Linux,
++    uas: &[
++        "Mozilla/5.0 (X11; Linux x86_64; rv:140.0) Gecko/20100101 Firefox/140.0",
++        "Mozilla/5.0 (X11; Linux x86_64; rv:139.0) Gecko/20100101 Firefox/139.0",
++        "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:140.0) Gecko/20100101 Firefox/140.0",
++    ],
++    platform: "Linux x86_64",
++    gpus: &[
++        GpuInfo {
++            vendor: "Intel",
++            renderer: "Mesa Intel(R) UHD Graphics 630 (CFL GT2)",
++        },
++        GpuInfo {
++            vendor: "NVIDIA Corporation",
++            renderer: "NVIDIA GeForce RTX 3060/PCIe/SSE2",
++        },
++        GpuInfo {
++            vendor: "AMD",
++            renderer: "AMD Radeon RX 580 (radeonsi, polaris10, LLVM 15.0.7, DRM 3.54, 6.8.0)",
++        },
++    ],
++};
++
++static ALL_FIREFOX_GROUPS: &[&UaGroup] = &[&FIREFOX_WINDOWS, &FIREFOX_MACOS, &FIREFOX_LINUX];
++
++static SCREENS: &[ScreenInfo] = &[
++    ScreenInfo {
++        width: 1920,
++        height: 1080,
++        avail_height: 1040,
++    },
++    ScreenInfo {
++        width: 2560,
++        height: 1440,
++        avail_height: 1400,
++    },
++    ScreenInfo {
++        width: 1366,
++        height: 768,
++        avail_height: 728,
++    },
++    ScreenInfo {
++        width: 1536,
++        height: 864,
++        avail_height: 824,
++    },
++    ScreenInfo {
++        width: 1440,
++        height: 900,
++        avail_height: 860,
++    },
++    ScreenInfo {
++        width: 1680,
++        height: 1050,
++        avail_height: 1010,
++    },
++    ScreenInfo {
++        width: 3840,
++        height: 2160,
++        avail_height: 2120,
++    },
++    ScreenInfo {
++        width: 1280,
++        height: 720,
++        avail_height: 680,
++    },
++    ScreenInfo {
++        width: 1600,
++        height: 900,
++        avail_height: 860,
++    },
++];
++
++static CORES: &[u32] = &[2, 4, 6, 8, 10, 12, 16];
++static MEMORY: &[u32] = &[4, 8];
++static COLOR_DEPTHS: &[u32] = &[24];
++
++static LANGUAGES: &[&[&str]] = &[
++    &["en-US", "en"],
++    &["en-US", "en", "es"],
++    &["en-GB", "en"],
++    &["en-US"],
++    &["en-US", "en", "fr"],
++    &["en-US", "en", "de"],
++];
++
++static TIMEZONES: &[&str] = &[
++    "America/New_York",
++    "America/Chicago",
++    "America/Denver",
++    "America/Los_Angeles",
++    "America/Phoenix",
++    "Europe/London",
++    "Europe/Berlin",
++    "America/Toronto",
++];
++
++fn groups_for(engine: Engine, os: HostOs) -> Vec<&'static UaGroup> {
++    ALL_FIREFOX_GROUPS
++        .iter()
++        .copied()
++        .filter(|g| g.engine == engine && g.os == os)
++        .collect()
++}
++
++/// Generate a correlated persona for `engine` + `os` from `seed`.
++/// Returns `None` if no family matches (e.g. Chromium requested — not shipped on darkstr host yet).
++pub fn generate_persona(seed: PersonaSeed, engine: Engine, os: HostOs) -> Option<PersonaSnapshot> {
++    let groups = groups_for(engine, os);
++    if groups.is_empty() {
++        return None;
++    }
++    let mut rng = Mulberry32::new(seed.value());
++    let group = *rng.pick(&groups);
++    let ua = *rng.pick(group.uas);
++    let gpu = rng.pick(group.gpus).clone();
++    let screen = *rng.pick(SCREENS);
++    let languages = *rng.pick(LANGUAGES);
++    Some(PersonaSnapshot {
++        seed,
++        engine: group.engine,
++        os: group.os,
++        user_agent: ua,
++        platform: group.platform,
++        hardware_concurrency: *rng.pick(CORES),
++        device_memory: *rng.pick(MEMORY),
++        screen,
++        color_depth: *rng.pick(COLOR_DEPTHS),
++        gpu,
++        languages,
++        timezone: *rng.pick(TIMEZONES),
++        canvas_seed: rng.next_u32(),
++        audio_seed: rng.next_u32(),
++    })
++}
++
++
++// --- M3 native hook-site policy (enums + gating; no Gecko FFI) ---
++
++/// DocShell navigation phase for `darkstr.strictFirstDoc` / strict-next-nav coherence.
++///
++/// Phase 1 parity: when strict-first-doc is on, the **first** document load stays
++/// native; persona arms on the **subsequent** main_frame navigation ("strict-next-nav").
++/// M4 keeps this encoding; live DocShell patch remains private-fork / not claimed here.
++#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
++pub enum DocShellNavPhase {
++    /// First document in the tab/session scope — stay native when strictFirstDoc.
++    FirstDocument,
++    /// Next / subsequent main_frame navigation — persona may arm (strict-next-nav).
++    SubsequentNav,
++}
++
++impl DocShellNavPhase {
++    pub fn as_str(self) -> &'static str {
++        match self {
++            DocShellNavPhase::FirstDocument => "first_document",
++            DocShellNavPhase::SubsequentNav => "subsequent_nav",
++        }
++    }
++}
++
++/// Whether persona surfaces should arm for this DocShell navigation.
++///
++/// Independent of XOR: call only after [`resolve_activation`] says `pollution_active`.
++pub fn persona_armed_for_nav(strict_first_doc: bool, phase: DocShellNavPhase) -> bool {
++    if !strict_first_doc {
++        return true;
++    }
++    matches!(phase, DocShellNavPhase::SubsequentNav)
++}
++
++/// Alias: strict-next-nav arm = persona armed for this DocShell phase.
++///
++/// Prefer this name in M4+ DocShell notes; semantics identical to [`persona_armed_for_nav`].
++pub fn strict_next_nav_armed(strict_first_doc: bool, phase: DocShellNavPhase) -> bool {
++    persona_armed_for_nav(strict_first_doc, phase)
++}
++
++/// Glue may read a cached [`PersonaSnapshot`] only when Pollution surfaces are active.
++///
++/// Homogeneous / Native-Compatible / RFP-conflict → idle (no second seed, no reads).
++pub fn cached_snapshot_readable(activation: &Activation) -> bool {
++    activation.pollution_active
++}
++
++/// WebExt MAIN-world inject policy once native hooks exist (M3 feature flag).
++#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
++pub enum WebExtMainInjectPolicy {
++    /// Stock LibreWolf companion / native hooks not yet active — keep Phase 1 inject.
++    AllowFallback,
++    /// Native nsHttp/Navigator path is on — disable WebExt MAIN inject to avoid split-brain.
++    DisableNativePathActive,
++}
++
++impl WebExtMainInjectPolicy {
++    pub fn as_str(self) -> &'static str {
++        match self {
++            WebExtMainInjectPolicy::AllowFallback => "allow_fallback",
++            WebExtMainInjectPolicy::DisableNativePathActive => "disable_native_path_active",
++        }
++    }
++}
++
++/// Resolve MAIN inject policy from activation + `darkstr.nativePersonaHooks`.
++pub fn webext_main_inject_policy(
++    activation: &Activation,
++    native_persona_hooks: bool,
++) -> WebExtMainInjectPolicy {
++    if native_persona_hooks && activation.pollution_active {
++        WebExtMainInjectPolicy::DisableNativePathActive
++    } else {
++        WebExtMainInjectPolicy::AllowFallback
++    }
++}
++
++/// True when the companion WebExt may still run MAIN inject.
++pub fn webext_main_inject_allowed(
++    activation: &Activation,
++    native_persona_hooks: bool,
++) -> bool {
++    matches!(
++        webext_main_inject_policy(activation, native_persona_hooks),
++        WebExtMainInjectPolicy::AllowFallback
++    )
++}
++
++/// M3 plan for a single navigation: gates nsHttp/Navigator apply + MAIN inject.
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++pub struct NativePersonaPlan {
++    pub pollution_active: bool,
++    pub native_persona_hooks: bool,
++    pub strict_first_doc: bool,
++    pub nav_phase: DocShellNavPhase,
++    /// Apply UA/navigator from cached snapshot this navigation.
++    pub apply_native_persona: bool,
++    pub main_inject: WebExtMainInjectPolicy,
++    pub client_hints: ClientHintsPolicy,
++}
++
++impl NativePersonaPlan {
++    /// Build the M3 applicator plan (Firefox host → CH REMOVE always).
++    pub fn resolve(
++        activation: &Activation,
++        native_persona_hooks: bool,
++        strict_first_doc: bool,
++        nav_phase: DocShellNavPhase,
++    ) -> Self {
++        let armed = persona_armed_for_nav(strict_first_doc, nav_phase);
++        let apply_native_persona =
++            activation.pollution_active && native_persona_hooks && armed;
++        Self {
++            pollution_active: activation.pollution_active,
++            native_persona_hooks,
++            strict_first_doc,
++            nav_phase,
++            apply_native_persona,
++            main_inject: webext_main_inject_policy(activation, native_persona_hooks),
++            client_hints: ClientHintsPolicy::Remove,
++        }
++    }
++
++    /// Snapshot cache read gate (Homogeneous / Native-Compatible idle).
++    pub fn may_read_cached_snapshot(&self) -> bool {
++        self.pollution_active
++    }
++}
++
++/// Generate only when Pollution surfaces are active; otherwise `None` (crates idle).
++pub fn generate_persona_if_active(
++    seed: PersonaSeed,
++    engine: Engine,
++    os: HostOs,
++    activation: &Activation,
++) -> Option<PersonaSnapshot> {
++    if !activation.allow_persona {
++        return None;
++    }
++    generate_persona(seed, engine, os)
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn version_nonzero() {
++        assert!(!VERSION.is_empty());
++    }
++
++    #[test]
++    fn pref_names_match_proof_pin() {
++        assert_eq!(prefs::MODE, "darkstr.mode");
++        assert_eq!(prefs::NATIVE_COMPATIBLE, "darkstr.nativeCompatible");
++        assert_eq!(prefs::MODE_HOMOGENEOUS, "homogeneous");
++        assert_eq!(prefs::MODE_POLLUTION, "pollution");
++    }
++
++    #[test]
++    fn mode_parse_coerces_illegal() {
++        assert_eq!(Mode::parse("pollution"), Mode::Pollution);
++        assert_eq!(Mode::parse("homogeneous"), Mode::Homogeneous);
++        assert_eq!(Mode::parse("both"), Mode::Homogeneous);
++        assert_eq!(Mode::parse(""), Mode::Homogeneous);
++    }
++
++    #[test]
++    fn activation_xor_matrix() {
++        let pollution_ok = resolve_activation(ActivationInput {
++            mode: Mode::Pollution,
++            native_compatible: false,
++            rfp_likely: false,
++        });
++        assert!(pollution_ok.pollution_active);
++        assert!(pollution_ok.allow_persona);
++        assert_eq!(pollution_ok.reason, ActivationReason::Pollution);
++
++        let rfp_conflict = resolve_activation(ActivationInput {
++            mode: Mode::Pollution,
++            native_compatible: false,
++            rfp_likely: true,
++        });
++        assert!(!rfp_conflict.pollution_active);
++        assert!(rfp_conflict.rfp_conflict);
++        assert_eq!(rfp_conflict.reason, ActivationReason::RfpXorPollution);
++
++        let native = resolve_activation(ActivationInput {
++            mode: Mode::Pollution,
++            native_compatible: true,
++            rfp_likely: false,
++        });
++        assert!(!native.pollution_active);
++        assert_eq!(native.reason, ActivationReason::NativeCompatible);
++
++        let homo = resolve_activation(ActivationInput {
++            mode: Mode::Homogeneous,
++            native_compatible: false,
++            rfp_likely: true,
++        });
++        assert!(homo.homogeneous_active);
++        assert!(!homo.allow_chaff);
++    }
++
++    #[test]
++    fn pollution_auto_kills_rfp_fpp() {
++        let e = mode_pref_effects(Mode::Pollution, false);
++        assert!(!e.resist_fingerprinting);
++        assert!(!e.fingerprinting_protection);
++        assert!(!e.crates_idle);
++    }
++
++    #[test]
++    fn homogeneous_restores_stock_rfp_no_metric_customization() {
++        let e = mode_pref_effects(Mode::Homogeneous, false);
++        assert!(e.resist_fingerprinting);
++        assert!(e.fingerprinting_protection);
++        assert!(e.crates_idle);
++    }
++
++    /// M2: Pollution + nativeCompatible keeps RFP/FPP off and idles crates.
++    #[test]
++    fn m2_pollution_native_compatible_idles_keeps_rfp_off() {
++        let e = mode_pref_effects(Mode::Pollution, true);
++        assert!(!e.resist_fingerprinting);
++        assert!(!e.fingerprinting_protection);
++        assert!(e.crates_idle);
++    }
++
++    /// M2: Homogeneous never enables persona/chaff regardless of native escape.
++    #[test]
++    fn m2_homogeneous_always_idles_crates() {
++        assert!(mode_pref_effects(Mode::Homogeneous, false).crates_idle);
++        assert!(mode_pref_effects(Mode::Homogeneous, true).crates_idle);
++    }
++
++    /// M2 forbidden combo: mode_pref_effects never returns RFP=true under Pollution.
++    #[test]
++    fn m2_forbidden_pollution_rfp_true_not_emitted() {
++        for native in [false, true] {
++            let e = mode_pref_effects(Mode::Pollution, native);
++            assert!(
++                !e.resist_fingerprinting,
++                "Pollution must not emit RFP=true (native={native})"
++            );
++            assert!(
++                !e.fingerprinting_protection,
++                "Pollution must not emit FPP=true (native={native})"
++            );
++        }
++    }
++
++    #[test]
++    fn seeded_persona_is_deterministic() {
++        let a = generate_persona(PersonaSeed(42), Engine::Firefox, HostOs::Linux).unwrap();
++        let b = generate_persona(PersonaSeed(42), Engine::Firefox, HostOs::Linux).unwrap();
++        assert_eq!(a, b);
++        a.validate_internal().unwrap();
++        assert_eq!(a.client_hints_policy(), ClientHintsPolicy::Remove);
++        assert!(a.user_agent.contains("Firefox/"));
++        assert!(a.platform.contains("Linux"));
++    }
++
++    #[test]
++    fn different_seeds_diverge() {
++        let a = generate_persona(PersonaSeed(1), Engine::Firefox, HostOs::Windows).unwrap();
++        let b = generate_persona(PersonaSeed(2), Engine::Firefox, HostOs::Windows).unwrap();
++        assert_ne!(a, b);
++    }
++
++    #[test]
++    fn chromium_host_has_no_families_yet() {
++        assert!(generate_persona(PersonaSeed(1), Engine::Chromium, HostOs::Linux).is_none());
++    }
++
++    #[test]
++    fn inactive_mode_emits_no_persona() {
++        let act = resolve_activation(ActivationInput {
++            mode: Mode::Homogeneous,
++            native_compatible: false,
++            rfp_likely: true,
++        });
++        assert!(
++            generate_persona_if_active(PersonaSeed(9), Engine::Firefox, HostOs::Linux, &act)
++                .is_none()
++        );
++    }
++
++    #[test]
++    fn m3_pref_native_persona_hooks_name() {
++        assert_eq!(prefs::NATIVE_PERSONA_HOOKS, "darkstr.nativePersonaHooks");
++        assert_eq!(prefs::STRICT_FIRST_DOC, "darkstr.strictFirstDoc");
++        assert_eq!(prefs::CHAOS_LEVEL, "darkstr.chaosLevel");
++    }
++
++    #[test]
++    fn m3_client_hints_firefox_never_set() {
++        let p = generate_persona(PersonaSeed(7), Engine::Firefox, HostOs::Linux).unwrap();
++        let ch = p.client_hints_policy();
++        assert_eq!(ch, ClientHintsPolicy::Remove);
++        assert!(!ch.allows_set());
++        assert_eq!(ch.nshttp_action(), "remove_client_hints");
++        assert_eq!(ch.as_str(), "remove");
++    }
++
++    #[test]
++    fn m3_cached_snapshot_readable_only_when_pollution_active() {
++        let active = resolve_activation(ActivationInput {
++            mode: Mode::Pollution,
++            native_compatible: false,
++            rfp_likely: false,
++        });
++        assert!(cached_snapshot_readable(&active));
++
++        for (mode, native, rfp) in [
++            (Mode::Homogeneous, false, true),
++            (Mode::Pollution, true, false),
++            (Mode::Pollution, false, true),
++        ] {
++            let act = resolve_activation(ActivationInput {
++                mode,
++                native_compatible: native,
++                rfp_likely: rfp,
++            });
++            assert!(
++                !cached_snapshot_readable(&act),
++                "idle path must not read snapshot ({mode:?}, native={native}, rfp={rfp})"
++            );
++        }
++    }
++
++    #[test]
++    fn m3_strict_first_doc_nav_phases() {
++        assert!(!persona_armed_for_nav(true, DocShellNavPhase::FirstDocument));
++        assert!(persona_armed_for_nav(true, DocShellNavPhase::SubsequentNav));
++        assert!(persona_armed_for_nav(false, DocShellNavPhase::FirstDocument));
++        assert!(persona_armed_for_nav(false, DocShellNavPhase::SubsequentNav));
++        // M4 alias: strict-next-nav == SubsequentNav arm
++        assert!(!strict_next_nav_armed(true, DocShellNavPhase::FirstDocument));
++        assert!(strict_next_nav_armed(true, DocShellNavPhase::SubsequentNav));
++    }
++
++    #[test]
++    fn m3_webext_main_inject_disabled_when_native_hooks_and_pollution() {
++        let active = resolve_activation(ActivationInput {
++            mode: Mode::Pollution,
++            native_compatible: false,
++            rfp_likely: false,
++        });
++        assert!(!webext_main_inject_allowed(&active, true));
++        assert_eq!(
++            webext_main_inject_policy(&active, true),
++            WebExtMainInjectPolicy::DisableNativePathActive
++        );
++        // Native hooks off → Phase 1 fallback inject still allowed.
++        assert!(webext_main_inject_allowed(&active, false));
++        // Idle modes: inject policy is AllowFallback (surfaces already gated elsewhere).
++        let homo = resolve_activation(ActivationInput {
++            mode: Mode::Homogeneous,
++            native_compatible: false,
++            rfp_likely: true,
++        });
++        assert!(webext_main_inject_allowed(&homo, true));
++    }
++
++    #[test]
++    fn m3_native_persona_plan_gates_apply() {
++        let active = resolve_activation(ActivationInput {
++            mode: Mode::Pollution,
++            native_compatible: false,
++            rfp_likely: false,
++        });
++        let first = NativePersonaPlan::resolve(
++            &active,
++            true,
++            true,
++            DocShellNavPhase::FirstDocument,
++        );
++        assert!(first.may_read_cached_snapshot());
++        assert!(!first.apply_native_persona);
++        assert_eq!(first.client_hints, ClientHintsPolicy::Remove);
++        assert_eq!(
++            first.main_inject,
++            WebExtMainInjectPolicy::DisableNativePathActive
++        );
++
++        let next = NativePersonaPlan::resolve(
++            &active,
++            true,
++            true,
++            DocShellNavPhase::SubsequentNav,
++        );
++        assert!(next.apply_native_persona);
++
++        let idle = resolve_activation(ActivationInput {
++            mode: Mode::Homogeneous,
++            native_compatible: false,
++            rfp_likely: true,
++        });
++        let idle_plan = NativePersonaPlan::resolve(
++            &idle,
++            true,
++            true,
++            DocShellNavPhase::SubsequentNav,
++        );
++        assert!(!idle_plan.may_read_cached_snapshot());
++        assert!(!idle_plan.apply_native_persona);
++    }
++}

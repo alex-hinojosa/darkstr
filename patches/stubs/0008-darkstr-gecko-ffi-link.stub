@@ -1,6 +1,4 @@
-# Stub only — NOT a train-pinned unified diff.
-# Future: moz.build + Cargo.toml path-dep on crates/duppel-ffi, expose
-# darkstr_ffi_persona_snapshot_json to chrome/C++ so snapshot SoT is Rust
-# without pasting JSON by hand.
-# Train: LibreWolf / Firefox 155.0.1-1 when authored.
-# Do not claim live linkage until a real 0008-*.patch lands + Mini mach green.
+# DEMOTED — real train-pinned patch lives at:
+#   patches/0008-darkstr-gecko-ffi-link.patch
+# This stub is retained only as a historical breadcrumb (Approach B landed).
+# Do not apply this file. See docs/M-FFI-0008-STATUS.md.

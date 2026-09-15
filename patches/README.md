@@ -109,4 +109,15 @@ Real unified diff [`0007-darkstr-cpp-docshell-nav-sot.patch`](0007-darkstr-cpp-d
 - Chrome prefers C++ `docShellPhase` mirror when hooks on
 - **Not** claimed: Rust FFI, Cloudflare/TLS/JA3, RFP metric patches, full parent/content IPC mirror
 
-| [`stubs/0008-darkstr-gecko-ffi-link.stub`](stubs/0008-darkstr-gecko-ffi-link.stub) | Future moz.build link for `duppel-ffi` — **not** train-pinned yet |
+| [`0008-darkstr-gecko-ffi-link.patch`](0008-darkstr-gecko-ffi-link.patch) | **Real** train-pinned Approach B FFI link (155.0.1-1): vendored `third_party/darkstr`, `DarkstrFfi.sys.mjs` ctypes, chrome prefers FFI snapshot |
+| [`stubs/0008-darkstr-gecko-ffi-link.stub`](stubs/0008-darkstr-gecko-ffi-link.stub) | Demoted breadcrumb — superseded by real `0008-…patch` |
+
+
+## M-FFI-0008 gecko FFI link (Approach B)
+
+- Real patch: [`0008-darkstr-gecko-ffi-link.patch`](0008-darkstr-gecko-ffi-link.patch)
+- Vendored flattened `duppel-persona` + `duppel-ffi` under `third_party/darkstr/`
+- Chrome `DarkstrFfi.sys.mjs` loads `libduppel_ffi` via ctypes; `_readSnapshot` prefers FFI when seed set
+- Build: `third_party/darkstr/build-and-install-ffi.sh --prefix "$objdir/dist/bin"`
+- Rebuild: `./mach build browser/components`
+- See [`../docs/M-FFI-0008-STATUS.md`](../docs/M-FFI-0008-STATUS.md). Approach A (gkrust path-dep) deferred.

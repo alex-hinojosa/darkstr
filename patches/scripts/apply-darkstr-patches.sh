@@ -195,6 +195,13 @@ patch_markers_present() {
         && grep -Fq "M3-CPP-DOCSHELL" "${DARKSTR_GECKO_ROOT}/docshell/base/nsDocShell.cpp" \
         && grep -Fq "Prefer C++ SoT mirror" "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrNativePersona.sys.mjs"
       ;;
+    0008-darkstr-gecko-ffi-link.patch)
+      [[ -f "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrFfi.sys.mjs" ]] \
+        && [[ -d "${DARKSTR_GECKO_ROOT}/third_party/darkstr/duppel-ffi" ]] \
+        && grep -Fq "_readSnapshotFromFfi" "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrNativePersona.sys.mjs" \
+        && grep -Fq "DarkstrFfi.sys.mjs" "${DARKSTR_GECKO_ROOT}/browser/components/moz.build" \
+        && grep -Fq "darkstr_ffi_persona_snapshot_json" "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrFfi.sys.mjs"
+      ;;
     *)
       return 1
       ;;
@@ -228,13 +235,18 @@ for patchfile in "${STUBS}"/000*.patch "${ROOT}/patches"/000*.patch; do
   fi
 done
 
+# 0008 Approach B: ensure FFI build script is executable when present.
+if [[ -f "${DARKSTR_GECKO_ROOT}/third_party/darkstr/build-and-install-ffi.sh" ]]; then
+  chmod +x "${DARKSTR_GECKO_ROOT}/third_party/darkstr/build-and-install-ffi.sh" || true
+fi
+
 stub_count=0
 for stub in "${STUBS}"/000*.patch.stub; do
   stub_count=$((stub_count + 1))
 done
 if [[ "${stub_count}" -gt 0 ]]; then
   echo "Note: ${stub_count} .patch.stub file(s) present — sketches only, not applied."
-  echo "Remaining stubs are sketches; real patches: 0002 XOR, 0003 chrome persona, 0005 C++ nsHttp, 0006 C++ Navigator/DocShell when present (0004 stub=chaff)."
+  echo "Remaining stubs are sketches; real patches: 0002 XOR, 0003 chrome persona, 0005 C++ nsHttp, 0006/0007 C++ nav/docshell, 0008 FFI link when present (0004 stub=chaff)."
 fi
 
 echo "Done. Cfg path always; real unified diffs under patches/000*.patch applied when present."
@@ -243,3 +255,4 @@ echo "M2 live observer: patches/0002-darkstr-mode-xor-rfp.patch (DarkstrModeXor.
 echo "M3 native hooks: patches/0003-darkstr-native-persona-hooks.patch (DarkstrNativePersona*.sys.mjs). Rebuild: ./mach build browser/components (see docs/M3-STATUS.md)."
 echo "M3-CPP nsHttp hooks: patches/0005-darkstr-cpp-native-hooks.patch (DarkstrNsHttpHooks). Rebuild: ./mach build netwerk/protocol/http (see docs/M3-CPP-STATUS.md)."
 echo "M3-CPP-NAV Navigator/DocShell: patches/0006-darkstr-cpp-navigator-docshell.patch. Rebuild: ./mach build dom/base docshell/base (see docs/M3-CPP-NAV-STATUS.md)."
+echo "M-FFI-0008 gecko FFI link: patches/0008-darkstr-gecko-ffi-link.patch (Approach B cdylib). Build FFI: third_party/darkstr/build-and-install-ffi.sh --prefix \"$objdir/dist/bin\". Rebuild chrome: ./mach build browser/components (see docs/M-FFI-0008-STATUS.md)."
