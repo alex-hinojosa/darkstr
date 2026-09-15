@@ -57,6 +57,7 @@ bash docs/M3-CPP-NAV-MINI-VERIFY.sh
 
 - **Does** ship a real unified diff vs post-0005 155.0.1 Navigator + DocShell stub + chrome mirrors; dry-run/apply verified on a pristine post-0005 slice of those files.
 - **Does not** claim: full C++ DocShell first/subsequent SoT (chrome counter remains), `deviceMemory` C++ override, Rust FFI, Cloudflare/TLS/JA3/bypass, Proof-PASS binary from this authoring executor.
+- **Headed skim:** avoid `general.useragent.override` contamination (nsHttpHandler falls through when hooks idle).
 - Authoring executor lacked Mini `ListMachines`/local-exec routing — Mini `mach` EXIT must be recorded on Mini SSD (or a machineId-capable Shell).
 
 ## Proof gates for this PR
