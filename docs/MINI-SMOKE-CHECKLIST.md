@@ -35,7 +35,7 @@
 
 - CreepJS full matrix (optional soft).
 - Product default hooks-on / packaged installer.
-- WebExt Settings ↔ chrome prefs bridge (Settings toggle writes storage; fork chrome/C++ SoT remains `about:config` until bridge).
+- WebExt Settings ↔ chrome prefs bridge shipped (#39): on the fork, Settings is authoritative for chrome `darkstr.*` (experiment). Soft residual: harness storage.local live read.
 
 ## Proof XOR
 
