@@ -53,3 +53,22 @@ Root cause (content process):
 3. `HttpBaseChannel` also reads `languageOverride` for Accept-Language when set — when hooks + pollution apply, persona CSV becomes that BC’s Accept-Language (coherent; soft claim expansion vs `0010` “no AL rewrite”).
 
 **Fix (`0013`):** Parent `GetSnapshot` after `refreshPlan()` sets `this.browsingContext.top.languageOverride` to snapshot languages CSV; if unchanged, clear then set to force `DidSet`; when not `applyNativeBase`, set to `""`. Soft only — hooks default-off. **Residual still OPEN** until Proof re-skim (do not claim closed).
+
+## 0014 follow-up (intl.accept_languages + primary-tag languageOverride)
+
+Proof #36 after `0013`: honesty PASS; live `navigator.languages` still `[en-US, en]`; **no `languagechange`**; Accept-Language stayed `en-US,en;q=0.9` (no `es`).
+
+Root cause:
+
+1. `0013` set `top.languageOverride = langs.join(",")` (e.g. `es,en-US,en`) inside try/catch that swallowed errors.
+2. Stock WebDriver BiDi sets a **single** locale tag (`en-GB`) via `context.languageOverride = value`. `DidSet` calls `JS::SetRealmLocaleOverride` with the whole string — a CSV likely throws; setter fails; AL never changes (matches Proof).
+3. Content **does** observe stock `intl.accept_languages` (`nsGlobalWindowInner`) and clears the WebIDL languages cache + fires `languagechange`.
+
+**Fix (`0014`):**
+
+- On `refreshPlan` when `applyNativeBase`: save current `intl.accept_languages` once to `darkstr.persona.savedAcceptLanguages` (only if unset); force-notify set `intl.accept_languages` to persona langs CSV (clear+set if unchanged) — same pattern as `_forceLanguagesMirrorNotify`.
+- When not `applyNativeBase`: restore `intl.accept_languages` from saved if present; clear saved pref.
+- Parent: set `languageOverride` to **primary tag only** (`langs[0]`); on catch write a short reason to `darkstr.persona.lastError` (do not swallow).
+
+Soft only — hooks default-off. **Residual still OPEN** until Proof re-skim (do not claim closed). Uses stock `intl.accept_languages` content observer + primary-tag `languageOverride`; AL will follow persona when hooks on.
+
