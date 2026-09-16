@@ -1,0 +1,45 @@
+# darkstr 0011 — invalidate navigator.languages when persona languages mirror changes
+# Train: LibreWolf / Firefox 155.0.1-1. Brand: darkstr — not official LibreWolf.
+# Soft residual: WebIDL caches languages; pageshow JS spoof cannot clear it.
+# nativePersonaHooks stays default-off.
+diff -ruN a/dom/base/nsGlobalWindowInner.cpp b/dom/base/nsGlobalWindowInner.cpp
+--- a/dom/base/nsGlobalWindowInner.cpp	2026-09-15 23:18:44
++++ b/dom/base/nsGlobalWindowInner.cpp	2026-09-15 23:18:44
+@@ -965,6 +965,9 @@
+   }
+ 
+   Preferences::AddStrongObserver(mObserver, "intl.accept_languages");
++  // darkstr: persona languages mirror must invalidate navigator.languages cache
++  // the same way intl.accept_languages does (WebIDL caches the array).
++  Preferences::AddStrongObserver(mObserver, "darkstr.persona.languages");
+ 
+   // Watch for storage notifications so we can fire storage events.
+   RefPtr<StorageNotifierService> sns = StorageNotifierService::GetOrCreate();
+@@ -1295,6 +1298,7 @@
+     }
+ 
+     Preferences::RemoveObserver(mObserver, "intl.accept_languages");
++    Preferences::RemoveObserver(mObserver, "darkstr.persona.languages");
+ 
+     // Drop its reference to this dying window, in case for some bogus reason
+     // the object stays around.
+@@ -5580,7 +5584,9 @@
+   }
+ 
+   if (!nsCRT::strcmp(aTopic, NS_PREFBRANCH_PREFCHANGE_TOPIC_ID)) {
+-    MOZ_ASSERT(!NS_strcmp(aData, u"intl.accept_languages"));
++    // intl.accept_languages (stock) or darkstr.persona.languages (darkstr M3 soft).
++    MOZ_ASSERT(!NS_strcmp(aData, u"intl.accept_languages") ||
++               !NS_strcmp(aData, u"darkstr.persona.languages"));
+ 
+     // The user preferred languages have changed, we need to fire an event on
+     // Window object and invalidate the cache for navigator.languages. It is
+@@ -5588,6 +5594,8 @@
+     // fairly rare.
+     // We MUST invalidate navigator.languages before sending the event in the
+     // very likely situation where an event handler will try to read its value.
++    // darkstr: persona languages mirror updates must clear the same WebIDL cache
++    // or live navigator.languages sticks to an early AcceptLanguages / mulberry read.
+ 
+     if (mNavigator) {
+       Navigator_Binding::ClearCachedLanguageValue(mNavigator);
