@@ -156,3 +156,13 @@ Real unified diff [`0014-darkstr-nav-languages-intl-accept.patch`](0014-darkstr-
 - Soft only — hooks default-off. Residual OPEN until Proof re-skim.
 - Apply + rebuild: `./mach build --allow-subdirectory-build browser/components` (see `docs/M3-LANGUAGES-0014-MINI-APPLY.sh`).
 
+
+## M3 soft park savedAcceptLanguages und (0015)
+
+Real unified diff [`0015-darkstr-nav-languages-saved-accept-und.patch`](0015-darkstr-nav-languages-saved-accept-und.patch) against post-0014 155.0.1-1:
+
+- Proof note after #37: `getCharPref("intl.accept_languages")` can return `und` when no real user value; restore would write `und` back.
+- Normalize empty/`und` (case-insensitive) → `""` on first save; on restore treat empty/`und` (prior-run migrate) as `clearUserPref`, never `setCharPref("und")`.
+- Soft only — hooks default-off. **langs residual CLOSED via #37**; this is soft park for und (not a product flip).
+- Apply + rebuild: `./mach build --allow-subdirectory-build browser/components` (see `docs/M3-LANGUAGES-0015-MINI-APPLY.sh`).
+

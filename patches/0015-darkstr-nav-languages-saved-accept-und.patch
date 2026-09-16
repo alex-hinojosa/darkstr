@@ -1,0 +1,74 @@
+# darkstr 0015 — soft park: savedAcceptLanguages never persist/restore "und"
+# Train: LibreWolf / Firefox 155.0.1-1. Brand: darkstr — not official LibreWolf.
+# Proof note after #37/0014: first-time save used getCharPref("intl.accept_languages")
+# which can return "und" (undefined locale) when no real user value — restore would
+# then write "und" back into intl.accept_languages.
+# Fix: normalize empty/"und" (case-insensitive) → "" on save; on restore treat
+# empty/"und" (incl. prior-run migrate) as clearUserPref, never setCharPref("und").
+# Soft only. langs residual CLOSED via #37; this is soft park for und. Hooks default-off.
+--- a/browser/components/DarkstrNativePersona.sys.mjs
++++ b/browser/components/DarkstrNativePersona.sys.mjs
+@@ -363,9 +363,10 @@
+   },
+ 
+   /**
+-   * 0014: when hooks apply, save stock intl.accept_languages once, then
++   * 0014/0015: when hooks apply, save stock intl.accept_languages once, then
+    * force-notify set to persona langs CSV (clear+set if unchanged) so content
+    * nsGlobalWindowInner observer clears WebIDL languages + fires languagechange.
++   * 0015: never persist Gecko "und" (undefined locale) — normalize to "".
+    */
+   _applyAcceptLanguagesForPersona(langsCsv) {
+     const next = langsCsv || "en-US,en";
+@@ -381,13 +382,28 @@
+             cur = "";
+           }
+         }
+-        Services.prefs.setStringPref(SAVED_ACCEPT_LANGS_PREF, cur);
++        // Soft park 0015: getCharPref can return "und" when no real user value.
++        Services.prefs.setStringPref(
++          SAVED_ACCEPT_LANGS_PREF,
++          this._normalizeSavedAcceptLanguages(cur)
++        );
+       }
+       this._forceAcceptLanguagesNotify(next);
+     } catch (_e) {}
+   },
+ 
+   /**
++   * Soft park 0015: empty / "und" (any case) → "" so restore never writes und.
++   */
++  _normalizeSavedAcceptLanguages(value) {
++    const s = value == null ? "" : String(value).trim();
++    if (!s || s.toLowerCase() === "und") {
++      return "";
++    }
++    return s;
++  },
++
++  /**
+    * Write intl.accept_languages and always emit prefchange when unchanged
+    * (same pattern as _forceLanguagesMirrorNotify).
+    */
+@@ -423,17 +439,20 @@
+ 
+   /**
+    * When hooks idle: restore intl.accept_languages from saved and clear saved.
++   * Soft park 0015: empty/"und" (incl. prior-run migrate) → clearUserPref, never set und.
+    */
+   _restoreAcceptLanguagesIfSaved() {
+     try {
+       if (!Services.prefs.prefHasUserValue(SAVED_ACCEPT_LANGS_PREF)) {
+         return;
+       }
+-      const saved = Services.prefs.getStringPref(SAVED_ACCEPT_LANGS_PREF, "");
++      const raw = Services.prefs.getStringPref(SAVED_ACCEPT_LANGS_PREF, "");
++      const saved = this._normalizeSavedAcceptLanguages(raw);
+       Services.prefs.clearUserPref(SAVED_ACCEPT_LANGS_PREF);
+       if (saved) {
+         Services.prefs.setCharPref(ACCEPT_LANGS_PREF, saved);
+       } else if (Services.prefs.prefHasUserValue(ACCEPT_LANGS_PREF)) {
++        // Empty or migrated und — clear rather than setCharPref("und").
+         Services.prefs.clearUserPref(ACCEPT_LANGS_PREF);
+       }
+     } catch (_e) {}
