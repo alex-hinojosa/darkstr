@@ -7,8 +7,13 @@
  * tracker-cookie purge (Firefox cookies API — not containers).
  *
  * Scripts loaded via manifest background.scripts (no importScripts):
- *   lib/sites.js, lib/tracker-cookies.js, lib/prefs.js, lib/modes.js,
- *   lib/profiles.js, poisoner.js, anti-fingerprint-bootstrap.js, background.js
+ *   lib/sites.js, lib/tracker-cookies.js, lib/prefs.js, lib/pref-bridge.js,
+ *   lib/modes.js, lib/profiles.js, poisoner.js, anti-fingerprint-bootstrap.js,
+ *   background.js
+ *
+ * Pref bridge: when browser.darkstrPrefs experiment is present (fork /
+ * temporary-load), Settings/popup writes push to about:config darkstr.*;
+ * startup pulls chrome → storage (chrome authoritative). Stock = storage-only.
  */
 "use strict";
 
@@ -68,6 +73,11 @@ async function savePrefs(partial) {
   assertModeXor(next[DARKSTR_PREF.MODE]);
   await B.storage.local.set(next);
   STATE.prefs = next;
+  // Fork bridge: push Proof-pin keys to Services.prefs when experiment present.
+  // Echo-guarded inside pushPrefsToChrome when syncingFromChrome.
+  if (typeof pushPrefsToChrome === "function") {
+    await pushPrefsToChrome(next);
+  }
   await applyActivation();
   return next;
 }
@@ -574,6 +584,8 @@ function publicState(extra) {
     prefs: STATE.prefs,
     activation: STATE.activation,
     rfp: STATE.lastRfp,
+    prefBridgeAvailable:
+      typeof PREF_BRIDGE_STATE !== "undefined" && PREF_BRIDGE_STATE.available === true,
     profile: pollutionSurfacesArmed() ? PERSONA_STATE.profile : null,
     chaosLevel: PERSONA_STATE.chaosLevel,
     stats: PERSONA_STATE.stats,
@@ -690,6 +702,11 @@ B.alarms.onAlarm.addListener(async (alarm) => {
 
 B.runtime.onInstalled.addListener(async (details) => {
   await loadPrefs();
+  if (typeof initPrefBridge === "function") {
+    try {
+      await initPrefBridge({ savePrefs });
+    } catch (_e) {}
+  }
   if (details.reason === "install" && !STATE.prefs[DARKSTR_PREF.FIRST_RUN_DONE]) {
     const url = B.runtime.getURL("first-run.html");
     try {
@@ -703,14 +720,36 @@ B.runtime.onInstalled.addListener(async (details) => {
 
 B.runtime.onStartup.addListener(async () => {
   await loadPrefs();
+  if (typeof initPrefBridge === "function") {
+    try {
+      await initPrefBridge({ savePrefs });
+    } catch (_e) {}
+  }
   await applyActivation();
 });
 
-loadPrefs()
-  .then(applyActivation)
-  .catch((err) => {
-    console.error("darkstr init failed:", err);
-  });
+async function bootDarkstr() {
+  await loadPrefs();
+  // Chrome authoritative when experiment present; soft no-op on stock.
+  if (typeof initPrefBridge === "function") {
+    try {
+      const bridge = await initPrefBridge({ savePrefs });
+      if (bridge && bridge.ok) {
+        console.info("darkstr pref-bridge: chrome↔storage sync active");
+      }
+    } catch (err) {
+      console.warn(
+        "darkstr pref-bridge init skipped:",
+        err && err.message ? err.message : err
+      );
+    }
+  }
+  await applyActivation();
+}
+
+bootDarkstr().catch((err) => {
+  console.error("darkstr init failed:", err);
+});
 
 B.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   const reply = (value) => {
@@ -757,8 +796,8 @@ B.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       }
 
       case "setNativePersonaHooks": {
-        // Default remains false in DARKSTR_DEFAULTS. Fork chrome/C++ SoT is about:config
-        // until prefs bridge ships; this gate skips WebExt MAIN inject when on.
+        // Default remains false in DARKSTR_DEFAULTS. savePrefs pushes to chrome
+        // when pref-bridge experiment is available; skips WebExt MAIN inject when on.
         await savePrefs({
           [DARKSTR_PREF.NATIVE_PERSONA_HOOKS]: msg.enabled === true,
         });

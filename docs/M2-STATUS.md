@@ -31,7 +31,7 @@
 | Apply script applies `patches/000*.patch` | **Yes** |
 | `docs/M2-MINI-VERIFY.sh` | **New** |
 | Live C++ / XPCOM FFI into Rust crates | **Not claimed** |
-| WebExt ↔ chrome privileged mirror sync | **Still deferred** |
+| WebExt ↔ chrome privileged mirror sync | **First slice shipped** (Phase 2 prefs-bridge PR — see [`PREF-BRIDGE.md`](PREF-BRIDGE.md) §8); stock without experiments remains storage-only |
 | Mini `mach build` from this PR author box | **Not claimed** (see honesty) |
 
 ## Train pin

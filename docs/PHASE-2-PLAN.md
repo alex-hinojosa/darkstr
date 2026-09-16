@@ -243,6 +243,7 @@ This Phase 2 plan PR scaffolds **docs + crates only**. Full Gecko patch tree can
 Pre-M1 work that does **not** require cloning Mozilla/LibreWolf:
 
 - [x] Formalize WebExt ↔ chrome pref bridge (`docs/PREF-BRIDGE.md`, `docs/darkstr.cfg.example`)
+- [x] First WebExt ↔ chrome Proof-pin sync slice (`experiments/darkstr_prefs` + `lib/pref-bridge.js`; chrome authoritative on fork; stock = storage-only)
 - [x] Expand Rust crates beyond stubs: persona seed/snapshot + chaff schedule types/APIs (still no Gecko link)
 - [x] Document Pollution auto-kill RFP/FPP and Homogeneous stock RFP restore (no metric customization)
 - [x] Proof XOR checklist for future wiring PRs (`docs/PROOF-XOR-CHECKLIST.md`)
