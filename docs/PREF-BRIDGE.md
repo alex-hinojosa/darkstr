@@ -1,7 +1,8 @@
 # Pref bridge — WebExt ↔ chrome (Phase 2 design)
 
-**Status:** Design locked for M2 wiring. No Gecko patch in this PR.  
-**Brand:** darkstr — not official LibreWolf. Pollution browser, not Cloudflare bypass.
+**Status:** First WebExt ↔ chrome Proof-pin sync slice shipped (Phase 2). Fork / temporary-load with `experiment_apis.darkstrPrefs`; chrome authoritative. Stock LibreWolf companion without experiments remains storage-only.  
+**Brand:** darkstr — not official LibreWolf. Pollution browser, not Cloudflare bypass.  
+**Honesty:** This PR does **not** flip hooks default-on, does **not** write `privacy.*` from WebExt, does **not** claim live Mini Proof XOR until Proof runs it, and is **not** an AMO path that mutates RFP/FPP on stock Firefox.
 
 Phase 1 stores product prefs in `browser.storage.local`. The LibreWolf-based fork makes **chrome prefs authoritative** under the **same key names**. This document is the bridge contract for Builder + Proof.
 
@@ -17,6 +18,7 @@ See also: [`PHASE-2-PLAN.md`](PHASE-2-PLAN.md) §2–§4, [`PROOF-PIN.md`](PROOF
 | `darkstr.nativeCompatible` | bool | `true` \| `false` | `false` | storage | chrome bool |
 | `darkstr.nativeCompatSites` | JSON object | `{ [etld1]: true }` | `{}` | storage | chrome JSON pref or profile file + WebExt mirror |
 | `darkstr.strictFirstDoc` | bool | `true` \| `false` | `true` | storage | chrome bool; later DocShell |
+| `darkstr.nativePersonaHooks` | bool | `true` \| `false` | `false` (default-off) | storage | chrome bool; WebExt MAIN inject gate |
 
 **Do not** introduce `duppel.pollution.enabled`. darkstr brand wins — Proof pin stays on `darkstr.*`.
 
@@ -45,7 +47,7 @@ browser.storage.local  ←→  bridge  ←→  chrome prefs (authoritative in fo
 1. **In the fork build:** chrome prefs are authoritative. WebExt storage is a cache/UI mirror.
 2. Sync is **bidirectional during transition:** popup mode change writes chrome pref; `about:config` change notifies the extension (experimental API or native messaging — fork-only).
 3. Prefer Firefox **Rust static prefs** / pref observers over a parallel config file.
-4. Until the bridge ships: stock LibreWolf + temporary WebExt remains the supported Phase 1 path (RFP still **manual**).
+4. Stock LibreWolf companion **without** experiments: storage-only Phase 1 path (RFP still **manual**). Fork / temporary-load with `darkstrPrefs`: chrome authoritative via §8 bridge.
 5. Privileged “RFP killer” APIs ship **only** in the darkstr fork — never as an AMO-signed extension on stock LibreWolf.
 
 Example defaults: [`darkstr.cfg.example`](darkstr.cfg.example).
@@ -111,7 +113,7 @@ Native-Compatible is for banking / SSO — **not** a Cloudflare-defeat switch.
 | Static prefs / live C++ observers for `darkstr.*` | Builder (M2+) | Private fork; call `apply_mode_effects` — **not claimed** in public M2 |
 | On Pollution: force RFP/FPP false | Builder (M2) | Single Rust prefs path; Proof exclusivity matrix |
 | On Homogeneous: restore stock RFP/FPP | Builder (M2) | No metric patches |
-| WebExt mirror sync | Builder (M2+) | storage ↔ chrome; fork-only privileged API — deferred |
+| WebExt mirror sync | Builder (Phase 2) | **Shipped (first slice):** `extension/experiments/darkstr_prefs` + `lib/pref-bridge.js` — Proof-pin keys only; chrome authoritative on fork; stock = soft no-op |
 | Disable WebExt MAIN inject when native path on | Builder (M3) | Pref name `darkstr.nativePersonaHooks` + `WebExtMainInjectPolicy` encoded; live flip after fork Proof |
 | Gecko call sites (nsHttp / DocShell / canvas) | Builder (M3+) | [`GECKO-HOOKS.md`](GECKO-HOOKS.md); stubs in [`../patches/`](../patches/) |
 | `PrefsApplicator` XPCOM adapter | Builder (M2+) | Trait + recording mock landed; XPCOM glue still fork |
@@ -142,4 +144,33 @@ Crate fixtures: `duppel_coherence::xor_matrix`, `assert_pollution_kills_rfp`, `a
 - **Help:** When on, the darkstr fork applies persona in the browser (not only the extension). Pollution mode only. RFP must stay off. Not anti-detect. Not a Cloudflare bypass.
 - **Default:** Off
 - **First-run (Pollution path):** “On the darkstr fork you can turn on Native persona hooks in Settings after RFP is off.”
-- WebExt Settings writes `browser.storage.local`; fork chrome/C++ SoT remains `about:config` until §6 sync bridge ships — keep keys aligned manually for Mini smoke.
+- WebExt Settings writes `browser.storage.local`; on the fork (or temporary-load with experiments), `pref-bridge` pushes Proof-pin keys to `about:config` and pulls chrome → storage on startup (chrome authoritative). Stock companion without experiments stays storage-only — keep keys aligned manually there for Mini smoke if needed.
+- **Default:** hooks remain **off**. Bridge never coerces `darkstr.nativePersonaHooks` to true.
+
+
+---
+
+## 8. Implementation (first sync slice — this PR)
+
+| Piece | Path | Role |
+|-------|------|------|
+| WebExtension Experiment | `extension/experiments/darkstr_prefs/` (`schema.json`, `api.js`) | Parent `Services.prefs` get/set for Proof-pin keys; `onChanged` observer |
+| Manifest | `extension/manifest.json` → `experiment_apis.darkstrPrefs` | Loaded when experiments are allowed (fork / temporary-load). Absent API → storage-only |
+| Bridge glue | `extension/lib/pref-bridge.js` | Detect API; startup pull chrome→storage; `savePrefs` push storage→chrome; echo guard |
+| Background | `extension/background.js` | `initPrefBridge` on boot; `pushPrefsToChrome` after storage writes |
+
+### Proof XOR suggested steps (manual on Mini fork build)
+
+1. Temporary-load or ship the extension on a darkstr fork build where `experiment_apis` work.
+2. Open Settings → flip `darkstr.mode` Homogeneous ↔ Pollution → confirm `about:config` `darkstr.mode` matches.
+3. Toggle Native-Compatible / Delay persona one page / Native persona hooks (leave hooks **off** unless intentionally testing) → matching `darkstr.*` chrome prefs.
+4. In `about:config`, change `darkstr.mode` → reload extension UI / wait for observer → storage mirror and Settings radios match (bidirectional).
+5. Confirm `privacy.resistFingerprinting` / `privacy.fingerprintingProtection` are **not** written by the extension (ModeXor / `0002` owns that on the fork).
+
+### Explicit non-claims
+
+- No live Mini Proof XOR result claimed in this PR.
+- No hooks default-on / no product flip.
+- No AMO-signed stock path that writes `privacy.*`.
+- No RFP metric customization.
+- Stock LibreWolf companion without experiments: still storage-only (honest soft no-op).

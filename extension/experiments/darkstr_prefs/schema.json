@@ -1,0 +1,89 @@
+[
+  {
+    "namespace": "darkstrPrefs",
+    "description": "darkstr fork-only bridge: get/set Proof-pin darkstr.* chrome prefs via Services.prefs. Unavailable / no-op on stock LibreWolf without WebExtension experiments. Never writes privacy.* — ModeXor (0002) owns RFP/FPP side-effects. Brand: darkstr — not official LibreWolf. Not anti-detect / not Cloudflare bypass.",
+    "types": [
+      {
+        "id": "BridgePrefs",
+        "type": "object",
+        "description": "Proof-pin keys only (storage mirror shapes).",
+        "properties": {
+          "darkstr.mode": {
+            "type": "string",
+            "optional": true,
+            "enum": ["homogeneous", "pollution"]
+          },
+          "darkstr.nativeCompatible": {
+            "type": "boolean",
+            "optional": true
+          },
+          "darkstr.nativeCompatSites": {
+            "type": "object",
+            "optional": true,
+            "additionalProperties": { "type": "boolean" }
+          },
+          "darkstr.strictFirstDoc": {
+            "type": "boolean",
+            "optional": true
+          },
+          "darkstr.nativePersonaHooks": {
+            "type": "boolean",
+            "optional": true
+          }
+        }
+      }
+    ],
+    "functions": [
+      {
+        "name": "isAvailable",
+        "type": "function",
+        "description": "True when this experiment parent is loaded (fork / temporary-load with experiments).",
+        "async": true,
+        "parameters": []
+      },
+      {
+        "name": "getAll",
+        "type": "function",
+        "description": "Read Proof-pin darkstr.* from Services.prefs (chrome authoritative).",
+        "async": true,
+        "parameters": [],
+        "returns": {
+          "$ref": "BridgePrefs"
+        }
+      },
+      {
+        "name": "setPrefs",
+        "type": "function",
+        "description": "Write a partial Proof-pin object to Services.prefs. nativeCompatSites is stored as a JSON string chrome pref. Does not touch privacy.*.",
+        "async": true,
+        "parameters": [
+          {
+            "name": "partial",
+            "$ref": "BridgePrefs"
+          }
+        ],
+        "returns": {
+          "$ref": "BridgePrefs"
+        }
+      }
+    ],
+    "events": [
+      {
+        "name": "onChanged",
+        "type": "function",
+        "description": "Fires when any Proof-pin darkstr.* chrome pref changes (about:config or setPrefs).",
+        "parameters": [
+          {
+            "name": "change",
+            "type": "object",
+            "properties": {
+              "name": { "type": "string" },
+              "prefs": { "$ref": "BridgePrefs" }
+            },
+            "required": ["name", "prefs"]
+          }
+        ]
+      }
+    ]
+  }
+]

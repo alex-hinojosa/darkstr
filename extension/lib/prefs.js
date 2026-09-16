@@ -8,8 +8,12 @@
  *   darkstr.strictFirstDoc      = boolean                       (strict-next-nav coherence)
  *   darkstr.nativePersonaHooks  = boolean                       (M3: disable MAIN inject when native path)
  *
- * These live in browser.storage.local. They are NOT about:config prefs.
- * Browser RFP prefs are documented separately and are user-set.
+ * Phase 1 / stock LibreWolf companion: live in browser.storage.local only.
+ * Phase 2 fork bridge (lib/pref-bridge.js + experiments/darkstr_prefs):
+ *   same keys under about:config via Services.prefs when browser.darkstrPrefs
+ *   is available; chrome is authoritative. Stock without experiments = storage-only.
+ * Never writes privacy.* from WebExt (ModeXor owns RFP/FPP). Hooks default-off.
+ * Browser RFP prefs are documented separately.
  */
 "use strict";
 
