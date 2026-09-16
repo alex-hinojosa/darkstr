@@ -40,3 +40,16 @@ Root cause (content process):
 5. pageshow (`0010`) re-queries snapshot and re-spoofs JS but did **not** re-notify the languages mirror.
 
 **Fix (`0012`):** `_forceLanguagesMirrorNotify` clear+set when CSV unchanged; Parent `GetSnapshot` calls `refreshPlan()` so pageshow forces the `0011` path. Soft only — hooks default-off. No Accept-Language HTTP rewrite. Residual not claimed closed until Proof re-skim.
+
+
+## 0013 follow-up (BrowsingContext.languageOverride)
+
+Proof #35 after `0012`: honesty PASS (observer / force-notify present) but live `navigator.languages` still `[en-US, en]` through pageshow/late; **no `languagechange`**.
+
+Root cause (content process):
+
+1. Pref notify (`0011`/`0012`) is insufficient — parent `darkstr.persona.languages` prefchange does **not** reach the measured content window’s observer.
+2. Stock path: `BrowsingContext.languageOverride` (chrome-webidl, `SetterThrows`). `DidSet(IDX_LanguageOverride)` in `docshell/base/BrowsingContext.cpp` walks windows and calls `navigator->ClearLanguageCache()` (clears WebIDL `language`/`languages`) via BC field IPC.
+3. `HttpBaseChannel` also reads `languageOverride` for Accept-Language when set — when hooks + pollution apply, persona CSV becomes that BC’s Accept-Language (coherent; soft claim expansion vs `0010` “no AL rewrite”).
+
+**Fix (`0013`):** Parent `GetSnapshot` after `refreshPlan()` sets `this.browsingContext.top.languageOverride` to snapshot languages CSV; if unchanged, clear then set to force `DidSet`; when not `applyNativeBase`, set to `""`. Soft only — hooks default-off. **Residual still OPEN** until Proof re-skim (do not claim closed).
