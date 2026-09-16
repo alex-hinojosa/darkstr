@@ -35,3 +35,8 @@ Root causes addressed:
 2. Temp profile: pollution + hooks=true + seed=42 + empty snapshot.
 3. After first→subsequent: `darkstr.persona.snapshot` non-empty; HW=8, langs include `es`, timezone `Europe/Berlin` (seed-42 macos golden).
 4. Browser console: no sustained `DarkstrFfi: load failed`.
+
+## 0009b (same PR)
+
+After Proof re-skim still saw mulberry while **xpcshell** DarkstrFfi hit goldens: removed permanent `gLoadAttempted` lockout (timed retry), added `XREExeF` parent + bare library name candidates, and write `darkstr.ffi.lastError` for headed about:config debug.
+

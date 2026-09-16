@@ -205,6 +205,8 @@ patch_markers_present() {
     0009-darkstr-ffi-ctypes-softfail-fix.patch)
       [[ -f "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrFfi.sys.mjs" ]] \
         && grep -Fq "defineESModuleGetters" "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrFfi.sys.mjs" \
+        && grep -Fq "darkstr.ffi.lastError" "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrFfi.sys.mjs" \
+        && grep -Fq "gNextRetryMs" "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrFfi.sys.mjs" \
         && grep -Fq "FFI snapshot miss" "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrNativePersona.sys.mjs" \
         && grep -Fq "Persist so about:config" "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrNativePersona.sys.mjs"
       ;;

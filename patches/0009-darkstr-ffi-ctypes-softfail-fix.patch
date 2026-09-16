@@ -1,21 +1,28 @@
 # darkstr 0009 — M-FFI Approach B ctypes soft-fail fix (LibreWolf / Firefox 155.0.1-1)
 # Brand: darkstr — not official LibreWolf.
-# Fix PathUtils-less chrome ESM load of libduppel_ffi; persist FFI snapshot to pref.
-# nativePersonaHooks stays default-off. Soft residual follow-up to 0008 / PR #28.
---- a/browser/components/DarkstrFfi.sys.mjs	2026-09-15 21:35:55
-+++ b/browser/components/DarkstrFfi.sys.mjs	2026-09-15 21:35:55
-@@ -6,17 +6,18 @@
-  * darkstr M-FFI-0008 — privileged chrome loader for duppel-ffi C ABI (Approach B).
+# PathUtils-less load; timed retry (no permanent lockout); persist FFI snapshot;
+# darkstr.ffi.lastError for headed debug. nativePersonaHooks stays default-off.
+--- a/browser/components/DarkstrFfi.sys.mjs	2026-09-15 21:40:52
++++ b/browser/components/DarkstrFfi.sys.mjs	2026-09-15 21:40:52
+@@ -3,45 +3,70 @@
+  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+ 
+ /**
+- * darkstr M-FFI-0008 — privileged chrome loader for duppel-ffi C ABI (Approach B).
++ * darkstr M-FFI-0008/0009 — privileged chrome loader for duppel-ffi C ABI (Approach B).
   *
   * Train: LibreWolf / Firefox 155.0.1-1. Brand: darkstr — not official LibreWolf.
 - * Loads libduppel_ffi.{dylib,so,dll} from the application directory (dist/bin)
 - * via js-ctypes and calls darkstr_ffi_persona_snapshot_json.
-+ * Loads libduppel_ffi.{dylib,so,dll} from CurProcD / GreD via js-ctypes and
-+ * calls darkstr_ffi_persona_snapshot_json.
++ * Loads libduppel_ffi.{dylib,so,dll} from CurProcD / GreD / XREExeF parent via
++ * js-ctypes and calls darkstr_ffi_persona_snapshot_json.
   *
   * Honesty: fails soft when the dylib is missing or symbols unavailable;
   * callers must keep JS seed fallback. nativePersonaHooks stays default-off.
   * No Cloudflare/TLS/JA3/RFP metric customization.
++ *
++ * 0009b: do not permanently lock out after an early fail (browser startup race);
++ * expose last error on darkstr.ffi.lastError for headed debug.
   */
  
 -const { ctypes } = ChromeUtils.importESModule(
@@ -26,16 +33,20 @@
 +  ctypes: "resource://gre/modules/ctypes.sys.mjs",
 +});
  
++const LAST_ERROR_PREF = "darkstr.ffi.lastError";
++
  let gLib = null;
  let gAbiVersion = null;
-@@ -26,22 +27,27 @@
+ let gSnapshot = null;
+ let gFree = null;
+-let gLoadAttempted = false;
  let gLoadError = null;
++let gNextRetryMs = 0;
  
  function libraryFileName() {
 -  const abi = ctypes.libraryName("duppel_ffi");
 -  // ctypes.libraryName("duppel_ffi") → libduppel_ffi.dylib / .so / duppel_ffi.dll
 -  return abi;
-+  // libduppel_ffi.dylib / .so / duppel_ffi.dll
 +  return lazy.ctypes.libraryName("duppel_ffi");
  }
  
@@ -47,30 +58,50 @@
 +  return dir.endsWith(sep) ? dir + name : dir + sep + name;
 +}
 +
++function setLoadError(msg) {
++  gLoadError = msg;
++  try {
++    Services.prefs.setStringPref(LAST_ERROR_PREF, String(msg || "").slice(0, 500));
++  } catch (_e) {}
++}
++
  function candidatePaths() {
    const name = libraryFileName();
    const paths = [];
--  try {
++  const pushDir = dirPath => {
++    if (dirPath) {
++      paths.push(joinPath(dirPath, name));
++    }
++  };
++  for (const key of ["CurProcD", "GreD", "XCurProcD"]) {
++    try {
++      pushDir(Services.dirsvc.get(key, Ci.nsIFile).path);
++    } catch (_e) {}
++  }
+   try {
 -    const cur = Services.dirsvc.get("CurProcD", Ci.nsIFile);
 -    paths.push(PathUtils.join(cur.path, name));
--  } catch (_e) {}
++    pushDir(Services.dirsvc.get("XREExeF", Ci.nsIFile).parent.path);
+   } catch (_e) {}
 -  try {
 -    const gre = Services.dirsvc.get("GreD", Ci.nsIFile);
 -    paths.push(PathUtils.join(gre.path, name));
 -  } catch (_e) {}
-+  for (const key of ["CurProcD", "GreD", "XCurProcD"]) {
-+    try {
-+      const dir = Services.dirsvc.get(key, Ci.nsIFile);
-+      paths.push(joinPath(dir.path, name));
-+    } catch (_e) {}
-+  }
++  paths.push(name);
    return paths;
  }
  
-@@ -53,30 +59,32 @@
+@@ -49,48 +74,58 @@
+   if (gLib) {
+     return true;
+   }
+-  if (gLoadAttempted) {
++  const now = Date.now();
++  if (now < gNextRetryMs) {
      return false;
    }
-   gLoadAttempted = true;
+-  gLoadAttempted = true;
++
 +  const tried = [];
    for (const path of candidatePaths()) {
 +    tried.push(path);
@@ -107,28 +138,43 @@
        const ver = gAbiVersion();
        if (ver !== 1) {
 -        gLoadError = `unexpected ABI version ${ver}`;
-+        gLoadError = `unexpected ABI version ${ver} at ${path}`;
++        setLoadError(`unexpected ABI version ${ver} at ${path}`);
          try {
            gLib.close();
          } catch (_e) {}
-@@ -86,11 +94,15 @@
-       gLoadError = null;
+         gLib = null;
++        gAbiVersion = gSnapshot = gFree = null;
+         continue;
+       }
+-      gLoadError = null;
++      setLoadError("");
++      gNextRetryMs = 0;
        return true;
      } catch (e) {
 -      gLoadError = String(e);
-+      gLoadError = `${path}: ${e}`;
++      setLoadError(`${path}: ${e}`);
        gLib = null;
        gAbiVersion = gSnapshot = gFree = null;
      }
    }
 +  if (!gLoadError) {
-+    gLoadError = `no candidates (tried=${tried.join("|") || "none"})`;
++    setLoadError(`no candidates (tried=${tried.join("|") || "none"})`);
 +  }
 +  console.warn("DarkstrFfi: load failed —", gLoadError);
++  gNextRetryMs = Date.now() + 1500;
    return false;
  }
  
-@@ -120,7 +132,7 @@
+@@ -111,16 +146,11 @@
+   };
+ }
+ 
+-/**
+- * @param {number} seed unsigned seed
+- * @param {string} os "macos"|"linux"|"windows"
+- * @returns {object|null}
+- */
+ export function personaSnapshotFromSeed(seed, os = "macos") {
    if (!ensureLoaded()) {
      return null;
    }
@@ -137,15 +183,15 @@
    const ptr = gSnapshot(seed >>> 0, osC);
    if (ptr.isNull()) {
      return null;
-@@ -156,4 +168,4 @@
+@@ -156,4 +186,4 @@
    personaSnapshotFromSeed,
    abiVersion,
    lastLoadError,
 -};
 \ No newline at end of file
 +};
---- a/browser/components/DarkstrNativePersona.sys.mjs	2026-09-15 21:35:55
-+++ b/browser/components/DarkstrNativePersona.sys.mjs	2026-09-15 21:35:55
+--- a/browser/components/DarkstrNativePersona.sys.mjs	2026-09-15 21:40:52
++++ b/browser/components/DarkstrNativePersona.sys.mjs	2026-09-15 21:40:52
 @@ -381,9 +381,29 @@
        );
        const snap = DarkstrFfi.personaSnapshotFromSeed(seed, detectHostOs());
