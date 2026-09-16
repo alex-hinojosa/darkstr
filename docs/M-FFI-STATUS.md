@@ -31,3 +31,8 @@ Reviewed Rust→C ABI (`duppel-ffi`) consumed by Pollution chrome without hand-p
 ## Details
 
 See [`M-FFI-0008-STATUS.md`](M-FFI-0008-STATUS.md).
+
+
+## Follow-up
+
+- **0009**: [`M-FFI-0009-STATUS.md`](M-FFI-0009-STATUS.md).
