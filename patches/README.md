@@ -132,3 +132,15 @@ Real unified diff [`0012-darkstr-nav-languages-force-notify.patch`](0012-darkstr
 - Soft only — `nativePersonaHooks` default-off; no Accept-Language HTTP rewrite
 - Rebuild: `./mach build --allow-subdirectory-build browser/components`
 - See [`../docs/M3-LANGUAGES-SOFT-STATUS.md`](../docs/M3-LANGUAGES-SOFT-STATUS.md)
+
+
+## M3 soft languages BC override (0013)
+
+Real unified diff [`0013-darkstr-nav-languages-bc-override.patch`](0013-darkstr-nav-languages-bc-override.patch) against post-0012 155.0.1-1:
+
+- Parent `GetSnapshot` sets `browsingContext.top.languageOverride` to persona langs CSV (clear+set when unchanged)
+- Stock `DidSet` → `ClearLanguageCache` via BC IPC (pref notify alone insufficient in content)
+- When hooks on: Accept-Language for that BC may follow persona CSV (HttpBaseChannel)
+- Soft only — `nativePersonaHooks` default-off; residual not claimed closed
+- Rebuild: `./mach build --allow-subdirectory-build browser/components`
+- See [`../docs/M3-LANGUAGES-SOFT-STATUS.md`](../docs/M3-LANGUAGES-SOFT-STATUS.md)

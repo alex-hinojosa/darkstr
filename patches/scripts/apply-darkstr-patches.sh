@@ -223,6 +223,11 @@ patch_markers_present() {
         && grep -Fq 'Soft residual (0012)' "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrNativePersonaParent.sys.mjs" \
         && grep -Fq 'DarkstrNativePersona.refreshPlan()' "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrNativePersonaParent.sys.mjs"
       ;;
+    0013-darkstr-nav-languages-bc-override.patch)
+      grep -Fq '_syncBrowsingContextLanguageOverride' "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrNativePersonaParent.sys.mjs" \
+        && grep -Fq 'Soft residual (0013)' "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrNativePersonaParent.sys.mjs" \
+        && grep -Fq 'languageOverride' "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrNativePersonaParent.sys.mjs"
+      ;;
     *)
       return 1
       ;;
@@ -267,7 +272,7 @@ for stub in "${STUBS}"/000*.patch.stub; do
 done
 if [[ "${stub_count}" -gt 0 ]]; then
   echo "Note: ${stub_count} .patch.stub file(s) present — sketches only, not applied."
-  echo "Remaining stubs are sketches; real patches: 0002 XOR, 0003 chrome persona, 0005 C++ nsHttp, 0006/0007 C++ nav/docshell, 0008–0012 FFI/nav when present (0004 stub=chaff)."
+  echo "Remaining stubs are sketches; real patches: 0002 XOR, 0003 chrome persona, 0005 C++ nsHttp, 0006/0007 C++ nav/docshell, 0008–0013 FFI/nav when present (0004 stub=chaff)."
 fi
 
 echo "Done. Cfg path always; real unified diffs under patches/000*.patch applied when present."
@@ -279,5 +284,6 @@ echo "M3-CPP-NAV Navigator/DocShell: patches/0006-darkstr-cpp-navigator-docshell
 echo "M3 soft languages: patches/0010-darkstr-nav-languages-pageshow.patch (pageshow re-spoof). Rebuild: ./mach build --allow-subdirectory-build browser/components."
 echo "M3 soft languages cache: patches/0011-darkstr-nav-languages-cache-invalidate.patch (WebIDL languages cache). Rebuild: ./mach build --allow-subdirectory-build dom/base."
 echo "M3 soft languages force-notify: patches/0012-darkstr-nav-languages-force-notify.patch (pageshow GetSnapshot → langs prefchange). Rebuild: ./mach build --allow-subdirectory-build browser/components."
+echo "M3 soft languages BC override: patches/0013-darkstr-nav-languages-bc-override.patch (GetSnapshot → top.languageOverride). Rebuild: ./mach build --allow-subdirectory-build browser/components."
 echo "M-FFI-0009 ctypes soft-fail fix: patches/0009-darkstr-ffi-ctypes-softfail-fix.patch (PathUtils-less load + persist snapshot). Rebuild: ./mach build --allow-subdirectory-build browser/components."
 echo "M-FFI-0008 gecko FFI link: patches/0008-darkstr-gecko-ffi-link.patch (Approach B cdylib). Build FFI: third_party/darkstr/build-and-install-ffi.sh --prefix \"\${DARKSTR_GECKO_OBJDIR:-obj-*}/dist/bin\". Rebuild chrome: ./mach build browser/components (see docs/M-FFI-0008-STATUS.md)."

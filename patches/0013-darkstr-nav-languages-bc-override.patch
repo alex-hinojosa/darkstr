@@ -1,0 +1,76 @@
+# darkstr 0013 — BrowsingContext.languageOverride for navigator.languages residual
+# Train: LibreWolf / Firefox 155.0.1-1. Brand: darkstr — not official LibreWolf.
+# Soft residual after #35/0012: honesty PASS (0011 observer present) but live
+# navigator.languages stayed [en-US,en] through pageshow/late; no languagechange.
+# Root cause: parent prefchange (0011/0012) does not reach the measured content
+# window's observer. Stock path: BrowsingContext.languageOverride (chrome-webidl)
+# DidSet(IDX_LanguageOverride) walks windows → navigator->ClearLanguageCache()
+# via BC field IPC. HttpBaseChannel also uses languageOverride for Accept-Language
+# when set — when hooks+pollution apply, persona CSV becomes that BC's AL
+# (coherent soft claim expansion vs 0010 "no AL rewrite").
+# Fix: Parent GetSnapshot after refreshPlan sets top.languageOverride to langs
+# CSV (clear+set when unchanged to force DidSet); clear to "" when idle.
+# nativePersonaHooks stays default-off. Residual not claimed closed until Proof.
+--- a/browser/components/DarkstrNativePersonaParent.sys.mjs
++++ b/browser/components/DarkstrNativePersonaParent.sys.mjs
+@@ -9,6 +9,13 @@
+  * Soft residual (0012): refreshPlan on GetSnapshot so pageshow re-asserts
+  * darkstr.persona.languages (force notify) and content 0011 clears the WebIDL
+  * languages cache. nativePersonaHooks stays default-off.
++ *
++ * Soft residual (0013): Proof #35 — honesty PASS but live langs stayed [en-US,en]
++ * with no languagechange → parent prefchange does not reach the measured content
++ * window's observer. Stock path: BrowsingContext.languageOverride DidSet walks
++ * windows and ClearLanguageCache() via BC field IPC. When hooks+pollution apply,
++ * HttpBaseChannel also uses languageOverride for Accept-Language on this BC
++ * (persona CSV coherent). nativePersonaHooks stays default-off.
+  */
+ 
+ export class DarkstrNativePersonaParent extends JSWindowActorParent {
+@@ -22,7 +29,10 @@
+       );
+       // Re-read snapshot + force languages mirror notify even when CSV unchanged
+       // so pageshow path invalidates content navigator.languages WebIDL cache.
+-      DarkstrNativePersona.refreshPlan();
++      const plan = DarkstrNativePersona.refreshPlan();
++      // 0013: BC languageOverride clears Navigator WebIDL cache via DidSet/IPC
++      // (pref notify alone is insufficient for the measured content window).
++      this._syncBrowsingContextLanguageOverride(plan);
+       return DarkstrNativePersona.snapshotForBrowsingContext(
+         this.browsingContext
+       );
+@@ -30,4 +40,34 @@
+       return null;
+     }
+   }
++
++  /**
++   * Set top.languageOverride to persona languages CSV when applyNativeBase;
++   * clear to "" when idle. If the value is unchanged, clear then set to force
++   * DidSet (IDX_LanguageOverride) so content ClearLanguageCache runs.
++   */
++  _syncBrowsingContextLanguageOverride(plan) {
++    try {
++      const top = this.browsingContext?.top;
++      if (!top) {
++        return;
++      }
++      let next = "";
++      if (plan?.applyNativeBase && plan.snapshot) {
++        const langs = plan.snapshot.languages;
++        if (Array.isArray(langs) && langs.length) {
++          next = langs.join(",");
++        }
++      }
++      // Force DidSet when CSV unchanged (same-value assignment may no-op).
++      if (top.languageOverride === next) {
++        if (next) {
++          top.languageOverride = "";
++          top.languageOverride = next;
++        }
++        return;
++      }
++      top.languageOverride = next;
++    } catch (_e) {}
++  }
+ }
