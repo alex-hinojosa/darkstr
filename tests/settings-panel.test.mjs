@@ -30,6 +30,10 @@ test("settings panel exposes XOR mode radios and Delay persona one page", () => 
   assert.match(settingsHtml, /Delay persona one page/);
   assert.match(settingsHtml, /id="nativeCompatible"/);
   assert.match(settingsHtml, /id="nativeCompatSiteList"/);
+  assert.match(settingsHtml, /id="nativePersonaHooks"/);
+  assert.match(settingsHtml, /Native persona hooks/);
+  assert.match(settingsHtml, /Off by default/);
+  assert.match(settingsHtml, /Not a Cloudflare bypass/);
 });
 
 test("settings panel lists PREF-BRIDGE chrome / about:config names", () => {
@@ -38,6 +42,7 @@ test("settings panel lists PREF-BRIDGE chrome / about:config names", () => {
     "darkstr.nativeCompatible",
     "darkstr.nativeCompatSites",
     "darkstr.strictFirstDoc",
+    "darkstr.nativePersonaHooks",
   ]) {
     assert.match(settingsHtml, new RegExp(key.replace(".", "\\.")));
   }
@@ -90,6 +95,7 @@ test("settings JS uses the same background message types as popup", () => {
     "setMode",
     "setNativeCompatible",
     "setStrictFirstDoc",
+    "setNativePersonaHooks",
     "removeNativeCompatSite",
   ]) {
     assert.match(settingsJs, new RegExp(`type:\\s*"${t}"`));

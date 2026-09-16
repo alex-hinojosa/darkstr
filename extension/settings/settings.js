@@ -7,6 +7,7 @@ const nativeCompatible = document.getElementById("nativeCompatible");
 const nativeCompatSiteList = document.getElementById("nativeCompatSiteList");
 const siteSummary = document.getElementById("siteSummary");
 const strictFirstDoc = document.getElementById("strictFirstDoc");
+const nativePersonaHooks = document.getElementById("nativePersonaHooks");
 const prefsLine = document.getElementById("prefsLine");
 
 function xorCopy(mode) {
@@ -79,6 +80,7 @@ function paint(state) {
   });
   nativeCompatible.checked = state.prefs["darkstr.nativeCompatible"] === true;
   strictFirstDoc.checked = state.prefs["darkstr.strictFirstDoc"] !== false;
+  nativePersonaHooks.checked = state.prefs["darkstr.nativePersonaHooks"] === true;
   paintXor(mode);
 
   const act = state.activation || {};
@@ -101,7 +103,9 @@ function paint(state) {
     " · sites=" +
     siteCount +
     " · strictFirstDoc=" +
-    String(state.prefs["darkstr.strictFirstDoc"] !== false);
+    String(state.prefs["darkstr.strictFirstDoc"] !== false) +
+    " · nativePersonaHooks=" +
+    String(state.prefs["darkstr.nativePersonaHooks"] === true);
 
   paintSiteList(sitesMap);
 }
@@ -131,6 +135,14 @@ strictFirstDoc.addEventListener("change", async () => {
   const state = await B.runtime.sendMessage({
     type: "setStrictFirstDoc",
     enabled: strictFirstDoc.checked,
+  });
+  paint(state);
+});
+
+nativePersonaHooks.addEventListener("change", async () => {
+  const state = await B.runtime.sendMessage({
+    type: "setNativePersonaHooks",
+    enabled: nativePersonaHooks.checked,
   });
   paint(state);
 });

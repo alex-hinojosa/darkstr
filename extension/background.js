@@ -756,6 +756,16 @@ B.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         return;
       }
 
+      case "setNativePersonaHooks": {
+        // Default remains false in DARKSTR_DEFAULTS. Fork chrome/C++ SoT is about:config
+        // until prefs bridge ships; this gate skips WebExt MAIN inject when on.
+        await savePrefs({
+          [DARKSTR_PREF.NATIVE_PERSONA_HOOKS]: msg.enabled === true,
+        });
+        reply({ ok: true, ...publicState() });
+        return;
+      }
+
       case "setNativeCompatSite": {
         const hostname = String(msg.hostname || "");
         const etld1 = getETLD1(hostname);

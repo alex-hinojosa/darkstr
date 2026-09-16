@@ -3,12 +3,12 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>darkstr · Browser prefs</title>
+  <title>darkstr · Settings</title>
   <link rel="stylesheet" href="settings.css">
 </head>
 <body>
   <header>
-    <p class="eyebrow">Phase 2-aligned · WebExt mirror of browser prefs</p>
+    <p class="eyebrow">Phase 2-aligned · Settings (WebExt mirror of browser prefs)</p>
     <h1>darkstr settings</h1>
     <p class="tag">Pollution tool · not anti-detect · not Cloudflare bypass · not official LibreWolf</p>
   </header>
@@ -39,6 +39,20 @@
     <p id="siteSummary" class="hint">sites=0</p>
     <ul id="nativeCompatSiteList" class="site-list"></ul>
     <p class="hint">Add / remove sites from the toolbar popup on an http(s) tab. Summary here is read for Proof.</p>
+  </section>
+
+
+  <section id="nativePersonaHooksSection">
+    <h2>Native persona hooks</h2>
+    <label class="row">
+      <input type="checkbox" id="nativePersonaHooks">
+      When on, the darkstr fork applies persona in the browser (not only the extension). Pollution mode only. RFP must stay off. Not anti-detect. Not a Cloudflare bypass.
+    </label>
+    <p class="hint">
+      Maps to <code>darkstr.nativePersonaHooks</code>. <strong>Off by default.</strong>
+      Advanced / fork builds: this Settings toggle writes extension storage (skips WebExt MAIN inject when on).
+      On the darkstr fork, the same key under browser prefs / <code>about:config</code> remains authoritative for chrome/C++ hooks until the prefs bridge ships — keep them aligned.
+    </p>
   </section>
 
   <section>
@@ -77,6 +91,11 @@
           <td><code>darkstr.strictFirstDoc</code></td>
           <td>bool</td>
           <td>default <code>true</code> (“Delay persona one page”)</td>
+        </tr>
+        <tr>
+          <td><code>darkstr.nativePersonaHooks</code></td>
+          <td>bool</td>
+          <td>default <code>false</code> (Native persona hooks · Advanced / fork)</td>
         </tr>
       </tbody>
     </table>

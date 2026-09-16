@@ -3,6 +3,7 @@
 const B = typeof browser !== "undefined" ? browser : chrome;
 
 const rfpSteps = document.getElementById("rfpSteps");
+const forkHooksHint = document.getElementById("forkHooksHint");
 const permStatus = document.getElementById("permStatus");
 const formError = document.getElementById("formError");
 const nativeCompatible = document.getElementById("nativeCompatible");
@@ -13,7 +14,11 @@ function selectedMode() {
 }
 
 function syncRfpHint() {
-  rfpSteps.classList.toggle("hidden", selectedMode() !== "pollution");
+  const pollution = selectedMode() === "pollution";
+  rfpSteps.classList.toggle("hidden", !pollution);
+  if (forkHooksHint) {
+    forkHooksHint.classList.toggle("hidden", !pollution);
+  }
 }
 
 document.querySelectorAll('input[name="mode"]').forEach((el) => {

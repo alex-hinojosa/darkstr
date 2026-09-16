@@ -134,3 +134,12 @@ It does **not** write `privacy.*` on stock LibreWolf. Chrome authority + live ob
 
 Use [`PROOF-XOR-CHECKLIST.md`](PROOF-XOR-CHECKLIST.md) on every prefs / Gecko wiring PR.  
 Crate fixtures: `duppel_coherence::xor_matrix`, `assert_pollution_kills_rfp`, `assert_homogeneous_stock_rfp`.
+
+
+## 6c. Native persona hooks (PM Settings copy — 2026-09-15)
+
+- **Label:** Native persona hooks
+- **Help:** When on, the darkstr fork applies persona in the browser (not only the extension). Pollution mode only. RFP must stay off. Not anti-detect. Not a Cloudflare bypass.
+- **Default:** Off
+- **First-run (Pollution path):** “On the darkstr fork you can turn on Native persona hooks in Settings after RFP is off.”
+- WebExt Settings writes `browser.storage.local`; fork chrome/C++ SoT remains `about:config` until §6 sync bridge ships — keep keys aligned manually for Mini smoke.
