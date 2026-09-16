@@ -70,5 +70,20 @@ Root cause:
 - When not `applyNativeBase`: restore `intl.accept_languages` from saved if present; clear saved pref.
 - Parent: set `languageOverride` to **primary tag only** (`langs[0]`); on catch write a short reason to `darkstr.persona.lastError` (do not swallow).
 
-Soft only — hooks default-off. **Residual still OPEN** until Proof re-skim (do not claim closed). Uses stock `intl.accept_languages` content observer + primary-tag `languageOverride`; AL will follow persona when hooks on.
+Soft only — hooks default-off. Uses stock `intl.accept_languages` content observer + primary-tag `languageOverride`; AL will follow persona when hooks on. **langs residual CLOSED via #37** (see below); und hygiene parked in `0015`.
+
+
+## 0014 Proof skim → langs residual CLOSED (#37)
+
+Proof re-skim after `0014` (PR #37): live langs / AL path via stock `intl.accept_languages` + primary-tag `languageOverride` accepted. **langs residual CLOSED via #37.** Soft only — hooks remain default-off. Not a product flip.
+
+## 0015 soft park (`savedAcceptLanguages` = `und`)
+
+Proof note during/after #37 skim: first-time save in `_applyAcceptLanguagesForPersona` used `getCharPref("intl.accept_languages")`, which can return Gecko **`und`** (undefined locale) when no real user value — restore would then `setCharPref("und")`.
+
+**Fix (`0015`):**
+
+- On save: normalize empty / `und` (case-insensitive) → `""` into `darkstr.persona.savedAcceptLanguages`.
+- On restore: if saved is empty/`und` (incl. prior-run migrate), `clearUserPref(intl.accept_languages)` rather than set `und`.
+- Soft park only. Hooks default-off. langs residual stays CLOSED (#37); this parks the und hygiene note for Proof XOR skim (hooks on then off — `savedAcceptLanguages` should be `""` or real prior CSV, never `und`).
 
