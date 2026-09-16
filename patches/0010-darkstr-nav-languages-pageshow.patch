@@ -1,0 +1,96 @@
+# darkstr 0010 — navigator.languages soft residual (LibreWolf / Firefox 155.0.1-1)
+# Brand: darkstr — not official LibreWolf.
+# Re-query persona snapshot on pageshow so FFI langs (+es) replace sticky early spoof.
+# nativePersonaHooks stays default-off.
+--- a/browser/components/DarkstrNativePersonaChild.sys.mjs	2026-09-15 23:12:49
++++ b/browser/components/DarkstrNativePersonaChild.sys.mjs	2026-09-15 23:12:49
+@@ -5,6 +5,9 @@
+ /**
+  * darkstr M3 — JSWindowActor child. Minimum Navigator fields from same seed as HTTP UA.
+  * Brand: darkstr — not official LibreWolf. No Client Hints SET (Firefox host).
++ *
++ * Soft residual: re-query snapshot on pageshow so FFI-filled langs (e.g. +es)
++ * win over a sticky early spoof from DOMWindowCreated.
+  */
+ 
+ function spoof(proto, prop, getter) {
+@@ -17,41 +20,42 @@
+   } catch (_e) {}
+ }
+ 
++function applySnapshot(win, snapshot) {
++  if (!snapshot || !snapshot.userAgent || !win || !win.Navigator) {
++    return;
++  }
++  const navProto = win.Navigator.prototype;
++  spoof(navProto, "userAgent", () => snapshot.userAgent);
++  spoof(navProto, "platform", () => snapshot.platform || "MacIntel");
++  spoof(navProto, "hardwareConcurrency", () =>
++    Number(snapshot.hardwareConcurrency) || 8
++  );
++  spoof(navProto, "deviceMemory", () => Number(snapshot.deviceMemory) || 8);
++  const langs = Array.isArray(snapshot.languages)
++    ? snapshot.languages.slice()
++    : ["en-US", "en"];
++  spoof(navProto, "language", () => langs[0] || "en-US");
++  spoof(navProto, "languages", () => langs.slice());
++  try {
++    spoof(navProto, "userAgentData", () => undefined);
++  } catch (_e) {}
++}
++
+ export class DarkstrNativePersonaChild extends JSWindowActorChild {
+-  async handleEvent(event) {
+-    if (event.type !== "DOMWindowCreated") {
+-      return;
+-    }
++  async pullAndApply() {
+     let snapshot;
+     try {
+       snapshot = await this.sendQuery("DarkstrNativePersona:GetSnapshot");
+     } catch (_e) {
+       return;
+     }
+-    if (!snapshot || !snapshot.userAgent) {
++    applySnapshot(this.contentWindow, snapshot);
++  }
++
++  async handleEvent(event) {
++    if (event.type !== "DOMWindowCreated" && event.type !== "pageshow") {
+       return;
+     }
+-    const win = this.contentWindow;
+-    if (!win || !win.Navigator) {
+-      return;
+-    }
+-    const navProto = win.Navigator.prototype;
+-    spoof(navProto, "userAgent", () => snapshot.userAgent);
+-    spoof(navProto, "platform", () => snapshot.platform || "MacIntel");
+-    spoof(navProto, "hardwareConcurrency", () =>
+-      Number(snapshot.hardwareConcurrency) || 8
+-    );
+-    if ("deviceMemory" in navProto || true) {
+-      spoof(navProto, "deviceMemory", () => Number(snapshot.deviceMemory) || 8);
+-    }
+-    const langs = Array.isArray(snapshot.languages)
+-      ? snapshot.languages.slice()
+-      : ["en-US", "en"];
+-    spoof(navProto, "language", () => langs[0] || "en-US");
+-    spoof(navProto, "languages", () => langs.slice());
+-    // Firefox host: never expose userAgentData / never SET CH from content.
+-    try {
+-      spoof(navProto, "userAgentData", () => undefined);
+-    } catch (_e) {}
++    await this.pullAndApply();
+   }
+ }
+--- a/browser/components/DarkstrNativePersona.sys.mjs	2026-09-15 23:12:49
++++ b/browser/components/DarkstrNativePersona.sys.mjs	2026-09-15 23:12:49
+@@ -184,6 +184,7 @@
+             "moz-src:///browser/components/DarkstrNativePersonaChild.sys.mjs",
+           events: {
+             DOMWindowCreated: {},
++            pageshow: {},
+           },
+         },
+         allFrames: true,
