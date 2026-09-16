@@ -221,7 +221,7 @@ patch_markers_present() {
 }
 
 shopt -s nullglob
-for patchfile in "${STUBS}"/000*.patch "${ROOT}/patches"/000*.patch; do
+for patchfile in "${STUBS}"/000*.patch "${STUBS}"/001*.patch "${ROOT}/patches"/000*.patch "${ROOT}/patches"/001*.patch; do
   [[ -f "${patchfile}" ]] || continue
   echo "Applying ${patchfile}"
   if [[ "${DRY_RUN}" -eq 1 ]]; then
