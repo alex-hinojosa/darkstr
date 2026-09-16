@@ -144,3 +144,15 @@ Real unified diff [`0013-darkstr-nav-languages-bc-override.patch`](0013-darkstr-
 - Soft only — `nativePersonaHooks` default-off; residual not claimed closed
 - Rebuild: `./mach build --allow-subdirectory-build browser/components`
 - See [`../docs/M3-LANGUAGES-SOFT-STATUS.md`](../docs/M3-LANGUAGES-SOFT-STATUS.md)
+
+
+## M3 soft languages intl.accept (0014)
+
+Real unified diff [`0014-darkstr-nav-languages-intl-accept.patch`](0014-darkstr-nav-languages-intl-accept.patch) against post-0013 155.0.1-1:
+
+- Proof #36: `0013` CSV `languageOverride` likely failed `SetRealmLocaleOverride`; AL unchanged.
+- `refreshPlan` save-once `intl.accept_languages` → `darkstr.persona.savedAcceptLanguages`; force-notify set persona CSV; restore when idle.
+- Parent `languageOverride` = primary tag only (`langs[0]`); failures → `darkstr.persona.lastError`.
+- Soft only — hooks default-off. Residual OPEN until Proof re-skim.
+- Apply + rebuild: `./mach build --allow-subdirectory-build browser/components` (see `docs/M3-LANGUAGES-0014-MINI-APPLY.sh`).
+

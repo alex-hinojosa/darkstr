@@ -1,0 +1,198 @@
+# darkstr 0014 — intl.accept_languages + primary-tag languageOverride
+# Train: LibreWolf / Firefox 155.0.1-1. Brand: darkstr — not official LibreWolf.
+# Soft residual after #36/0013: honesty PASS; live langs still [en-US,en]; no
+# languagechange; Accept-Language stayed en-US,en;q=0.9 (no es).
+# Root cause: stock WebDriver BiDi sets a *single* locale tag via
+# context.languageOverride; DidSet → JS::SetRealmLocaleOverride(whole string).
+# 0013 passed persona CSV (es,en-US,en) → SetRealmLocaleOverride throws; setter
+# fails silently (try/catch swallowed); AL never changes. Content *does* observe
+# stock intl.accept_languages (nsGlobalWindowInner) and clears WebIDL cache +
+# fires languagechange.
+# Fix: (1) refreshPlan save-once intl.accept_languages → darkstr.persona.savedAcceptLanguages
+# then force-notify set to persona langs CSV; restore+clear saved when idle.
+# (2) Parent languageOverride = langs[0] only; on catch write darkstr.persona.lastError.
+# nativePersonaHooks stays default-off. Residual OPEN until Proof re-skim.
+--- a/browser/components/DarkstrNativePersona.sys.mjs
++++ b/browser/components/DarkstrNativePersona.sys.mjs
+@@ -35,6 +35,11 @@
+ const HW_MIRROR_PREF = "darkstr.persona.hardwareConcurrency";
+ const LANGS_MIRROR_PREF = "darkstr.persona.languages";
+ const DOCSHELL_PHASE_MIRROR_PREF = "darkstr.persona.docShellPhase";
++/** Stock content observer path (nsGlobalWindowInner) — save/restore around hooks. */
++const ACCEPT_LANGS_PREF = "intl.accept_languages";
++const SAVED_ACCEPT_LANGS_PREF = "darkstr.persona.savedAcceptLanguages";
++/** Soft failure reason for Proof (e.g. languageOverride SetRealmLocaleOverride). */
++const PERSONA_LAST_ERROR_PREF = "darkstr.persona.lastError";
+ 
+ const CLIENT_HINT_HEADERS = [
+   "sec-ch-ua",
+@@ -315,6 +320,9 @@
+         // Force prefchange when value unchanged so content 0011 clears WebIDL
+         // navigator.languages cache (same-value setStringPref does not notify).
+         this._forceLanguagesMirrorNotify(langs);
++        // 0014: stock intl.accept_languages content observer clears WebIDL langs
++        // + fires languagechange (SetRealmLocaleOverride CSV path failed in 0013).
++        this._applyAcceptLanguagesForPersona(langs);
+       } else {
+         for (const p of [
+           PLATFORM_MIRROR_PREF,
+@@ -326,6 +334,7 @@
+             Services.prefs.clearUserPref(p);
+           }
+         }
++        this._restoreAcceptLanguagesIfSaved();
+       }
+     } catch (_e) {}
+ 
+@@ -353,6 +362,83 @@
+     } catch (_e) {}
+   },
+ 
++  /**
++   * 0014: when hooks apply, save stock intl.accept_languages once, then
++   * force-notify set to persona langs CSV (clear+set if unchanged) so content
++   * nsGlobalWindowInner observer clears WebIDL languages + fires languagechange.
++   */
++  _applyAcceptLanguagesForPersona(langsCsv) {
++    const next = langsCsv || "en-US,en";
++    try {
++      if (!Services.prefs.prefHasUserValue(SAVED_ACCEPT_LANGS_PREF)) {
++        let cur = "";
++        try {
++          cur = Services.prefs.getCharPref(ACCEPT_LANGS_PREF, "");
++        } catch (_e) {
++          try {
++            cur = Services.prefs.getStringPref(ACCEPT_LANGS_PREF, "");
++          } catch (_e2) {
++            cur = "";
++          }
++        }
++        Services.prefs.setStringPref(SAVED_ACCEPT_LANGS_PREF, cur);
++      }
++      this._forceAcceptLanguagesNotify(next);
++    } catch (_e) {}
++  },
++
++  /**
++   * Write intl.accept_languages and always emit prefchange when unchanged
++   * (same pattern as _forceLanguagesMirrorNotify).
++   */
++  _forceAcceptLanguagesNotify(langsCsv) {
++    const next = langsCsv || "en-US,en";
++    try {
++      let cur = "";
++      try {
++        cur = Services.prefs.getCharPref(ACCEPT_LANGS_PREF, "");
++      } catch (_e) {
++        try {
++          cur = Services.prefs.getStringPref(ACCEPT_LANGS_PREF, "");
++        } catch (_e2) {
++          cur = "";
++        }
++      }
++      if (cur === next) {
++        if (Services.prefs.prefHasUserValue(ACCEPT_LANGS_PREF)) {
++          Services.prefs.clearUserPref(ACCEPT_LANGS_PREF);
++        } else {
++          // Default-branch equal: clear is a no-op; briefly set a different
++          // value then the target so observers still fire.
++          Services.prefs.setCharPref(ACCEPT_LANGS_PREF, next + ",tmp");
++        }
++      }
++      Services.prefs.setCharPref(ACCEPT_LANGS_PREF, next);
++    } catch (_e) {
++      try {
++        Services.prefs.setStringPref(ACCEPT_LANGS_PREF, next);
++      } catch (_e2) {}
++    }
++  },
++
++  /**
++   * When hooks idle: restore intl.accept_languages from saved and clear saved.
++   */
++  _restoreAcceptLanguagesIfSaved() {
++    try {
++      if (!Services.prefs.prefHasUserValue(SAVED_ACCEPT_LANGS_PREF)) {
++        return;
++      }
++      const saved = Services.prefs.getStringPref(SAVED_ACCEPT_LANGS_PREF, "");
++      Services.prefs.clearUserPref(SAVED_ACCEPT_LANGS_PREF);
++      if (saved) {
++        Services.prefs.setCharPref(ACCEPT_LANGS_PREF, saved);
++      } else if (Services.prefs.prefHasUserValue(ACCEPT_LANGS_PREF)) {
++        Services.prefs.clearUserPref(ACCEPT_LANGS_PREF);
++      }
++    } catch (_e) {}
++  },
++
+   getPlan() {
+     return this._plan || this.refreshPlan();
+   },
+--- a/browser/components/DarkstrNativePersonaParent.sys.mjs
++++ b/browser/components/DarkstrNativePersonaParent.sys.mjs
+@@ -16,6 +16,11 @@
+  * windows and ClearLanguageCache() via BC field IPC. When hooks+pollution apply,
+  * HttpBaseChannel also uses languageOverride for Accept-Language on this BC
+  * (persona CSV coherent). nativePersonaHooks stays default-off.
++ *
++ * Soft residual (0014): Proof #36 — 0013 CSV languageOverride likely failed
++ * SetRealmLocaleOverride (stock BiDi sets a single locale tag). Parent now sets
++ * primary tag only; refreshPlan drives stock intl.accept_languages (save/restore)
++ * so content observer clears cache + languagechange. Residual OPEN until skim.
+  */
+ 
+ export class DarkstrNativePersonaParent extends JSWindowActorParent {
+@@ -30,8 +35,7 @@
+       // Re-read snapshot + force languages mirror notify even when CSV unchanged
+       // so pageshow path invalidates content navigator.languages WebIDL cache.
+       const plan = DarkstrNativePersona.refreshPlan();
+-      // 0013: BC languageOverride clears Navigator WebIDL cache via DidSet/IPC
+-      // (pref notify alone is insufficient for the measured content window).
++      // 0013/0014: BC languageOverride — primary tag only (SetRealmLocaleOverride).
+       this._syncBrowsingContextLanguageOverride(plan);
+       return DarkstrNativePersona.snapshotForBrowsingContext(
+         this.browsingContext
+@@ -42,9 +46,11 @@
+   }
+ 
+   /**
+-   * Set top.languageOverride to persona languages CSV when applyNativeBase;
+-   * clear to "" when idle. If the value is unchanged, clear then set to force
+-   * DidSet (IDX_LanguageOverride) so content ClearLanguageCache runs.
++   * Set top.languageOverride to persona **primary** language tag when
++   * applyNativeBase; clear to "" when idle. Stock WebDriver BiDi / DidSet calls
++   * JS::SetRealmLocaleOverride with the whole string — a CSV throws and the
++   * setter fails (Proof #36: AL never gained es). If unchanged, clear then set
++   * to force DidSet. On failure write darkstr.persona.lastError (do not swallow).
+    */
+   _syncBrowsingContextLanguageOverride(plan) {
+     try {
+@@ -56,10 +62,11 @@
+       if (plan?.applyNativeBase && plan.snapshot) {
+         const langs = plan.snapshot.languages;
+         if (Array.isArray(langs) && langs.length) {
+-          next = langs.join(",");
++          // Primary tag only — not langs.join(",") (0013 CSV broke SetRealmLocaleOverride).
++          next = String(langs[0] || "").trim();
+         }
+       }
+-      // Force DidSet when CSV unchanged (same-value assignment may no-op).
++      // Force DidSet when value unchanged (same-value assignment may no-op).
+       if (top.languageOverride === next) {
+         if (next) {
+           top.languageOverride = "";
+@@ -68,6 +75,13 @@
+         return;
+       }
+       top.languageOverride = next;
+-    } catch (_e) {}
++    } catch (e) {
++      try {
++        const reason =
++          "languageOverride: " +
++          (e && e.message ? String(e.message) : String(e)).slice(0, 180);
++        Services.prefs.setStringPref("darkstr.persona.lastError", reason);
++      } catch (_e2) {}
++    }
+   }
+ }
