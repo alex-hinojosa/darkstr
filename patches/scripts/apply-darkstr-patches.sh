@@ -202,6 +202,12 @@ patch_markers_present() {
         && grep -Fq "DarkstrFfi.sys.mjs" "${DARKSTR_GECKO_ROOT}/browser/components/moz.build" \
         && grep -Fq "darkstr_ffi_persona_snapshot_json" "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrFfi.sys.mjs"
       ;;
+    0009-darkstr-ffi-ctypes-softfail-fix.patch)
+      [[ -f "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrFfi.sys.mjs" ]] \
+        && grep -Fq "defineESModuleGetters" "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrFfi.sys.mjs" \
+        && grep -Fq "FFI snapshot miss" "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrNativePersona.sys.mjs" \
+        && grep -Fq "Persist so about:config" "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrNativePersona.sys.mjs"
+      ;;
     *)
       return 1
       ;;
@@ -246,7 +252,7 @@ for stub in "${STUBS}"/000*.patch.stub; do
 done
 if [[ "${stub_count}" -gt 0 ]]; then
   echo "Note: ${stub_count} .patch.stub file(s) present — sketches only, not applied."
-  echo "Remaining stubs are sketches; real patches: 0002 XOR, 0003 chrome persona, 0005 C++ nsHttp, 0006/0007 C++ nav/docshell, 0008 FFI link when present (0004 stub=chaff)."
+  echo "Remaining stubs are sketches; real patches: 0002 XOR, 0003 chrome persona, 0005 C++ nsHttp, 0006/0007 C++ nav/docshell, 0008/0009 FFI link when present (0004 stub=chaff)."
 fi
 
 echo "Done. Cfg path always; real unified diffs under patches/000*.patch applied when present."
@@ -255,4 +261,5 @@ echo "M2 live observer: patches/0002-darkstr-mode-xor-rfp.patch (DarkstrModeXor.
 echo "M3 native hooks: patches/0003-darkstr-native-persona-hooks.patch (DarkstrNativePersona*.sys.mjs). Rebuild: ./mach build browser/components (see docs/M3-STATUS.md)."
 echo "M3-CPP nsHttp hooks: patches/0005-darkstr-cpp-native-hooks.patch (DarkstrNsHttpHooks). Rebuild: ./mach build netwerk/protocol/http (see docs/M3-CPP-STATUS.md)."
 echo "M3-CPP-NAV Navigator/DocShell: patches/0006-darkstr-cpp-navigator-docshell.patch. Rebuild: ./mach build dom/base docshell/base (see docs/M3-CPP-NAV-STATUS.md)."
+echo "M-FFI-0009 ctypes soft-fail fix: patches/0009-darkstr-ffi-ctypes-softfail-fix.patch (PathUtils-less load + persist snapshot). Rebuild: ./mach build --allow-subdirectory-build browser/components."
 echo "M-FFI-0008 gecko FFI link: patches/0008-darkstr-gecko-ffi-link.patch (Approach B cdylib). Build FFI: third_party/darkstr/build-and-install-ffi.sh --prefix \"\${DARKSTR_GECKO_OBJDIR:-obj-*}/dist/bin\". Rebuild chrome: ./mach build browser/components (see docs/M-FFI-0008-STATUS.md)."
