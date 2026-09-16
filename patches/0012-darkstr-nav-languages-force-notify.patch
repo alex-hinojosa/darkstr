@@ -1,0 +1,74 @@
+# darkstr 0012 — force darkstr.persona.languages prefchange on pageshow/GetSnapshot
+# Train: LibreWolf / Firefox 155.0.1-1. Brand: darkstr — not official LibreWolf.
+# Soft residual after #33/0011: observer only fires when the pref *changes*.
+# First content GetLanguages often misses TryGetLanguages (pref/hooks race) and
+# WebIDL-caches [en-US,en]; pageshow JS re-spoof cannot clear that cache; a
+# same-value setStringPref does not notify → 0011 never runs (no languagechange).
+# Fix: clear+set languages mirror when CSV unchanged; refreshPlan on GetSnapshot.
+# nativePersonaHooks stays default-off. No Accept-Language HTTP rewrite.
+diff -u a/browser/components/DarkstrNativePersona.sys.mjs b/browser/components/DarkstrNativePersona.sys.mjs
+--- a/browser/components/DarkstrNativePersona.sys.mjs
++++ b/browser/components/DarkstrNativePersona.sys.mjs
+@@ -312,7 +312,9 @@
+         const langs = Array.isArray(snapshot.languages)
+           ? snapshot.languages.join(",")
+           : "en-US,en";
+-        Services.prefs.setStringPref(LANGS_MIRROR_PREF, langs);
++        // Force prefchange when value unchanged so content 0011 clears WebIDL
++        // navigator.languages cache (same-value setStringPref does not notify).
++        this._forceLanguagesMirrorNotify(langs);
+       } else {
+         for (const p of [
+           PLATFORM_MIRROR_PREF,
+@@ -330,6 +332,27 @@
+     return this._plan;
+   },
+ 
++
++  /**
++   * Write darkstr.persona.languages and always emit a prefchange when the CSV
++   * is unchanged. Content nsGlobalWindowInner (0011) observes this pref and
++   * calls ClearCachedLanguage(s)Value — required because pageshow JS re-spoof
++   * cannot break the WebIDL [Cached] languages array, and a no-op set leaves
++   * the first AcceptLanguages / early-miss read stuck as [en-US, en].
++   */
++  _forceLanguagesMirrorNotify(langsCsv) {
++    const next = langsCsv || "en-US,en";
++    try {
++      if (Services.prefs.prefHasUserValue(LANGS_MIRROR_PREF)) {
++        const cur = Services.prefs.getStringPref(LANGS_MIRROR_PREF);
++        if (cur === next) {
++          Services.prefs.clearUserPref(LANGS_MIRROR_PREF);
++        }
++      }
++      Services.prefs.setStringPref(LANGS_MIRROR_PREF, next);
++    } catch (_e) {}
++  },
++
+   getPlan() {
+     return this._plan || this.refreshPlan();
+   },
+diff -u a/browser/components/DarkstrNativePersonaParent.sys.mjs b/browser/components/DarkstrNativePersonaParent.sys.mjs
+--- a/browser/components/DarkstrNativePersonaParent.sys.mjs
++++ b/browser/components/DarkstrNativePersonaParent.sys.mjs
+@@ -5,6 +5,10 @@
+ /**
+  * darkstr M3 — JSWindowActor parent. Returns persona snapshot for Navigator binds.
+  * Brand: darkstr — not official LibreWolf.
++ *
++ * Soft residual (0012): refreshPlan on GetSnapshot so pageshow re-asserts
++ * darkstr.persona.languages (force notify) and content 0011 clears the WebIDL
++ * languages cache. nativePersonaHooks stays default-off.
+  */
+ 
+ export class DarkstrNativePersonaParent extends JSWindowActorParent {
+@@ -16,6 +20,9 @@
+       const { DarkstrNativePersona } = ChromeUtils.importESModule(
+         "moz-src:///browser/components/DarkstrNativePersona.sys.mjs"
+       );
++      // Re-read snapshot + force languages mirror notify even when CSV unchanged
++      // so pageshow path invalidates content navigator.languages WebIDL cache.
++      DarkstrNativePersona.refreshPlan();
+       return DarkstrNativePersona.snapshotForBrowsingContext(
+         this.browsingContext
+       );
