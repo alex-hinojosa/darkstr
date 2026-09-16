@@ -121,3 +121,14 @@ Real unified diff [`0007-darkstr-cpp-docshell-nav-sot.patch`](0007-darkstr-cpp-d
 - Build: `third_party/darkstr/build-and-install-ffi.sh --prefix "$objdir/dist/bin"`
 - Rebuild: `./mach build browser/components`
 - See [`../docs/M-FFI-0008-STATUS.md`](../docs/M-FFI-0008-STATUS.md). Approach A (gkrust path-dep) deferred.
+
+
+## M3 soft languages force-notify (0012)
+
+Real unified diff [`0012-darkstr-nav-languages-force-notify.patch`](0012-darkstr-nav-languages-force-notify.patch) against post-0011 155.0.1-1:
+
+- Chrome `_forceLanguagesMirrorNotify` clear+set when `darkstr.persona.languages` CSV unchanged
+- Parent `GetSnapshot` calls `refreshPlan()` so pageshow triggers content `0011` WebIDL cache clear
+- Soft only — `nativePersonaHooks` default-off; no Accept-Language HTTP rewrite
+- Rebuild: `./mach build --allow-subdirectory-build browser/components`
+- See [`../docs/M3-LANGUAGES-SOFT-STATUS.md`](../docs/M3-LANGUAGES-SOFT-STATUS.md)
