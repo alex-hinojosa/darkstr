@@ -10,7 +10,7 @@ default-on. Does **not** claim a fresh `./mach package` unless one was actually 
 | Claim | Truth |
 |---|---|
 | Fresh `./mach package` this push | **No.** Builder executor for this docs push ran off-Mini (Cursor Linux box). No SSH/local Mini seat → `./mach package` was **not** attempted. |
-| Disk ~14 Gi free on Mini | **Operator-reported context** for a future Mini package attempt; **not verified** from this seat. |
+| Disk ~14 Gi free on Mini | **Verified 2026-09-17** (~14 Gi on Data). Fresh `./mach package` still deferred (tight for stage/DMG). |
 | Fresh branded installer / DMG | **Not claimed.** |
 | Existing built app as Proof target | **Yes — pin only** (see below). Operator / Mini seat must confirm path + mtime before treating as Proof evidence. |
 
@@ -26,7 +26,11 @@ invent a package that was never produced.
 | Binary (typical) | `LibreWolf.app/Contents/MacOS/librewolf` |
 | Brand | darkstr fork work on LibreWolf train — **not** official LibreWolf |
 | Fresh package this push | **No** |
-| App mtime / exact objdir name | **Unverified from this seat.** On Mini, record with: `ls -ld $DARKSTR_GECKO_ROOT/obj-*/dist/LibreWolf.app` and paste into a follow-up pin edit |
+| Exact app path | `…/obj-aarch64-apple-darwin25.6.0/dist/LibreWolf.app` |
+| App dir mtime (Mini, verified 2026-09-17 ~00:53 CDT) | **2026-09-15 23:21 CDT** (`ls -ld`) |
+| `librewolf` binary mtime | **2026-09-15 23:21 CDT** (post-0011 XUL relink era) |
+| `libduppel_ffi.dylib` mtime | **2026-09-15 18:25 CDT** |
+| Mini free disk at verify | **~14 Gi** (`df` on Data volume) |
 
 **Do not** clobber the objdir to “make room.” Prefer documenting the existing app.
 **Never** `mv` under `/Volumes/Mesh` (Atlas / smbfs panic risk).
