@@ -1,16 +1,17 @@
 # Phase 2 exit status — residual map
 
 **Project:** darkstr — pollution browser; not official LibreWolf.
-**Truth point:** `origin/main` at `3e78a18` (2026-09-16).
+**Truth point:** `origin/main` at `17cb98b` (2026-09-16 CDT) — merge of #41 on top of #39 (`f5d58a9`).
 **Scope:** documentation-only exit hygiene. This file does not change Gecko patches, defaults, or product behavior.
 
 ## Bottom line
 
-Phase 2 control-plane work and the train-pinned native hook slices are represented on
-`main`, but Phase 2 is **not exit-clean yet**. The fork artifact, headed Proof matrix,
-packaging/rebuild evidence, and several native/depth follow-ups remain open. PR #39
-(WebExt ↔ chrome prefs bridge) is **open and awaiting Proof**; it is not part of this
-`main` tip and is not claimed merged here.
+Phase 2 control-plane work, train-pinned native hook slices, the WebExt ↔ chrome prefs
+bridge (#39), and Settings authoritative copy (#41) are on `main`. Langs residuals
+#37 / #38 are closed. Phase 2 is **still not exit-clean**: the fork packaging artifact
+(with recorded evidence), headed Proof XOR matrix on that artifact, and several
+native/depth follow-ups remain open. Hooks stay **default-off**. Soft residual for
+#39 harness `storage.local` live read stays **soft** (see Mini smoke / package pin).
 
 ## Closed or landed on `main`
 
@@ -26,6 +27,8 @@ packaging/rebuild evidence, and several native/depth follow-ups remain open. PR 
 | FFI boundary / Approach B pin | `duppel-ffi` and the ctypes `cdylib` route plus soft-fail follow-up landed as implementation slices | #27, #28, #29 |
 | Soft `navigator.languages` residual | **Closed** after the `intl.accept_languages` + primary-tag `languageOverride` fix and Proof skim | #37 (0014) |
 | `savedAcceptLanguages=und` hygiene | **Soft-parked/closed**: save and restore normalize `und` to an empty pref or a real prior CSV | #38 (0015) |
+| WebExt ↔ chrome prefs bridge | **MERGED** — `experiment_apis.darkstrPrefs` + `lib/pref-bridge.js`; chrome authoritative on fork; stock without experiments stays storage-only | #39 → `f5d58a9` |
+| Settings authoritative copy | **MERGED** — PM copy: fork Settings writes chrome via bridge; stock stays extension storage; hooks Off by default | #41 → `17cb98b` |
 
 The earlier C++ nsHttp/Navigator/DocShell slices above are shipped patch material;
 this status does not imply that hooks are enabled in a product build.
@@ -34,9 +37,9 @@ this status does not imply that hooks are enabled in a product build.
 
 | Residual | Status / honest next step |
 |---|---|
-| **Prefs bridge #39** | **OPEN — awaiting Proof.** Bidirectional WebExt storage ↔ chrome-pref sync is fork-only and not merged into `main`; do not call it complete. |
-| **Fork packaging artifact** | **OPEN.** A reproducible branded darkstr fork build/package and its artifact evidence are still required for the Phase 2 exit. Existing patch files and control-plane tests are not a shipped browser binary. |
-| **Proof fork XOR matrix** | **OPEN.** Run the headed fork artifact through Homogeneous, Pollution, and Native-Compatible cases, including no UTC letterbox under active Pollution. `cargo test`/fixtures alone do not close this gate. |
+| **#39 soft residual — harness `storage.local`** | **SOFT.** Live harness / Proof storage.local read vs chrome mirror remains soft; do not treat as a hard fail. Bridge code is merged; this residual does not reopen #39. |
+| **Fork packaging artifact** | **OPEN — pin, not fresh package (this push).** See [`MINI-PACKAGE-PIN.md`](MINI-PACKAGE-PIN.md). This executor could not run `./mach package` on the Mini; no fresh package is claimed. Existing `obj-*/dist/LibreWolf.app` is the intended Proof target when present. |
+| **Proof fork XOR matrix** | **OPEN.** Run the headed fork artifact through Homogeneous, Pollution, and Native-Compatible cases, including no UTC letterbox under active Pollution. Use `~/src/darkstr-gecko/headed-hooks-on-skim.sh` when operator runs a headed skim. `cargo test`/fixtures alone do not close this gate. |
 | **Approach A (`gkrust` path dependency)** | **DEFERRED.** Approach B (`cdylib` + chrome ctypes) is the current FFI pin. The libxul-resident gkrust path remains future work; no Approach A claim is made. |
 | **Live native chaff/depth C++** | **OPEN; Phase 3 depth.** M4 has scheduler/depth enums, plans, seeds, and stubs only. Native timer plus canvas/WebGL/Audio/worker C++ hooks are not claimed. |
 | **Native-Compatible privacy-pane site-list UI** | **OPEN; Phase 2→3 / PM scheduling.** The Phase 1 WebExt site list remains the usable path; no chrome privacy-pane UI flip is made here. |
@@ -53,8 +56,11 @@ this status does not imply that hooks are enabled in a product build.
 - [x] `navigator.languages` residual is closed by #37; `und` restore hygiene is
       soft-parked by #38.
 - [x] Cookie sandbox/firewall is correctly recorded as backlog-only documentation.
-- [ ] #39 WebExt ↔ chrome prefs bridge merged and Proof-checked.
-- [ ] Reproducible branded fork build and packaging artifact recorded.
+- [x] #39 WebExt ↔ chrome prefs bridge **merged** (`f5d58a9`); Settings copy #41
+      **merged** (`17cb98b`). Soft residual: harness `storage.local` live read.
+- [ ] Reproducible branded fork **fresh** packaging artifact recorded (current: existing
+      app pin only — see [`MINI-PACKAGE-PIN.md`](MINI-PACKAGE-PIN.md); no fresh
+      `./mach package` claimed in this push).
 - [ ] Headed Proof XOR matrix on that fork artifact recorded.
 - [ ] Approach A gkrust/libxul link completed (explicitly deferred).
 - [ ] Live native chaff timer and canvas/WebGL/Audio/worker C++ depth hooks landed.
@@ -64,8 +70,9 @@ this status does not imply that hooks are enabled in a product build.
 
 - `darkstr.nativePersonaHooks` remains **default-off**. No PM flip and no product
   default change is made by this document.
-- PR #39 is in flight and awaiting Proof; this branch is based on `origin/main`, not
-  the PR branch.
+- #39 and #41 are **merged** into `main` at this truth tip; this docs PR only updates
+  exit hygiene to match that reality.
+- Soft residual for harness `storage.local` (post-#39) stays soft — not a reopen.
 - A patch, a dry-run, a Rust test, or a local control-plane fixture is not evidence of
   a rebuilt fork binary, package, or headed Proof PASS.
 - No Gecko source is changed by this PR. No new C++ hook is asserted here.
@@ -79,7 +86,11 @@ this status does not imply that hooks are enabled in a product build.
 
 ## Suggested exit order
 
-1. Proof reviews and, if accepted, merges #39.
-2. Produce and record the branded fork packaging artifact.
-3. Run the headed Proof XOR/coherence matrix against that artifact.
+1. ~~Proof reviews and, if accepted, merges #39.~~ **Done** (`f5d58a9`); #41 Settings
+   copy also merged (`17cb98b`).
+2. Produce and record the branded fork packaging artifact (or keep
+   [`MINI-PACKAGE-PIN.md`](MINI-PACKAGE-PIN.md) current when disk is too tight for
+   `./mach package`).
+3. Run the headed Proof XOR/coherence matrix against that artifact (Homogeneous /
+   Pollution / NC) via `headed-hooks-on-skim.sh` when appropriate.
 4. Schedule the privacy-pane site list and Phase 3 native chaff/depth work separately.
