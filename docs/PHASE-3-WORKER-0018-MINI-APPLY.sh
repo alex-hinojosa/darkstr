@@ -3,6 +3,7 @@
 # Phase 3 pin 3 — apply/refresh 0018 worker globals coherence + incremental browser/components build.
 # Carries pin 1 install-dist_bin lesson + pin 2 module-refresh lesson (subdirectory mach alone can skip new MOZ_SRC;
 # re-apply over stale new-file modules fails — refresh first so markers succeed).
+# Soft residual lastInstall/HW fixes are baked into this patch body (also shipped as 0019).
 set -euo pipefail
 source "${HOME}/src/darkstr-gecko/DARKSTR_GECKO_ROOT.env"
 REPO="${1:-${HOME}/src/darkstr-gecko/darkstr}"
@@ -68,6 +69,8 @@ test -f "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrWorkerHooksChild.sys.mj
 test -f "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrWorkerHooksParent.sys.mjs"
 grep -Fq 'DarkstrWorkerHooks' "${DARKSTR_GECKO_ROOT}/browser/components/BrowserGlue.sys.mjs" || true
 grep -Fq 'Cu.waiveXrays' "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrWorkerHooksChild.sys.mjs"
+grep -Fq 'runtimeOnly' "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrWorkerHooks.sys.mjs"
+grep -Fq '_reportRuntime' "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrWorkerHooksChild.sys.mjs"
 grep -Fq 'pageshow' "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrWorkerHooks.sys.mjs"
 grep -Fq 'darkstr.worker.lastError' "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrWorkerHooks.sys.mjs"
 grep -Fq '_readPersonaSeedPref' "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrWorkerHooks.sys.mjs"

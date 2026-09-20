@@ -2,6 +2,7 @@
 # Run on Alexander's Mac mini (SSD). Atlas: never mv under /Volumes/Mesh.
 # Phase 3 pin 2 — apply/refresh 0017 depth canvas/WebGL/Audio + incremental browser/components build.
 # Carries pin 1 install-dist_bin lesson (subdirectory mach alone can skip new MOZ_SRC).
+# Soft residual OfflineAudio fix is baked into this patch body (also shipped as 0019).
 set -euo pipefail
 source "${HOME}/src/darkstr-gecko/DARKSTR_GECKO_ROOT.env"
 REPO="${1:-${HOME}/src/darkstr-gecko/darkstr}"
@@ -67,6 +68,7 @@ test -f "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrDepthHooksChild.sys.mjs
 test -f "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrDepthHooksParent.sys.mjs"
 grep -Fq 'DarkstrDepthHooks' "${DARKSTR_GECKO_ROOT}/browser/components/BrowserGlue.sys.mjs"
 grep -Fq 'Cu.waiveXrays' "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrDepthHooksChild.sys.mjs"
+grep -Fq 'channelContentKey' "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrDepthHooksChild.sys.mjs"
 grep -Fq 'pageshow' "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrDepthHooks.sys.mjs"
 grep -Fq 'darkstr.depth.lastError' "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrDepthHooks.sys.mjs"
 grep -Fq '_readPersonaSeedPref' "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrDepthHooks.sys.mjs"

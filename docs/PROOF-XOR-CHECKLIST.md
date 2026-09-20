@@ -39,6 +39,7 @@ When the PR touches chaff scheduler, canvas/Audio/WebGL/worker depth, or strict-
 - [ ] Depth hooks `0017` (canvas/WebGL/Audio): idle by default; Pollution+hooks+seeds → armed; Homogeneous/NC → idle; no `privacy.*` writes
 - [ ] Worker hooks `0018` (Dedicated/Shared): idle by default; Pollution+hooks+persona → armed; Homogeneous/NC → idle; no `privacy.*` writes; ServiceWorker/Worklets **not** claimed
 - [ ] No claim that worker hooks landed unless Proof-checked on a fork artifact (`0018` = Worker/SharedWorker constructor wrap; ServiceWorker out of scope)
+- [ ] Soft residuals `0019`: after Pollution+hooks wrap, `darkstr.worker.lastInstall` stays ok/installed (runtime fallbacks → lastError only); OfflineAudio fill/startRendering → nonzero getChannelData deltaSum; HW best-effort (host OK if non-configurable)
 - [ ] After Mini subdirectory `mach build`: `make install-dist_bin` + LibreWolf.app `moz-src` present (pin 1 lesson)
 - [ ] Native-Compatible site list UI changes (if any) called out for Product Manager; prefer docs-only
 - [ ] Track D Servo/Ladybird remains docs-only — no eng ship dependency

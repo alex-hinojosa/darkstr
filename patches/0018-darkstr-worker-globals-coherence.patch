@@ -44,7 +44,7 @@
 
 --- /dev/null
 +++ b/browser/components/DarkstrWorkerHooks.sys.mjs
-@@ -0,0 +1,569 @@
+@@ -0,0 +1,585 @@
 +/* This Source Code Form is subject to the terms of the Mozilla Public
 + * License, v. 2.0. If a copy of the MPL was not distributed with this
 + * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -364,8 +364,13 @@
 +    return this._plan || this.refreshPlan();
 +  },
 +
-+  /** Persist content-install diagnostics. Never writes privacy.*. */
++  /**
++   * Persist content-install diagnostics. Never writes privacy.*.
++   * Soft residual: runtime construct fallbacks set runtimeOnly and must not
++   * overwrite lastInstall after a successful wrap (ok stays installed).
++   */
 +  recordInstallStatus(detail, browsingContext = null) {
++    const runtimeOnly = !!detail?.runtimeOnly;
 +    const payload = {
 +      ok: !!detail?.ok,
 +      event: String(detail?.event || "unknown"),
@@ -378,6 +383,17 @@
 +        payload.bc = browsingContext.id;
 +      }
 +    } catch (_e) {}
++    if (runtimeOnly) {
++      try {
++        Services.prefs.setStringPref(
++          LAST_ERROR_PREF,
++          `runtime:${payload.status}:${payload.error}`.slice(0, 1000)
++        );
++      } catch (e) {
++        console.error("darkstr worker lastError write failed", e);
++      }
++      return;
++    }
 +    try {
 +      Services.prefs.setStringPref(LAST_INSTALL_PREF, JSON.stringify(payload));
 +    } catch (e) {
@@ -614,10 +630,9 @@
 +    } catch (_e) {}
 +  },
 +};
-
 --- /dev/null
 +++ b/browser/components/DarkstrWorkerHooksChild.sys.mjs
-@@ -0,0 +1,366 @@
+@@ -0,0 +1,406 @@
 +/* This Source Code Form is subject to the terms of the Mozilla Public
 + * License, v. 2.0. If a copy of the MPL was not distributed with this
 + * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -696,18 +711,37 @@
 +    ? persona.languages
 +    : ["en-US", "en"];
 +  const appVersion = String(persona.userAgent || "").replace(/^Mozilla\//, "");
++  const hw = Number(persona.hardwareConcurrency) || 8;
++  const mem = Number(persona.deviceMemory) || 8;
++  // Prefer own-property overrides on the navigator instance. WorkerNavigator
++  // prototype hardwareConcurrency is often non-configurable from C++; proto
++  // defineProperty then silently fails and Proof still sees host cores.
 +  return `
 +(function(){
 +  try {
-+    var proto = self.navigator && self.navigator.__proto__;
-+    if (!proto) { return; }
-+    Object.defineProperty(proto, "userAgent", { configurable: true, enumerable: true, get: function(){ return ${JSON.stringify(persona.userAgent)}; } });
-+    Object.defineProperty(proto, "platform", { configurable: true, enumerable: true, get: function(){ return ${JSON.stringify(persona.platform || "MacIntel")}; } });
-+    Object.defineProperty(proto, "hardwareConcurrency", { configurable: true, enumerable: true, get: function(){ return ${Number(persona.hardwareConcurrency) || 8}; } });
-+    Object.defineProperty(proto, "deviceMemory", { configurable: true, enumerable: true, get: function(){ return ${Number(persona.deviceMemory) || 8}; } });
-+    Object.defineProperty(proto, "language", { configurable: true, enumerable: true, get: function(){ return ${JSON.stringify(langs[0] || "en-US")}; } });
-+    Object.defineProperty(proto, "languages", { configurable: true, enumerable: true, get: function(){ return Object.freeze(${JSON.stringify(langs)}); } });
-+    Object.defineProperty(proto, "appVersion", { configurable: true, enumerable: true, get: function(){ return ${JSON.stringify(appVersion)}; } });
++    var nav = self.navigator;
++    if (!nav) { return; }
++    var proto = nav.__proto__;
++    function def(obj, prop, getter) {
++      if (!obj) { return false; }
++      try {
++        Object.defineProperty(obj, prop, { configurable: true, enumerable: true, get: getter });
++        return true;
++      } catch (_e) { return false; }
++    }
++    function spoof(prop, getter) {
++      if (def(nav, prop, getter)) { return true; }
++      return def(proto, prop, getter);
++    }
++    spoof("userAgent", function(){ return ${JSON.stringify(persona.userAgent)}; });
++    spoof("platform", function(){ return ${JSON.stringify(persona.platform || "MacIntel")}; });
++    // Best-effort: instance first, then proto. If both refuse (non-configurable
++    // host binding), hardwareConcurrency residual stays host — documented.
++    spoof("hardwareConcurrency", function(){ return ${hw}; });
++    spoof("deviceMemory", function(){ return ${mem}; });
++    spoof("language", function(){ return ${JSON.stringify(langs[0] || "en-US")}; });
++    spoof("languages", function(){ return Object.freeze(${JSON.stringify(langs)}); });
++    spoof("appVersion", function(){ return ${JSON.stringify(appVersion)}; });
 +  } catch (_e) {}
 +})();`;
 +}
@@ -938,6 +972,27 @@
 +    }
 +  }
 +
++  /**
++   * Construct-time fallback (blob wrap threw → OrigWorker). Must NOT clobber
++   * lastInstall after a successful constructor wrap — Proof soft residual:
++   * lastInstall often ended ok:false/runtime-Worker even when persona UA landed.
++   * Runtime surfaces go to lastError only (runtimeOnly).
++   */
++  _reportRuntime(surface, error) {
++    const detail = {
++      ok: false,
++      event: "runtime",
++      status: `runtime-${surface}`,
++      error: error ? errorText(error).slice(0, 1000) : "",
++      runtimeOnly: true,
++    };
++    try {
++      this.sendAsyncMessage("DarkstrWorkerHooks:InstallStatus", detail);
++    } catch (reportError) {
++      console.error("darkstr worker runtime diagnostic IPC failed", reportError, detail);
++    }
++  }
++
 +  async pullAndInstall(eventType) {
 +    let payload;
 +    try {
@@ -968,7 +1023,7 @@
 +    try {
 +      const status = installWorkerHooks(rawWindow, payload, (surface, error) => {
 +        console.error(`darkstr worker runtime failure (${surface})`, error);
-+        this._report(false, eventType, `runtime-${surface}`, error);
++        this._reportRuntime(surface, error);
 +      });
 +      this._report(true, eventType, status);
 +    } catch (error) {
@@ -984,7 +1039,6 @@
 +    await this.pullAndInstall(event.type);
 +  }
 +}
-
 --- /dev/null
 +++ b/browser/components/DarkstrWorkerHooksParent.sys.mjs
 @@ -0,0 +1,33 @@

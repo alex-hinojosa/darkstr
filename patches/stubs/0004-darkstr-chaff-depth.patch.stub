@@ -22,7 +22,12 @@
 #   → Gates: pollution_active + darkstr.nativePersonaHooks (default-off)
 #   → See docs/PHASE-3-STATUS.md
 #
-# Remaining intent from this stub (NOT in 0016/0017/0018 — later pins):
+# Phase 3 soft residuals (2026-09-20): **0019** follow-up on Depth+Worker modules:
+#   patches/0019-darkstr-phase3-soft-residuals.patch
+#   → lastInstall runtimeOnly; OfflineAudio content-key + startRendering; HW best-effort
+#   → Also baked into refreshed 0017/0018 new-file bodies
+#
+# Remaining intent from this stub (NOT in 0016/0017/0018/0019 — later pins):
 #   DocShell strict-next-nav → SubsequentNav arm (extends M3)
 #   ServiceWorker / Worklets → not claimed (no honest injection path yet)
 #

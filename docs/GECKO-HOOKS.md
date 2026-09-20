@@ -135,13 +135,13 @@ M4 extends naming/notes for **strict-next-nav** (SubsequentNav arm). Until `dark
 |---------|------------|------|---------------------|
 | Canvas 2D noise | Chrome `DarkstrDepthHooksChild` (`toDataURL`/`toBlob`/`getImageData`) | M4→**P3 pin 2** | `DepthSurface::Canvas2d` + `depth_canvas_seed`; **live in `0017`** (default-off) |
 | WebGL renderer strings | Same actor — `getParameter(0x9245/0x9246)` + `readPixels` noise | M4→**P3 pin 2** | `DepthSurface::WebGl` + `depth_webgl_gpu`; **live in `0017`** |
-| Audio fingerprint | Same actor — `AudioBuffer.getChannelData` | M4→**P3 pin 2** | `DepthSurface::{AudioContext, OfflineAudioContext}` + `depth_audio_seed`; **live in `0017`** |
+| Audio fingerprint | Same actor — `AudioBuffer.getChannelData` (+ OfflineAudio `startRendering`) | M4→**P3 pin 2** + **0019** | `DepthSurface::{AudioContext, OfflineAudioContext}` + `depth_audio_seed`; **live in `0017`**; fill-pattern soft residual → **0019** |
 | Workers | Dedicated/Shared worker globals | M4→**P3 pin 3** | `DepthSurface::{DedicatedWorker, SharedWorker}`; **live in `0018`** (default-off) |
 
 Depth seeds readable only when `pollution_active` (`duppel_bridge::read_depth_seeds`); chrome also requires `darkstr.nativePersonaHooks` (default-off).  
 Enums: `duppel_bridge::m4_depth_surfaces` / `m4_applicator_surfaces`.  
 **Live depth patch:** [`../patches/0017-darkstr-depth-canvas-webgl-audio.patch`](../patches/0017-darkstr-depth-canvas-webgl-audio.patch).  
-**Live worker patch:** [`../patches/0018-darkstr-worker-globals-coherence.patch`](../patches/0018-darkstr-worker-globals-coherence.patch). Stub `0004` retained for DocShell strict-next-nav leftovers. Status: [`PHASE-3-STATUS.md`](PHASE-3-STATUS.md) · [`M4-STATUS.md`](M4-STATUS.md).
+**Live worker patch:** [`../patches/0018-darkstr-worker-globals-coherence.patch`](../patches/0018-darkstr-worker-globals-coherence.patch). **Soft residuals:** [`../patches/0019-darkstr-phase3-soft-residuals.patch`](../patches/0019-darkstr-phase3-soft-residuals.patch) (lastInstall runtimeOnly; OfflineAudio content-key; HW best-effort). Stub `0004` retained for DocShell strict-next-nav leftovers. Status: [`PHASE-3-STATUS.md`](PHASE-3-STATUS.md) · [`M4-STATUS.md`](M4-STATUS.md).
 
 M3 first native wins remain UA/CH + navigator minimum set; Phase 3 pin 2 adds canvas/WebGL/Audio chrome depth; pin 3 adds DedicatedWorker/SharedWorker constructor wrap (persona + OffscreenCanvas/WebGL in worker globals). ServiceWorker/Worklets not claimed.
 

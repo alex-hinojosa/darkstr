@@ -16,10 +16,11 @@ These stubs document *how* a real bsys6 / LibreWolf recipe would layer darkstr p
 | [`stubs/0006-darkstr-cpp-navigator-docshell.patch.stub`](stubs/0006-darkstr-cpp-navigator-docshell.patch.stub) | Pointer only — superseded by real `0006-…patch` |
 | [`0007-darkstr-cpp-docshell-nav-sot.patch`](0007-darkstr-cpp-docshell-nav-sot.patch) | **Real** train-pinned C++ DocShell first/subsequent SoT (155.0.1-1) — chrome Map fallback |
 | [`stubs/0007-darkstr-cpp-docshell-nav-sot.patch.stub`](stubs/0007-darkstr-cpp-docshell-nav-sot.patch.stub) | Pointer only — superseded by real `0007-…patch` |
-| [`stubs/0004-darkstr-chaff-depth.patch.stub`](stubs/0004-darkstr-chaff-depth.patch.stub) | M4 depth leftovers (DocShell strict-next-nav). **Scheduler → [`0016`](0016-darkstr-chaff-native-scheduler.patch)**; **canvas/WebGL/Audio → [`0017`](0017-darkstr-depth-canvas-webgl-audio.patch)**; **workers → [`0018`](0018-darkstr-worker-globals-coherence.patch)** |
+| [`stubs/0004-darkstr-chaff-depth.patch.stub`](stubs/0004-darkstr-chaff-depth.patch.stub) | M4 depth leftovers (DocShell strict-next-nav). **Scheduler → [`0016`](0016-darkstr-chaff-native-scheduler.patch)**; **canvas/WebGL/Audio → [`0017`](0017-darkstr-depth-canvas-webgl-audio.patch)**; **workers → [`0018`](0018-darkstr-worker-globals-coherence.patch)**; **soft residuals → [`0019`](0019-darkstr-phase3-soft-residuals.patch)** |
 | [`0016-darkstr-chaff-native-scheduler.patch`](0016-darkstr-chaff-native-scheduler.patch) | **Real** Phase 3 pin 1 — chrome chaff timer (`DarkstrChaffScheduler.sys.mjs`, default-off) |
 | [`0017-darkstr-depth-canvas-webgl-audio.patch`](0017-darkstr-depth-canvas-webgl-audio.patch) | **Real** Phase 3 pin 2 — canvas/WebGL/Audio depth (`DarkstrDepthHooks*.sys.mjs`, default-off) |
 | [`0018-darkstr-worker-globals-coherence.patch`](0018-darkstr-worker-globals-coherence.patch) | **Real** Phase 3 pin 3 — DedicatedWorker/SharedWorker coherence (`DarkstrWorkerHooks*.sys.mjs`, default-off) |
+| [`0019-darkstr-phase3-soft-residuals.patch`](0019-darkstr-phase3-soft-residuals.patch) | **Real** Phase 3 soft residuals — lastInstall runtimeOnly + OfflineAudio content-key + HW best-effort |
 | [`scripts/apply-darkstr-patches.sh`](scripts/apply-darkstr-patches.sh) | Example apply order for a real tree |
 
 Design pin: [`../docs/GECKO-HOOKS.md`](../docs/GECKO-HOOKS.md). Bridge: [`../docs/PREF-BRIDGE.md`](../docs/PREF-BRIDGE.md).
@@ -197,4 +198,14 @@ Real unified diff [`0015-darkstr-nav-languages-saved-accept-und.patch`](0015-dar
 - Normalize empty/`und` (case-insensitive) → `""` on first save; on restore treat empty/`und` (prior-run migrate) as `clearUserPref`, never `setCharPref("und")`.
 - Soft only — hooks default-off. **langs residual CLOSED via #37**; this is soft park for und (not a product flip).
 - Apply + rebuild: `./mach build --allow-subdirectory-build browser/components` (see `docs/M3-LANGUAGES-0015-MINI-APPLY.sh`).
+
+## Phase 3 soft residuals (0019)
+
+Real unified diff [`0019-darkstr-phase3-soft-residuals.patch`](0019-darkstr-phase3-soft-residuals.patch) against post-0018 155.0.1-1:
+
+- Worker `lastInstall`: construct fallbacks are `runtimeOnly` (lastError only; do not clobber successful wrap)
+- OfflineAudio: content-key latch + `Float32Array.set` + `startRendering` noise (fill-pattern deltaSum)
+- Worker `hardwareConcurrency`: instance-then-proto best-effort; honest residual if non-configurable
+- Same fixes also baked into refreshed `0017`/`0018` new-file bodies (Mini module refresh coherent)
+- Apply + rebuild: `./mach build --allow-subdirectory-build browser/components` then **`make install-dist_bin`** (see `docs/PHASE-3-SOFT-0019-MINI-APPLY.sh` / `docs/PHASE-3-STATUS.md`)
 
