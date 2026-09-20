@@ -52,13 +52,17 @@ cd "$DARKSTR_GECKO_ROOT"
 
 Helper: [`PHASE-3-CHAFF-0016-MINI-APPLY.sh`](PHASE-3-CHAFF-0016-MINI-APPLY.sh).
 
-**This PR executor (Grok box):** no SSH / no Mini filesystem — Mini apply +
-`mach build` status = **NOT RUN here**. Record operator results below when available.
+**Mini (2026-09-19 CDT):** 0016 applied; alphabetical `MOZ_SRC_FILES` fix;
+`mach build browser/components` OK; **`make install-dist_bin`** required so
+`DarkstrChaffScheduler.sys.mjs` lands under `dist/.../moz-src/browser/components/`
+(subdirectory build alone left BrowserGlue wired but module missing — Proof XOR FAIL).
+Mirrored into `LibreWolf.app/Contents/Resources/moz-src/...` as well.
 
 | Check | Status |
 |-------|--------|
-| Patch dry-run / apply on Mini tree | **Pending operator** |
-| `./mach build --allow-subdirectory-build browser/components` | **Pending operator** |
+| Patch dry-run / apply on Mini tree | **DONE** (2026-09-19) |
+| `./mach build --allow-subdirectory-build browser/components` | **DONE** |
+| `make install-dist_bin` + app `moz-src` present | **DONE** (tip `dcc4847` + install) |
 | Headed Proof XOR on rebuilt app | **Not claimed** |
 
 ## Explicit non-claims
@@ -72,7 +76,7 @@ Helper: [`PHASE-3-CHAFF-0016-MINI-APPLY.sh`](PHASE-3-CHAFF-0016-MINI-APPLY.sh).
 
 ## Next
 
-1. Operator: Mini apply + `browser/components` subdirectory build; headed skim when disk allows.
+1. Proof XOR on tip with live dist module present; then headed Pollution+hooks skim when ready.
 2. Phase 3 pin 2: canvas / WebGL / Audio depth hooks (train-pinned; seeds from snapshot when `pollution_active`).
 3. Phase 3 pin 3: worker globals coherence.
 4. Optional: richer chrome beacon bodies parity with `poisoner.js` (still ordinary HTTP only).
@@ -85,5 +89,5 @@ Helper: [`PHASE-3-CHAFF-0016-MINI-APPLY.sh`](PHASE-3-CHAFF-0016-MINI-APPLY.sh).
 - [x] Ordinary HTTP beacons only; no CF/TLS/JA3 claims
 - [x] Patch id `0016`; stub `0004` updated to point at it
 - [x] Docs: PHASE-3-STATUS + M4 Next + GECKO-HOOKS §2.2 + apply markers
-- [ ] Mini apply + subdirectory build (operator)
+- [x] Mini apply + subdirectory build + dist install (operator 2026-09-19)
 - [x] Honest non-claims listed above

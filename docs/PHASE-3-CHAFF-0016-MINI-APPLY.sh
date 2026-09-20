@@ -23,4 +23,19 @@ grep -Fq 'DarkstrChaffScheduler' "${DARKSTR_GECKO_ROOT}/browser/components/Brows
 cd "${DARKSTR_GECKO_ROOT}"
 ./mach build --allow-subdirectory-build browser/components
 echo "mach EXIT=$?"
-echo "Markers: DarkstrChaffScheduler present. Hooks remain default-off."
+
+# Subdirectory build compiles/wires BrowserGlue but may NOT install new MOZ_SRC
+# files into dist. Force dist_bin install, then mirror into LibreWolf.app.
+OBJ="${DARKSTR_GECKO_ROOT}/obj-aarch64-apple-darwin25.6.0"
+rm -f "${OBJ}/install_dist_bin.track"
+( cd "${OBJ}" && make install-dist_bin )
+SRC="${DARKSTR_GECKO_ROOT}/browser/components/DarkstrChaffScheduler.sys.mjs"
+BIN="${OBJ}/dist/bin/moz-src/browser/components/DarkstrChaffScheduler.sys.mjs"
+APP="${OBJ}/dist/LibreWolf.app/Contents/Resources/moz-src/browser/components/DarkstrChaffScheduler.sys.mjs"
+test -e "${BIN}"
+# App Resources is a parallel tree (not always refreshed by install-dist_bin)
+if [[ ! -e "${APP}" ]]; then
+  ln -sf "${SRC}" "${APP}"
+fi
+test -e "${APP}"
+echo "Markers: DarkstrChaffScheduler in source + dist/bin + LibreWolf.app. Hooks remain default-off."
