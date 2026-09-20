@@ -135,7 +135,7 @@ M4 extends naming/notes for **strict-next-nav** (SubsequentNav arm). Until `dark
 |---------|------------|------|---------------------|
 | Canvas 2D noise | Chrome `DarkstrDepthHooksChild` (`toDataURL`/`toBlob`/`getImageData`) | M4→**P3 pin 2** | `DepthSurface::Canvas2d` + `depth_canvas_seed`; **live in `0017`** (default-off) |
 | WebGL renderer strings | Same actor — `getParameter(0x9245/0x9246)` + `readPixels` noise | M4→**P3 pin 2** | `DepthSurface::WebGl` + `depth_webgl_gpu`; **live in `0017`** |
-| Audio fingerprint | Same actor — `AudioBuffer.getChannelData` (+ OfflineAudio `startRendering`) | M4→**P3 pin 2** + **0019** | `DepthSurface::{AudioContext, OfflineAudioContext}` + `depth_audio_seed`; **live in `0017`**; fill-pattern soft residual → **0019** |
+| Audio fingerprint | Same actor — page-compartment `AudioBuffer.getChannelData` + OfflineAudio `startRendering` | M4→**P3 pin 2** + **0019 v2** | `DepthSurface::{AudioContext, OfflineAudioContext}` + `depth_audio_seed`; **live in `0017`/`0019`**; chrome Xray set FAIL → page `installAudioInPage` |
 | Workers | Dedicated/Shared worker globals | M4→**P3 pin 3** | `DepthSurface::{DedicatedWorker, SharedWorker}`; **live in `0018`** (default-off) |
 
 Depth seeds readable only when `pollution_active` (`duppel_bridge::read_depth_seeds`); chrome also requires `darkstr.nativePersonaHooks` (default-off).  

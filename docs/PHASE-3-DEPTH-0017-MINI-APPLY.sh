@@ -68,7 +68,7 @@ test -f "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrDepthHooksChild.sys.mjs
 test -f "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrDepthHooksParent.sys.mjs"
 grep -Fq 'DarkstrDepthHooks' "${DARKSTR_GECKO_ROOT}/browser/components/BrowserGlue.sys.mjs"
 grep -Fq 'Cu.waiveXrays' "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrDepthHooksChild.sys.mjs"
-grep -Fq 'channelContentKey' "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrDepthHooksChild.sys.mjs"
+grep -Fq 'installAudioInPage' "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrDepthHooksChild.sys.mjs"
 grep -Fq 'pageshow' "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrDepthHooks.sys.mjs"
 grep -Fq 'darkstr.depth.lastError' "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrDepthHooks.sys.mjs"
 grep -Fq '_readPersonaSeedPref' "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrDepthHooks.sys.mjs"

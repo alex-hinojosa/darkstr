@@ -20,7 +20,7 @@ These stubs document *how* a real bsys6 / LibreWolf recipe would layer darkstr p
 | [`0016-darkstr-chaff-native-scheduler.patch`](0016-darkstr-chaff-native-scheduler.patch) | **Real** Phase 3 pin 1 — chrome chaff timer (`DarkstrChaffScheduler.sys.mjs`, default-off) |
 | [`0017-darkstr-depth-canvas-webgl-audio.patch`](0017-darkstr-depth-canvas-webgl-audio.patch) | **Real** Phase 3 pin 2 — canvas/WebGL/Audio depth (`DarkstrDepthHooks*.sys.mjs`, default-off) |
 | [`0018-darkstr-worker-globals-coherence.patch`](0018-darkstr-worker-globals-coherence.patch) | **Real** Phase 3 pin 3 — DedicatedWorker/SharedWorker coherence (`DarkstrWorkerHooks*.sys.mjs`, default-off) |
-| [`0019-darkstr-phase3-soft-residuals.patch`](0019-darkstr-phase3-soft-residuals.patch) | **Real** Phase 3 soft residuals — lastInstall runtimeOnly + OfflineAudio content-key + HW best-effort |
+| [`0019-darkstr-phase3-soft-residuals.patch`](0019-darkstr-phase3-soft-residuals.patch) | **Real** Phase 3 soft residuals — lastInstall runtimeOnly + OfflineAudio page-compartment + HW best-effort |
 | [`scripts/apply-darkstr-patches.sh`](scripts/apply-darkstr-patches.sh) | Example apply order for a real tree |
 
 Design pin: [`../docs/GECKO-HOOKS.md`](../docs/GECKO-HOOKS.md). Bridge: [`../docs/PREF-BRIDGE.md`](../docs/PREF-BRIDGE.md).
@@ -204,7 +204,7 @@ Real unified diff [`0015-darkstr-nav-languages-saved-accept-und.patch`](0015-dar
 Real unified diff [`0019-darkstr-phase3-soft-residuals.patch`](0019-darkstr-phase3-soft-residuals.patch) against post-0018 155.0.1-1:
 
 - Worker `lastInstall`: construct fallbacks are `runtimeOnly` (lastError only; do not clobber successful wrap)
-- OfflineAudio: content-key latch + `Float32Array.set` + `startRendering` noise (fill-pattern deltaSum)
+- OfflineAudio: **page-compartment** `installAudioInPage` (PR #47 XOR FAIL — chrome Xray set inert)
 - Worker `hardwareConcurrency`: instance-then-proto best-effort; honest residual if non-configurable
 - Same fixes also baked into refreshed `0017`/`0018` new-file bodies (Mini module refresh coherent)
 - Apply + rebuild: `./mach build --allow-subdirectory-build browser/components` then **`make install-dist_bin`** (see `docs/PHASE-3-SOFT-0019-MINI-APPLY.sh` / `docs/PHASE-3-STATUS.md`)

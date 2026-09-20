@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Run on Alexander's Mac mini (SSD). Atlas: never mv under /Volumes/Mesh.
 # Phase 3 soft residuals (0019) — lastInstall + OfflineAudio + HW best-effort.
+# v2: OfflineAudio page-compartment install (PR #47 XOR FAIL — chrome Xray set inert).
 # Carries pin lessons: waiveXrays / pageshow / getPrefType / safeForUntrusted / install-dist_bin.
 # Prefer this after pins 1–3 are on the Mini tree. Also safe if 0017/0018 patches were
 # refreshed (their new-file bodies now embed the same soft-residual fixes).
@@ -19,7 +20,7 @@ test -f "${PATCH}"
 
 # Incremental patch against live Depth/Worker modules. If markers already present
 # (e.g. refreshed from updated 0017/0018), skip cleanly.
-if grep -Fq 'channelContentKey' "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrDepthHooksChild.sys.mjs" \
+if grep -Fq 'installAudioInPage' "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrDepthHooksChild.sys.mjs" \
   && grep -Fq 'runtimeOnly' "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrWorkerHooks.sys.mjs" \
   && grep -Fq '_reportRuntime' "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrWorkerHooksChild.sys.mjs"; then
   echo "0019 soft-residual markers already present — skip patch apply"
@@ -28,7 +29,7 @@ else
 fi
 rm -f "${DARKSTR_GECKO_ROOT}/browser/components/"*.rej
 
-grep -Fq 'channelContentKey' "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrDepthHooksChild.sys.mjs"
+grep -Fq 'installAudioInPage' "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrDepthHooksChild.sys.mjs"
 grep -Fq 'runtimeOnly' "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrWorkerHooks.sys.mjs"
 grep -Fq '_reportRuntime' "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrWorkerHooksChild.sys.mjs"
 grep -Fq 'spoof("hardwareConcurrency"' "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrWorkerHooksChild.sys.mjs"

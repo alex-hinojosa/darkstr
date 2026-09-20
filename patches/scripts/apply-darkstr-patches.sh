@@ -271,7 +271,7 @@ patch_markers_present() {
         && grep -Fq "safeForUntrustedWebProcess" "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrWorkerHooks.sys.mjs"
       ;;
     0019-darkstr-phase3-soft-residuals.patch)
-      grep -Fq "channelContentKey" "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrDepthHooksChild.sys.mjs" \
+      grep -Fq "installAudioInPage" "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrDepthHooksChild.sys.mjs" \
         && grep -Fq "runtimeOnly" "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrWorkerHooks.sys.mjs" \
         && grep -Fq "_reportRuntime" "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrWorkerHooksChild.sys.mjs" \
         && grep -Fq 'spoof("hardwareConcurrency"' "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrWorkerHooksChild.sys.mjs"

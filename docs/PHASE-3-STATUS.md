@@ -37,7 +37,7 @@ On re-apply, **refresh** new-file modules from the patch before markers skip
 | Content stick | **DONE** — `Cu.waiveXrays` + `Cu.exportFunction`; pageshow reinstall; `lastError`/`lastInstall` |
 | `getPrefType` for `persona.seed` | **DONE** (2-arg `getIntPref` hid string `"42"`) |
 | Proof XOR on tip `9d4fa76` | **PASS** (waived-Xray + pageshow + getPrefType seed) |
-| Soft residual | Audio OfflineAudio fill deltaSum → addressed in **0019** (content-key latch + `startRendering`) |
+| Soft residual | Audio OfflineAudio → **0019 v2** page-compartment install (chrome Xray set FAIL on `f18c0b6`) |
 
 ## What landed (pin 3)
 
@@ -113,7 +113,7 @@ Helper: [`PHASE-3-WORKER-0018-MINI-APPLY.sh`](PHASE-3-WORKER-0018-MINI-APPLY.sh)
 | Item | Fix |
 |------|-----|
 | Worker `lastInstall` ends `ok:false` / `runtime-Worker` after successful wrap | Construct fallbacks report `runtimeOnly` → **lastError only**; `lastInstall` stays install-time (`installed` / `already-installed`) |
-| OfflineAudio `getChannelData` deltaSum 0 on fill pattern | Content-key latch (fill invalidates) + `Float32Array.set` mutation + `OfflineAudioContext.startRendering` noise |
+| OfflineAudio `getChannelData` deltaSum 0 (PR #47 XOR FAIL on `f18c0b6`) | **v2:** page-compartment `installAudioInPage` (getChannelData + startRendering). Chrome Xray `Float32Array.set` was inert live while canvas PASS |
 | Worker `hardwareConcurrency` host 12 vs persona 8 | Best-effort: defineProperty on **navigator instance first**, then proto. If both refuse (non-configurable C++ binding), **honest residual remains** |
 
 Patch: `patches/0019-darkstr-phase3-soft-residuals.patch` (also baked into refreshed `0017`/`0018` new-file bodies so Mini module refresh stays coherent).
@@ -128,7 +128,7 @@ Mini helper: [`PHASE-3-SOFT-0019-MINI-APPLY.sh`](PHASE-3-SOFT-0019-MINI-APPLY.sh
 | Case | Expect |
 |------|--------|
 | Pollution + hooks + persona; Worker constructors wrap; persona UA in worker | `darkstr.worker.lastInstall` **ok:true** / status `installed` (or `already-installed`); runtime construct fallbacks may set `lastError=runtime:…` without flipping lastInstall |
-| Pollution + hooks + depth seed; OfflineAudio fill then read / startRendering | `getChannelData` mutation → **nonzero deltaSum** vs clean (canvas still PASS) |
+| Pollution + hooks + depth seed; OfflineAudio fill then read / startRendering | **nonzero deltaSum** vs clean/Homogeneous; startRendering sums must diverge from idle (page-compartment audio) |
 | Worker `hardwareConcurrency` | Persona value when defineProperty sticks; else host value + residual noted (not a hard fail) |
 | Default / Homogeneous / hooks off | Idle unchanged |
 | `privacy.*` from these modules | **None** |
@@ -155,9 +155,10 @@ Mini helper: [`PHASE-3-SOFT-0019-MINI-APPLY.sh`](PHASE-3-SOFT-0019-MINI-APPLY.sh
 - [x] Pin 2 recorded XOR PASS / merged `1eef97b` (tip `9d4fa76`) + Xray/pageshow/seed-type lessons
 - [x] Mini apply + subdirectory build + dist install (operator 2026-09-20)
 - [x] Proof XOR PASS tip `37820f6` — Worker UA matches persona; constructors wrap
-- [x] Soft residuals 0019: lastInstall runtimeOnly + OfflineAudio content-key + HW best-effort
-- [ ] Mini apply 0019 + subdirectory build + dist install (operator)
-- [ ] Proof XOR re-skim soft residuals (lastInstall / OfflineAudio delta / HW note)
+- [x] Soft residuals 0019 v1: lastInstall runtimeOnly + HW best-effort (Proof PASS)
+- [x] Soft residuals 0019 v2: OfflineAudio page-compartment install (after XOR FAIL on `f18c0b6`)
+- [ ] Mini apply 0019 v2 + subdirectory build + dist install (operator)
+- [ ] Proof XOR re-skim OfflineAudio deltaSum / startRendering vs Homogeneous
 - [x] Honest non-claims listed above
 
 
