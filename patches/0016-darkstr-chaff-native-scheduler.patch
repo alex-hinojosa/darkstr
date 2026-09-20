@@ -41,14 +41,14 @@
          this._lateTasksIdleObserver,
 --- a/browser/components/moz.build
 +++ b/browser/components/moz.build
-@@ -121,6 +121,7 @@
-     "DarkstrNativePersona.sys.mjs",
-     "DarkstrNativePersonaChild.sys.mjs",
-     "DarkstrNativePersonaParent.sys.mjs",
+@@ -117,6 +117,7 @@
+ ]
+ 
+ MOZ_SRC_FILES += [
 +    "DarkstrChaffScheduler.sys.mjs",
-     "DefaultBrowserCheck.sys.mjs",
-     "DesktopActorRegistry.sys.mjs",
-     "ProfileDataUpgrader.sys.mjs",
+     "DarkstrFfi.sys.mjs",
+     "DarkstrModeXor.sys.mjs",
+     "DarkstrNativePersona.sys.mjs",
 --- a/browser/components/DarkstrChaffScheduler.sys.mjs
 +++ b/browser/components/DarkstrChaffScheduler.sys.mjs
 @@ -0,0 +1,358 @@
