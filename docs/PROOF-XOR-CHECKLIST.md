@@ -36,8 +36,9 @@ When the PR touches chaff scheduler, canvas/Audio/WebGL/worker depth, or strict-
 - [ ] Quiet/Balanced/Loud volume + timing remain Phase 1 poisoner-parity (or documented deltas)
 - [ ] Depth seeds come from the same `PersonaSnapshot`; readable only when `pollution_active`
 - [ ] Chaff timer `0016`: idle by default; Pollution+hooks → arms; Homogeneous/NC → idle; no `privacy.*` writes from module
-- [ ] Depth hooks `0017` (canvas/WebGL/Audio): idle by default; Pollution+hooks+seeds → armed; Homogeneous/NC → idle; no `privacy.*` writes; workers **not** claimed
-- [ ] No claim that worker hooks landed unless Proof-checked on a fork artifact (`0017` = canvas/WebGL/Audio only; pin 3 = workers)
+- [ ] Depth hooks `0017` (canvas/WebGL/Audio): idle by default; Pollution+hooks+seeds → armed; Homogeneous/NC → idle; no `privacy.*` writes
+- [ ] Worker hooks `0018` (Dedicated/Shared): idle by default; Pollution+hooks+persona → armed; Homogeneous/NC → idle; no `privacy.*` writes; ServiceWorker/Worklets **not** claimed
+- [ ] No claim that worker hooks landed unless Proof-checked on a fork artifact (`0018` = Worker/SharedWorker constructor wrap; ServiceWorker out of scope)
 - [ ] After Mini subdirectory `mach build`: `make install-dist_bin` + LibreWolf.app `moz-src` present (pin 1 lesson)
 - [ ] Native-Compatible site list UI changes (if any) called out for Product Manager; prefer docs-only
 - [ ] Track D Servo/Ladybird remains docs-only — no eng ship dependency

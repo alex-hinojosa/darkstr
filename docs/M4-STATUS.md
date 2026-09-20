@@ -39,7 +39,7 @@ This PR is **docs + Rust enums/APIs + stub notes**. It does **not** claim live C
 | `patches/stubs/0004-darkstr-chaff-depth.patch.stub` notes | **New** (still a stub) |
 | Native-Compatible chrome privacy-pane site list UI | **Docs/PM only** — no UI string churn |
 | Track D quarterly Servo/Ladybird note | **Docs only** (below) |
-| Live C++/XPCOM chaff / canvas / WebGL / Audio / worker hooks | **Not claimed** |
+| Live C++/XPCOM chaff / canvas / WebGL / Audio / worker hooks | **Chrome JS lived in Phase 3:** `0016`/`0017`/`0018` (default-off). C++ depth/worker **not** claimed |
 | `make bootstrap` / `make build` / Firefox rebuild | **Out of scope** |
 
 ## Authoritative M4 control-plane table
@@ -122,6 +122,7 @@ duppel_persona::PersonaSnapshot::depth_canvas_seed / depth_audio_seed / depth_we
 ## Next after merge
 
 1. ~~Private-fork: thin chaff timer glue calling `ChaffSchedulerPlan` (train-pinned `.patch`).~~ → **Phase 3 pin 1:** `patches/0016-darkstr-chaff-native-scheduler.patch` — merged PR #43 / `d5fb026`; Mini XOR **PASS** after `install-dist_bin` (`docs/PHASE-3-STATUS.md`).
-2. ~~Canvas/WebGL/Audio hooks reading depth seeds from cached snapshot when pollution_active.~~ → **Phase 3 pin 2:** `patches/0017-darkstr-depth-canvas-webgl-audio.patch` (`docs/PHASE-3-STATUS.md`).
-3. Worker globals coherence with same persona seed (**Phase 3 pin 3**).
+2. ~~Canvas/WebGL/Audio hooks reading depth seeds from cached snapshot when pollution_active.~~ → **Phase 3 pin 2:** `patches/0017-darkstr-depth-canvas-webgl-audio.patch` — merged PR #44 / `1eef97b`; Proof XOR **PASS** on tip `9d4fa76` (`docs/PHASE-3-STATUS.md`).
+3. ~~Worker globals coherence with same persona seed.~~ → **Phase 3 pin 3:** `patches/0018-darkstr-worker-globals-coherence.patch` (`docs/PHASE-3-STATUS.md`).
 4. Chrome privacy-pane Native-Compatible site list only when PM schedules UI work.
+5. DocShell strict-next-nav SubsequentNav arm (extends M3) — still open.
