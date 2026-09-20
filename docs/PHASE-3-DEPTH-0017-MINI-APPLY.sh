@@ -14,14 +14,10 @@ echo "DARKSTR_GECKO_ROOT=${DARKSTR_GECKO_ROOT}"
 echo "REPO=${REPO}"
 df -h "${DARKSTR_GECKO_ROOT}" | tail -1 || true
 test -f "${PATCH}"
-if [[ -f "${APPLY}" ]]; then
-  bash "${APPLY}" --require-root
-else
-  patch -d "${DARKSTR_GECKO_ROOT}" -p1 --forward --batch < "${PATCH}"
-fi
 
-# If 0017 was already applied, apply-script markers skip. Refresh the three
-# new-file modules (and chrome if missing waive/pageshow/lastError) from this tip.
+# Refresh 0017 new-file modules first. Mini may already have a stale 0017;
+# applying the updated unified diff over existing files fails. Extracting the
+# three new-file hunks makes later apply-script markers succeed and skip.
 python3 - "${PATCH}" "${DARKSTR_GECKO_ROOT}" <<'PY'
 import sys
 from pathlib import Path
@@ -74,6 +70,13 @@ grep -Fq 'Cu.waiveXrays' "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrDepthH
 grep -Fq 'pageshow' "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrDepthHooks.sys.mjs"
 grep -Fq 'darkstr.depth.lastError' "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrDepthHooks.sys.mjs"
 grep -Fq '_readPersonaSeedPref' "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrDepthHooks.sys.mjs"
+
+if [[ -f "${APPLY}" ]]; then
+  bash "${APPLY}" --require-root
+else
+  patch -d "${DARKSTR_GECKO_ROOT}" -p1 --forward --batch < "${PATCH}" || true
+fi
+
 cd "${DARKSTR_GECKO_ROOT}"
 ./mach build --allow-subdirectory-build browser/components
 echo "mach EXIT=$?"
