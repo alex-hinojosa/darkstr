@@ -4,6 +4,7 @@
 # Apply (after 0016): patch -d "$DARKSTR_GECKO_ROOT" -p1 < patches/0017-darkstr-depth-canvas-webgl-audio.patch
 # Requires Phase 3 pin 1 DarkstrChaffScheduler + M3 DarkstrNativePersona (BrowserGlue context).
 # Gates: pollution_active + darkstr.nativePersonaHooks (default-off). Seeds from snapshot / persona.seed.
+# Content install: waiveXrays + Cu.exportFunction; DOMWindowCreated + pageshow; lastError/lastInstall diagnostics.
 # Rebuild: ./mach build --allow-subdirectory-build browser/components
 # Then: rm install_dist_bin.track; make install-dist_bin; mirror LibreWolf.app moz-src symlink.
 # Honesty: canvas/WebGL/Audio only; workers = pin 3; no Approach A; no fresh DMG; hooks default-off.
@@ -41,7 +42,7 @@
          this._lateTasksIdleObserver,
 --- a/browser/components/DarkstrDepthHooks.sys.mjs
 +++ b/browser/components/DarkstrDepthHooks.sys.mjs
-@@ -0,0 +1,343 @@
+@@ -0,0 +1,416 @@
 +/* This Source Code Form is subject to the terms of the Mozilla Public
 + * License, v. 2.0. If a copy of the MPL was not distributed with this
 + * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -74,6 +75,8 @@
 +const SEED_PREF = "darkstr.persona.seed";
 +const ARMED_PREF = "darkstr.depth.hooksArmed";
 +const LAST_SEEDS_PREF = "darkstr.depth.lastSeeds";
++const LAST_ERROR_PREF = "darkstr.depth.lastError";
++const LAST_INSTALL_PREF = "darkstr.depth.lastInstall";
 +
 +// Host-OS filtered Firefox-family GPU pairs (thin subset of profiles.js).
 +const GPU_BY_OS = {
@@ -214,6 +217,7 @@
 +            "moz-src:///browser/components/DarkstrDepthHooksChild.sys.mjs",
 +          events: {
 +            DOMWindowCreated: {},
++            pageshow: {},
 +          },
 +        },
 +        allFrames: true,
@@ -224,7 +228,13 @@
 +      });
 +      this._actorRegistered = true;
 +    } catch (e) {
-+      console.warn("darkstr P3: DepthHooks JSWindowActor register failed:", e);
++      console.error("darkstr P3: DepthHooks JSWindowActor register failed:", e);
++      this.recordInstallStatus({
++        ok: false,
++        event: "register",
++        status: "register-failed",
++        error: String(e?.stack || e?.message || e || "register failed"),
++      });
 +    }
 +  },
 +
@@ -277,6 +287,39 @@
 +    return this._plan || this.refreshPlan();
 +  },
 +
++  /** Persist content-install diagnostics. Never writes privacy.*. */
++  recordInstallStatus(detail, browsingContext = null) {
++    const payload = {
++      ok: !!detail?.ok,
++      event: String(detail?.event || "unknown"),
++      status: String(detail?.status || "unknown"),
++      error: String(detail?.error || "").slice(0, 1000),
++      at: new Date().toISOString(),
++    };
++    try {
++      if (browsingContext?.id != null) {
++        payload.bc = browsingContext.id;
++      }
++    } catch (_e) {}
++    try {
++      Services.prefs.setStringPref(LAST_INSTALL_PREF, JSON.stringify(payload));
++    } catch (e) {
++      console.error("darkstr depth lastInstall write failed", e);
++    }
++    try {
++      if (payload.ok) {
++        Services.prefs.setStringPref(LAST_ERROR_PREF, "");
++      } else {
++        Services.prefs.setStringPref(
++          LAST_ERROR_PREF,
++          `${payload.event}:${payload.status}:${payload.error}`.slice(0, 1000)
++        );
++      }
++    } catch (e) {
++      console.error("darkstr depth lastError write failed", e);
++    }
++  },
++
 +  /** Depth seeds for JSWindowActor child (null when idle). */
 +  depthSeedsForBrowsingContext(_bc) {
 +    const plan = this.getPlan();
@@ -312,21 +355,7 @@
 +      }
 +    } catch (_e) {}
 +
-+    let seed = 0;
-+    try {
-+      seed = Services.prefs.getIntPref(SEED_PREF, 0);
-+    } catch (_e) {
-+      // Proof note: string "42" must not leave seeds null — coerce Char/String.
-+      try {
-+        const rawSeed = Services.prefs.getStringPref(SEED_PREF, "");
-+        const n = Number.parseInt(rawSeed, 10);
-+        if (Number.isFinite(n) && n !== 0) {
-+          seed = n | 0;
-+        }
-+      } catch (_e2) {
-+        seed = 0;
-+      }
-+    }
++    const seed = this._readPersonaSeedPref();
 +    if (!seed) {
 +      // Try partial snapshot fill without persona.seed.
 +      try {
@@ -345,6 +374,40 @@
 +      return null;
 +    }
 +    return this._generateDepthFromSeed(seed >>> 0);
++  },
++
++  /**
++   * Read darkstr.persona.seed regardless of stored type.
++   * 2-arg getIntPref(name, 0) returns 0 without throw on a string pref,
++   * so type-detect first. Int uses 1-arg getIntPref; string "42" parses.
++   */
++  _readPersonaSeedPref() {
++    let type;
++    try {
++      type = Services.prefs.getPrefType(SEED_PREF);
++    } catch (_e) {
++      return 0;
++    }
++    if (type === Ci.nsIPrefBranch.PREF_INT) {
++      try {
++        return Services.prefs.getIntPref(SEED_PREF);
++      } catch (e) {
++        console.error("darkstr depth int seed read failed", e);
++        return 0;
++      }
++    }
++    if (type === Ci.nsIPrefBranch.PREF_STRING) {
++      try {
++        const raw = Services.prefs.getStringPref(SEED_PREF);
++        const n = Number(String(raw).trim());
++        if (Number.isFinite(n) && n !== 0) {
++          return n | 0;
++        }
++      } catch (e) {
++        console.error("darkstr depth string seed read failed", e);
++      }
++    }
++    return 0;
 +  },
 +
 +  _generateDepthFromSeed(seed) {
@@ -398,7 +461,7 @@
 +};
 --- a/browser/components/DarkstrDepthHooksChild.sys.mjs
 +++ b/browser/components/DarkstrDepthHooksChild.sys.mjs
-@@ -0,0 +1,193 @@
+@@ -0,0 +1,386 @@
 +/* This Source Code Form is subject to the terms of the Mozilla Public
 + * License, v. 2.0. If a copy of the MPL was not distributed with this
 + * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -408,20 +471,35 @@
 + * Thin Canvas 2D noise / WebGL vendor·renderer / AudioBuffer noise from depth seeds.
 + * Brand: darkstr — not official LibreWolf. Workers NOT claimed (pin 3).
 + *
-+ * Parity notes (Phase 1 anti-fingerprint chrome-port, thinned):
-+ *   Canvas: deterministic ±0–3 RGB noise via hash(seed,i,val); toDataURL/toBlob/getImageData
-+ *   WebGL: UNMASKED_VENDOR/RENDERER (0x9245/0x9246); readPixels RGBA noise
-+ *   Audio: AudioBuffer.getChannelData once-per-channel micro-noise from audioSeed
++ * Fission note: this actor runs with chrome privileges while content prototypes
++ * live behind Xrays. Always waive the content window and export replacement
++ * callables into that page's compartment; assigning chrome functions to Xray
++ * prototypes does not stick.
 + */
 +
-+function disguise(fn, name, length) {
++const installedByWindow = new WeakMap();
++
++function errorText(error) {
 +  try {
-+    Object.defineProperty(fn, "name", { value: name, configurable: true });
-+    if (typeof length === "number") {
-+      Object.defineProperty(fn, "length", { value: length, configurable: true });
++    return String(error?.stack || error?.message || error || "unknown error");
++  } catch (_e) {
++    return "unknown error";
++  }
++}
++
++function contentWindowFor(rawWindow) {
++  try {
++    const waived = Cu.waiveXrays(rawWindow);
++    if (waived) {
++      return waived;
 +    }
 +  } catch (_e) {}
-+  return fn;
++  try {
++    if (rawWindow?.wrappedJSObject) {
++      return rawWindow.wrappedJSObject;
++    }
++  } catch (_e) {}
++  throw new Error("unable to obtain waived content window");
 +}
 +
 +function pixelNoise(seed, i, val) {
@@ -435,190 +513,388 @@
 +}
 +
 +function applyCanvasNoise(px, seed) {
-+  for (let i = 0; i < px.length; i += 4) {
-+    px[i] = Math.max(0, Math.min(255, px[i] + pixelNoise(seed, i, px[i])));
-+    px[i + 1] = Math.max(
++  const data = Cu.waiveXrays(px);
++  for (let i = 0; i < data.length; i += 4) {
++    data[i] = Math.max(0, Math.min(255, data[i] + pixelNoise(seed, i, data[i])));
++    data[i + 1] = Math.max(
 +      0,
-+      Math.min(255, px[i + 1] + pixelNoise(seed, i + 1, px[i + 1]))
++      Math.min(255, data[i + 1] + pixelNoise(seed, i + 1, data[i + 1]))
 +    );
-+    px[i + 2] = Math.max(
++    data[i + 2] = Math.max(
 +      0,
-+      Math.min(255, px[i + 2] + pixelNoise(seed, i + 2, px[i + 2]))
++      Math.min(255, data[i + 2] + pixelNoise(seed, i + 2, data[i + 2]))
 +    );
 +  }
 +}
 +
-+function installDepthHooks(win, seeds) {
++function methodIsInstalled(replacement) {
++  try {
++    return (
++      Object.getOwnPropertyDescriptor(replacement.proto, replacement.name)?.value ===
++      replacement.wrapper
++    );
++  } catch (_e) {
++    return false;
++  }
++}
++
++function restoreReplacement(replacement) {
++  // Restore only our own wrapper; never clobber a page replacement installed later.
++  if (methodIsInstalled(replacement)) {
++    Object.defineProperty(
++      replacement.proto,
++      replacement.name,
++      replacement.originalDescriptor
++    );
++  }
++}
++
++function uninstallDepthHooks(rawWindow) {
++  const record = installedByWindow.get(rawWindow);
++  if (!record) {
++    return "idle";
++  }
++  for (const replacement of record.replacements.slice().reverse()) {
++    restoreReplacement(replacement);
++  }
++  installedByWindow.delete(rawWindow);
++  return "uninstalled";
++}
++
++function replaceMethod(pageWindow, proto, name, implementation, replacements) {
++  const descriptor = Object.getOwnPropertyDescriptor(proto, name);
++  if (!descriptor || typeof descriptor.value !== "function") {
++    throw new Error(`${name} native descriptor unavailable`);
++  }
++  const wrapper = Cu.exportFunction(implementation, pageWindow);
++  Object.defineProperty(proto, name, { ...descriptor, value: wrapper });
++  replacements.push({
++    proto,
++    name,
++    wrapper,
++    originalDescriptor: descriptor,
++  });
++  return descriptor.value;
++}
++
++function installDepthHooks(rawWindow, seeds, onRuntimeError) {
++  const prior = installedByWindow.get(rawWindow);
++  if (prior && prior.replacements.every(methodIsInstalled)) {
++    return "already-installed";
++  }
++  if (prior) {
++    uninstallDepthHooks(rawWindow);
++  }
++
++  const pageWindow = contentWindowFor(rawWindow);
 +  const canvasSeed = seeds.canvasSeed >>> 0;
 +  const audioSeed = seeds.audioSeed >>> 0;
 +  const gpu = seeds.gpu || { vendor: "Apple", renderer: "Apple M1" };
++  const replacements = [];
 +
-+  const doc = win.document;
-+  const HTMLCanvasElement = win.HTMLCanvasElement;
-+  const CanvasRenderingContext2D = win.CanvasRenderingContext2D;
-+  if (!HTMLCanvasElement || !CanvasRenderingContext2D) {
-+    return;
-+  }
-+
-+  const origToDataURL = HTMLCanvasElement.prototype.toDataURL;
-+  const origToBlob = HTMLCanvasElement.prototype.toBlob;
-+  const origGetImageData = CanvasRenderingContext2D.prototype.getImageData;
-+
-+  function noisyClone(src) {
-+    const c = doc.createElement("canvas");
-+    c.width = src.width;
-+    c.height = src.height;
-+    const cctx = c.getContext("2d");
-+    cctx.drawImage(src, 0, 0);
-+    const id = origGetImageData.call(cctx, 0, 0, c.width, c.height);
-+    applyCanvasNoise(id.data, canvasSeed);
-+    cctx.putImageData(id, 0, 0);
-+    return c;
-+  }
-+
-+  HTMLCanvasElement.prototype.toDataURL = disguise(function (...args) {
-+    try {
-+      if (this.width > 0 && this.height > 0) {
-+        return origToDataURL.apply(noisyClone(this), args);
-+      }
-+    } catch (_e) {}
-+    return origToDataURL.apply(this, args);
-+  }, "toDataURL");
-+
-+  HTMLCanvasElement.prototype.toBlob = disguise(function (cb, ...args) {
-+    try {
-+      if (this.width > 0 && this.height > 0) {
-+        return origToBlob.call(noisyClone(this), cb, ...args);
-+      }
-+    } catch (_e) {}
-+    return origToBlob.call(this, cb, ...args);
-+  }, "toBlob");
-+
-+  CanvasRenderingContext2D.prototype.getImageData = disguise(
-+    function (...args) {
-+      const id = origGetImageData.apply(this, args);
-+      applyCanvasNoise(id.data, canvasSeed);
-+      return id;
-+    },
-+    "getImageData",
-+    4
-+  );
-+
-+  // WebGL: vendor/renderer + readPixels noise (thin — no full cap-bucket spoof).
-+  function patchWebGL(proto) {
-+    if (!proto) {
-+      return;
++  try {
++    const doc = pageWindow.document;
++    const HTMLCanvasElement = pageWindow.HTMLCanvasElement;
++    const CanvasRenderingContext2D = pageWindow.CanvasRenderingContext2D;
++    if (!doc || !HTMLCanvasElement || !CanvasRenderingContext2D) {
++      throw new Error("Canvas 2D constructors unavailable");
 +    }
-+    const origGetParameter = proto.getParameter;
-+    if (origGetParameter) {
-+      proto.getParameter = disguise(function (param) {
-+        if (param === 0x9245) {
-+          return gpu.vendor;
-+        }
-+        if (param === 0x9246) {
-+          return gpu.renderer;
-+        }
-+        return origGetParameter.call(this, param);
-+      }, "getParameter");
-+    }
-+    const origReadPixels = proto.readPixels;
-+    if (origReadPixels) {
-+      proto.readPixels = disguise(function (x, y, w, h, format, type, pixels) {
-+        origReadPixels.call(this, x, y, w, h, format, type, pixels);
-+        if (
-+          pixels &&
-+          format === 0x1908 /* RGBA */ &&
-+          type === 0x1401 /* UNSIGNED_BYTE */
-+        ) {
-+          applyCanvasNoise(pixels, canvasSeed);
-+        }
-+      }, "readPixels");
-+    }
-+  }
-+  if (win.WebGLRenderingContext) {
-+    patchWebGL(win.WebGLRenderingContext.prototype);
-+  }
-+  if (win.WebGL2RenderingContext) {
-+    patchWebGL(win.WebGL2RenderingContext.prototype);
-+  }
 +
-+  // Audio: once-per-channel getChannelData noise.
-+  if (win.AudioBuffer && win.AudioBuffer.prototype.getChannelData) {
-+    const origGetChannelData = win.AudioBuffer.prototype.getChannelData;
-+    const noisedBuffers = new WeakMap();
-+    win.AudioBuffer.prototype.getChannelData = disguise(function (channel) {
-+      const data = origGetChannelData.call(this, channel);
-+      let noised = noisedBuffers.get(this);
-+      if (!noised) {
-+        noised = new Set();
-+        noisedBuffers.set(this, noised);
++    const canvasProto = HTMLCanvasElement.prototype;
++    const canvas2dProto = CanvasRenderingContext2D.prototype;
++    const origToDataURL = Object.getOwnPropertyDescriptor(
++      canvasProto,
++      "toDataURL"
++    )?.value;
++    const origToBlob = Object.getOwnPropertyDescriptor(canvasProto, "toBlob")?.value;
++    const origGetImageData = Object.getOwnPropertyDescriptor(
++      canvas2dProto,
++      "getImageData"
++    )?.value;
++    if (!origToDataURL || !origToBlob || !origGetImageData) {
++      throw new Error("Canvas 2D native methods unavailable");
++    }
++
++    function noisyClone(src) {
++      const c = doc.createElement("canvas");
++      c.width = src.width;
++      c.height = src.height;
++      const cctx = c.getContext("2d");
++      cctx.drawImage(src, 0, 0);
++      const id = Reflect.apply(origGetImageData, cctx, [0, 0, c.width, c.height]);
++      applyCanvasNoise(Cu.waiveXrays(id).data, canvasSeed);
++      cctx.putImageData(id, 0, 0);
++      return c;
++    }
++
++    replaceMethod(
++      pageWindow,
++      canvasProto,
++      "toDataURL",
++      function (...args) {
++        try {
++          if (this.width > 0 && this.height > 0) {
++            return Reflect.apply(origToDataURL, noisyClone(this), args);
++          }
++        } catch (error) {
++          onRuntimeError("canvas.toDataURL", error);
++        }
++        return Reflect.apply(origToDataURL, this, args);
++      },
++      replacements
++    );
++
++    replaceMethod(
++      pageWindow,
++      canvasProto,
++      "toBlob",
++      function (callback, ...args) {
++        try {
++          if (this.width > 0 && this.height > 0) {
++            return Reflect.apply(origToBlob, noisyClone(this), [callback, ...args]);
++          }
++        } catch (error) {
++          onRuntimeError("canvas.toBlob", error);
++        }
++        return Reflect.apply(origToBlob, this, [callback, ...args]);
++      },
++      replacements
++    );
++
++    replaceMethod(
++      pageWindow,
++      canvas2dProto,
++      "getImageData",
++      function (...args) {
++        const id = Reflect.apply(origGetImageData, this, args);
++        applyCanvasNoise(Cu.waiveXrays(id).data, canvasSeed);
++        return id;
++      },
++      replacements
++    );
++
++    // WebGL: vendor/renderer + readPixels noise (thin — no full cap-bucket spoof).
++    function patchWebGL(proto, label) {
++      if (!proto) {
++        return;
 +      }
-+      if (noised.has(channel)) {
-+        return data;
++      const origGetParameter = Object.getOwnPropertyDescriptor(
++        proto,
++        "getParameter"
++      )?.value;
++      if (origGetParameter) {
++        replaceMethod(
++          pageWindow,
++          proto,
++          "getParameter",
++          function (param) {
++            if (param === 0x9245) {
++              return gpu.vendor;
++            }
++            if (param === 0x9246) {
++              return gpu.renderer;
++            }
++            return Reflect.apply(origGetParameter, this, [param]);
++          },
++          replacements
++        );
 +      }
-+      noised.add(channel);
-+      const seed = audioSeed ^ (channel * 0x9e3779b9);
-+      for (let i = 0; i < data.length; i++) {
-+        let h = seed ^ (i * 2654435761);
-+        h = Math.imul(h ^ ((data[i] * 1e6) >>> 0), 0x45d9f3b);
-+        h = (h ^ (h >>> 16)) >>> 0;
-+        data[i] += ((h % 200) - 100) * 0.0000005;
++      const origReadPixels = Object.getOwnPropertyDescriptor(proto, "readPixels")?.value;
++      if (origReadPixels) {
++        replaceMethod(
++          pageWindow,
++          proto,
++          "readPixels",
++          function (x, y, w, h, format, type, pixels) {
++            const result = Reflect.apply(origReadPixels, this, [
++              x,
++              y,
++              w,
++              h,
++              format,
++              type,
++              pixels,
++            ]);
++            if (
++              pixels &&
++              format === 0x1908 /* RGBA */ &&
++              type === 0x1401 /* UNSIGNED_BYTE */
++            ) {
++              applyCanvasNoise(pixels, canvasSeed);
++            }
++            return result;
++          },
++          replacements
++        );
 +      }
-+      return data;
-+    }, "getChannelData");
++      if (!origGetParameter && !origReadPixels) {
++        throw new Error(`${label} native methods unavailable`);
++      }
++    }
++    if (pageWindow.WebGLRenderingContext) {
++      patchWebGL(pageWindow.WebGLRenderingContext.prototype, "WebGL1");
++    }
++    if (pageWindow.WebGL2RenderingContext) {
++      patchWebGL(pageWindow.WebGL2RenderingContext.prototype, "WebGL2");
++    }
++
++    // AudioContext and OfflineAudioContext both expose AudioBuffer.
++    if (pageWindow.AudioBuffer?.prototype?.getChannelData) {
++      const audioProto = pageWindow.AudioBuffer.prototype;
++      const origGetChannelData = Object.getOwnPropertyDescriptor(
++        audioProto,
++        "getChannelData"
++      )?.value;
++      const noisedBuffers = new WeakMap();
++      replaceMethod(
++        pageWindow,
++        audioProto,
++        "getChannelData",
++        function (channel) {
++          const data = Reflect.apply(origGetChannelData, this, [channel]);
++          let noised = noisedBuffers.get(this);
++          if (!noised) {
++            noised = new Set();
++            noisedBuffers.set(this, noised);
++          }
++          if (noised.has(channel)) {
++            return data;
++          }
++          noised.add(channel);
++          const rawData = Cu.waiveXrays(data);
++          const seed = audioSeed ^ (channel * 0x9e3779b9);
++          for (let i = 0; i < rawData.length; i++) {
++            let h = seed ^ (i * 2654435761);
++            h = Math.imul(h ^ ((rawData[i] * 1e6) >>> 0), 0x45d9f3b);
++            h = (h ^ (h >>> 16)) >>> 0;
++            rawData[i] += ((h % 200) - 100) * 0.0000005;
++          }
++          return data;
++        },
++        replacements
++      );
++    }
++
++    installedByWindow.set(rawWindow, { replacements });
++    return "installed";
++  } catch (error) {
++    for (const replacement of replacements.slice().reverse()) {
++      try {
++        restoreReplacement(replacement);
++      } catch (_e) {}
++    }
++    throw error;
 +  }
 +}
 +
 +export class DarkstrDepthHooksChild extends JSWindowActorChild {
-+  async handleEvent(event) {
-+    if (event.type !== "DOMWindowCreated") {
-+      return;
++  _report(ok, eventType, status, error = "") {
++    const detail = {
++      ok: !!ok,
++      event: String(eventType || "unknown"),
++      status: String(status || "unknown"),
++      error: error ? errorText(error).slice(0, 1000) : "",
++    };
++    try {
++      this.sendAsyncMessage("DarkstrDepthHooks:InstallStatus", detail);
++    } catch (reportError) {
++      console.error("darkstr depth diagnostic IPC failed", reportError, detail);
 +    }
++  }
++
++  async pullAndInstall(eventType) {
 +    let seeds;
 +    try {
 +      seeds = await this.sendQuery("DarkstrDepthHooks:GetSeeds");
-+    } catch (_e) {
++    } catch (error) {
++      console.error("darkstr depth seed IPC failed", error);
++      this._report(false, eventType, "seed-query-failed", error);
 +      return;
 +    }
++
++    const rawWindow = this.contentWindow;
++    if (!rawWindow) {
++      this._report(false, eventType, "no-content-window", "contentWindow unavailable");
++      return;
++    }
++
 +    if (!seeds || typeof seeds.canvasSeed !== "number") {
++      try {
++        const status = uninstallDepthHooks(rawWindow);
++        this._report(true, eventType, status);
++      } catch (error) {
++        console.error("darkstr depth uninstall failed", error);
++        this._report(false, eventType, "uninstall-failed", error);
++      }
 +      return;
 +    }
-+    const win = this.contentWindow;
-+    if (!win) {
-+      return;
-+    }
++
 +    try {
-+      installDepthHooks(win, seeds);
-+    } catch (_e) {}
++      const status = installDepthHooks(rawWindow, seeds, (surface, error) => {
++        console.error(`darkstr depth runtime failure (${surface})`, error);
++        this._report(false, eventType, `runtime-${surface}`, error);
++      });
++      this._report(true, eventType, status);
++    } catch (error) {
++      console.error("darkstr depth install failed", error);
++      this._report(false, eventType, "install-failed", error);
++    }
++  }
++
++  async handleEvent(event) {
++    if (event.type !== "DOMWindowCreated" && event.type !== "pageshow") {
++      return;
++    }
++    await this.pullAndInstall(event.type);
 +  }
 +}
 --- a/browser/components/DarkstrDepthHooksParent.sys.mjs
 +++ b/browser/components/DarkstrDepthHooksParent.sys.mjs
-@@ -0,0 +1,24 @@
+@@ -0,0 +1,33 @@
 +/* This Source Code Form is subject to the terms of the Mozilla Public
 + * License, v. 2.0. If a copy of the MPL was not distributed with this
 + * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 +
 +/**
-+ * darkstr Phase 3 pin 2 — JSWindowActor parent. Returns depth seeds for content hooks.
++ * darkstr Phase 3 pin 2 — JSWindowActor parent. Returns depth seeds and
++ * persists content-install diagnostics in chrome prefs.
 + * Brand: darkstr — not official LibreWolf.
 + */
 +
 +export class DarkstrDepthHooksParent extends JSWindowActorParent {
 +  receiveMessage(message) {
-+    if (message.name !== "DarkstrDepthHooks:GetSeeds") {
-+      return null;
-+    }
 +    try {
 +      const { DarkstrDepthHooks } = ChromeUtils.importESModule(
 +        "moz-src:///browser/components/DarkstrDepthHooks.sys.mjs"
 +      );
-+      return DarkstrDepthHooks.depthSeedsForBrowsingContext(this.browsingContext);
-+    } catch (_e) {
-+      return null;
++      if (message.name === "DarkstrDepthHooks:GetSeeds") {
++        return DarkstrDepthHooks.depthSeedsForBrowsingContext(
++          this.browsingContext
++        );
++      }
++      if (message.name === "DarkstrDepthHooks:InstallStatus") {
++        DarkstrDepthHooks.recordInstallStatus(
++          message.data,
++          this.browsingContext
++        );
++      }
++    } catch (error) {
++      console.error("darkstr depth parent IPC failed", error);
 +    }
++    return null;
 +  }
 +}
+--- a/browser/components/DarkstrNativePersona.sys.mjs
++++ b/browser/components/DarkstrNativePersona.sys.mjs
+@@ -194,6 +194,8 @@
+         allFrames: true,
+         messageManagerGroups: ["browsers"],
+         matches: ["*://*/*", "file://*"],
++        // Required for Fission webIsolated / web content processes.
++        safeForUntrustedWebProcess: true,
+       });
+       this._actorRegistered = true;
+     } catch (e) {
 --- a/browser/components/moz.build
 +++ b/browser/components/moz.build
 @@ -118,6 +118,9 @@
@@ -631,15 +907,3 @@
      "DarkstrFfi.sys.mjs",
      "DarkstrModeXor.sys.mjs",
      "DarkstrNativePersona.sys.mjs",
-
---- a/browser/components/DarkstrNativePersona.sys.mjs
-+++ b/browser/components/DarkstrNativePersona.sys.mjs
-@@ -195,6 +195,8 @@
-         allFrames: true,
-         messageManagerGroups: ["browsers"],
-         matches: ["*://*/*", "file://*"],
-+        // Required for Fission webIsolated / web content processes.
-+        safeForUntrustedWebProcess: true,
-       });
-       this._actorRegistered = true;
-     } catch (e) {

@@ -37,7 +37,7 @@ workers remain pin 3.
 | Audio | `AudioBuffer.getChannelData` once-per-channel micro-noise from `audioSeed` |
 | Gates default-off | Idle unless `pollution_active` **and** `darkstr.nativePersonaHooks` |
 | Seeds | Prefer `darkstr.persona.snapshot` JSON; fallback `darkstr.persona.seed` |
-| Diagnostics prefs | `darkstr.depth.hooksArmed` / `darkstr.depth.lastSeeds` (no `privacy.*`) |
+| Diagnostics prefs | `darkstr.depth.hooksArmed` / `lastSeeds` / `lastInstall` / `lastError` (no `privacy.*`) |
 | Apply-script markers | `0017` idempotent skip when markers present |
 | Stub `0004` | Points at `0016` (scheduler) + `0017` (canvas/WebGL/Audio); workers still later |
 | Docs | This file; M4-STATUS Next; GECKO-HOOKS §2.5; Mini apply helper |
@@ -81,8 +81,10 @@ Helper: [`PHASE-3-DEPTH-0017-MINI-APPLY.sh`](PHASE-3-DEPTH-0017-MINI-APPLY.sh).
 | Patch dry-run on post-0016 compose (DarkstrFfi moz.build) | **DONE** (Grok box) |
 | Patch dry-run / apply on Mini tree | **NOT RUN** (no Mini access) |
 | `./mach build` + `install-dist_bin` on Mini | **NOT RUN** |
-| Headed Proof XOR on rebuilt app | **Pin 1 PASS; pin 2 re-gate pending** |
-| Pin 2 Fission actor attachment | **Fix added:** `safeForUntrustedWebProcess: true` on DepthHooks + NativePersona actors |
+| Headed Proof XOR on rebuilt app | **Pin 1 PASS; pin 2 `abdb6c5` FAIL (prototypes native); Xray/pageshow/seed-type fix pending Mini re-gate** |
+| Pin 2 Fission actor attachment | **DONE** (`safeForUntrustedWebProcess` on DepthHooks + NativePersona) |
+| Pin 2 content prototype stick | **Fix added:** `Cu.waiveXrays` + `Cu.exportFunction`; pageshow reinstall; lastError/lastInstall |
+| Pin 2 string seed `"42"` | **Fix added:** `getPrefType` + 1-arg `getIntPref` / string parse (2-arg default hid the throw) |
 
 ## Explicit non-claims
 
@@ -114,11 +116,12 @@ Helper: [`PHASE-3-DEPTH-0017-MINI-APPLY.sh`](PHASE-3-DEPTH-0017-MINI-APPLY.sh).
 - [x] Honest non-claims listed above
 
 
-## Pin 2 Proof re-gate (Fission actor)
+## Pin 2 Proof re-gate
 
-Initial Mini XOR on `5933e21` proved the chrome gate/seeds but found the content
-mutation path dead under Fission (`webIsolated`): the actor registration lacked
-`safeForUntrustedWebProcess`. Follow-up adds that flag to both
-`DarkstrDepthHooks` and the pre-existing `DarkstrNativePersona` actor, plus a
-string-seed fallback (`"42"` → int) for operator/diagnostic robustness. Re-run
-headed HTTP canvas/WebGL mutation before merge.
+- `5933e21`: chrome gates/seeds OK; `getActor` failed on `webIsolated` → `safeForUntrustedWebProcess`.
+- `abdb6c5`: actor attaches; Parent `GetSeeds` returns seeds; content prototypes stayed **native**.
+  Xray wrappers meant `installDepthHooks(this.contentWindow, seeds)` did not stick; child swallowed errors;
+  `getIntPref(SEED_PREF, 0)` returned 0 on a string pref so `"42"` never armed the seed fallback.
+- Follow-up (this tip): waive content window, `Cu.exportFunction` replacements, DOMWindowCreated **and**
+  pageshow (idempotent reinstall), `darkstr.depth.lastError` / `lastInstall` (no `privacy.*`),
+  typed seed read via `getPrefType`. Re-run headed canvas/audio mutation + hooks-off identity before merge.

@@ -253,7 +253,10 @@ patch_markers_present() {
         && [[ -f "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrDepthHooksParent.sys.mjs" ]] \
         && grep -Fq "DarkstrDepthHooks" "${DARKSTR_GECKO_ROOT}/browser/components/BrowserGlue.sys.mjs" \
         && grep -Fq "DarkstrDepthHooks.sys.mjs" "${DARKSTR_GECKO_ROOT}/browser/components/moz.build" \
-        && grep -Fq "duppel_bridge::read_depth_seeds" "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrDepthHooks.sys.mjs"
+        && grep -Fq "duppel_bridge::read_depth_seeds" "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrDepthHooks.sys.mjs" \
+        && grep -Fq "darkstr.depth.lastError" "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrDepthHooks.sys.mjs" \
+        && grep -Fq "Cu.waiveXrays" "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrDepthHooksChild.sys.mjs" \
+        && grep -Fq "_readPersonaSeedPref" "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrDepthHooks.sys.mjs"
       ;;
     *)
       return 1
