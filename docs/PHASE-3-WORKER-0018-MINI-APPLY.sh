@@ -73,10 +73,16 @@ grep -Fq 'darkstr.worker.lastError' "${DARKSTR_GECKO_ROOT}/browser/components/Da
 grep -Fq '_readPersonaSeedPref' "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrWorkerHooks.sys.mjs"
 grep -Fq 'safeForUntrustedWebProcess' "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrWorkerHooks.sys.mjs"
 
+# Module refresh above can make patch think 0018 is fully applied while
+# BrowserGlue / moz.build still lack WorkerHooks. Force those hunks.
+patch -d "${DARKSTR_GECKO_ROOT}" -p1 --forward --batch < "${PATCH}" || true
+rm -f "${DARKSTR_GECKO_ROOT}/browser/components/"*.rej
+if ! grep -Fq 'DarkstrWorkerHooks' "${DARKSTR_GECKO_ROOT}/browser/components/BrowserGlue.sys.mjs"   || ! grep -Fq 'DarkstrWorkerHooks.sys.mjs' "${DARKSTR_GECKO_ROOT}/browser/components/moz.build"; then
+  echo "ERROR: BrowserGlue/moz.build missing DarkstrWorkerHooks after force apply" >&2
+  exit 1
+fi
 if [[ -f "${APPLY}" ]]; then
   bash "${APPLY}" --require-root
-else
-  patch -d "${DARKSTR_GECKO_ROOT}" -p1 --forward --batch < "${PATCH}" || true
 fi
 
 cd "${DARKSTR_GECKO_ROOT}"

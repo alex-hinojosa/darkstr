@@ -127,3 +127,10 @@ Helper: [`PHASE-3-WORKER-0018-MINI-APPLY.sh`](PHASE-3-WORKER-0018-MINI-APPLY.sh)
 - [x] Pin 2 recorded XOR PASS / merged `1eef97b` (tip `9d4fa76`) + Xray/pageshow/seed-type lessons
 - [ ] Mini apply + subdirectory build + dist install (operator)
 - [x] Honest non-claims listed above
+
+
+## Pin 3 Mini apply note (2026-09-20)
+
+Refreshing `DarkstrWorkerHooks*.sys.mjs` before `apply-darkstr-patches` can make
+patch report 0018 "already applied" while BrowserGlue / moz.build still lack
+WorkerHooks. Helper now force-applies those hunks and fails closed if missing.
