@@ -12,17 +12,25 @@
 #   → DarkstrDepthHooks.sys.mjs + Parent/Child JSWindowActor
 #   → Seeds: depth_canvas_seed / depth_audio_seed / depth_webgl_gpu (snapshot or persona.seed)
 #   → Gates: pollution_active + darkstr.nativePersonaHooks (default-off)
+#   → Merged PR #44 as 1eef97b; Proof XOR PASS on tip 9d4fa76
 #   → See docs/PHASE-3-STATUS.md
 #
-# Remaining intent from this stub (NOT in 0016/0017 — later pins):
-#   Workers                → Dedicated/Shared worker globals (Phase 3 pin 3)
+# Phase 3 pin 3 (2026-09-19): **worker globals coherence landed** as a real train-pinned patch:
+#   patches/0018-darkstr-worker-globals-coherence.patch
+#   → DarkstrWorkerHooks.sys.mjs + Parent/Child JSWindowActor
+#   → DedicatedWorker / SharedWorker constructor wrap (persona + OffscreenCanvas/WebGL depth)
+#   → Gates: pollution_active + darkstr.nativePersonaHooks (default-off)
+#   → See docs/PHASE-3-STATUS.md
+#
+# Remaining intent from this stub (NOT in 0016/0017/0018 — later pins):
 #   DocShell strict-next-nav → SubsequentNav arm (extends M3)
+#   ServiceWorker / Worklets → not claimed (no honest injection path yet)
 #
 # Authoritative enums (must match unit tests):
 #   duppel_chaff::ChaffSchedulerPlan / ChaosLevel / plan_fire
 #   duppel_bridge::DepthSurface / m4_depth_surfaces / m4_applicator_surfaces
 #   duppel_bridge::HookSite::{CanvasAudio, ChaffScheduler}
-#   duppel_bridge::HookApplicatorSurface::{ChaffNativeScheduler, Canvas2dNoise, …}
+#   duppel_bridge::HookApplicatorSurface::{ChaffNativeScheduler, Canvas2dNoise, …, WorkerGlobals}
 #   duppel_persona::strict_next_nav_armed / prefs::CHAOS_LEVEL
 #
 # Brand: darkstr — not official LibreWolf. No Cloudflare/TLS claims.

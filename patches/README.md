@@ -16,9 +16,10 @@ These stubs document *how* a real bsys6 / LibreWolf recipe would layer darkstr p
 | [`stubs/0006-darkstr-cpp-navigator-docshell.patch.stub`](stubs/0006-darkstr-cpp-navigator-docshell.patch.stub) | Pointer only — superseded by real `0006-…patch` |
 | [`0007-darkstr-cpp-docshell-nav-sot.patch`](0007-darkstr-cpp-docshell-nav-sot.patch) | **Real** train-pinned C++ DocShell first/subsequent SoT (155.0.1-1) — chrome Map fallback |
 | [`stubs/0007-darkstr-cpp-docshell-nav-sot.patch.stub`](stubs/0007-darkstr-cpp-docshell-nav-sot.patch.stub) | Pointer only — superseded by real `0007-…patch` |
-| [`stubs/0004-darkstr-chaff-depth.patch.stub`](stubs/0004-darkstr-chaff-depth.patch.stub) | M4 depth leftovers (workers). **Scheduler → [`0016`](0016-darkstr-chaff-native-scheduler.patch)**; **canvas/WebGL/Audio → [`0017`](0017-darkstr-depth-canvas-webgl-audio.patch)** |
+| [`stubs/0004-darkstr-chaff-depth.patch.stub`](stubs/0004-darkstr-chaff-depth.patch.stub) | M4 depth leftovers (DocShell strict-next-nav). **Scheduler → [`0016`](0016-darkstr-chaff-native-scheduler.patch)**; **canvas/WebGL/Audio → [`0017`](0017-darkstr-depth-canvas-webgl-audio.patch)**; **workers → [`0018`](0018-darkstr-worker-globals-coherence.patch)** |
 | [`0016-darkstr-chaff-native-scheduler.patch`](0016-darkstr-chaff-native-scheduler.patch) | **Real** Phase 3 pin 1 — chrome chaff timer (`DarkstrChaffScheduler.sys.mjs`, default-off) |
 | [`0017-darkstr-depth-canvas-webgl-audio.patch`](0017-darkstr-depth-canvas-webgl-audio.patch) | **Real** Phase 3 pin 2 — canvas/WebGL/Audio depth (`DarkstrDepthHooks*.sys.mjs`, default-off) |
+| [`0018-darkstr-worker-globals-coherence.patch`](0018-darkstr-worker-globals-coherence.patch) | **Real** Phase 3 pin 3 — DedicatedWorker/SharedWorker coherence (`DarkstrWorkerHooks*.sys.mjs`, default-off) |
 | [`scripts/apply-darkstr-patches.sh`](scripts/apply-darkstr-patches.sh) | Example apply order for a real tree |
 
 Design pin: [`../docs/GECKO-HOOKS.md`](../docs/GECKO-HOOKS.md). Bridge: [`../docs/PREF-BRIDGE.md`](../docs/PREF-BRIDGE.md).
@@ -166,7 +167,7 @@ Real unified diff [`0016-darkstr-chaff-native-scheduler.patch`](0016-darkstr-cha
 - `DarkstrChaffScheduler.sys.mjs` — `nsITimer` + Quiet/Balanced/Loud + ordinary HTTP beacons
 - Gates: `pollution_active` + `darkstr.nativePersonaHooks` (default-off)
 - Apply + rebuild: `./mach build --allow-subdirectory-build browser/components` then **`make install-dist_bin`** (see `docs/PHASE-3-CHAFF-0016-MINI-APPLY.sh` / `docs/PHASE-3-STATUS.md`)
-- Stub `0004` retained for worker leftovers; canvas/WebGL/Audio → `0017`
+- Stub `0004` retained for DocShell leftovers; canvas/WebGL/Audio → `0017`; workers → `0018`
 
 ## Phase 3 depth canvas / WebGL / Audio (0017)
 
@@ -176,7 +177,17 @@ Real unified diff [`0017-darkstr-depth-canvas-webgl-audio.patch`](0017-darkstr-d
 - Seeds from `darkstr.persona.snapshot` / `darkstr.persona.seed` when `pollution_active`
 - Gates: `pollution_active` + `darkstr.nativePersonaHooks` (default-off)
 - Apply + rebuild: `./mach build --allow-subdirectory-build browser/components` then **`make install-dist_bin`** + LibreWolf.app moz-src mirror (see `docs/PHASE-3-DEPTH-0017-MINI-APPLY.sh` / `docs/PHASE-3-STATUS.md`)
-- Workers **not** in this patch (pin 3)
+- Merged PR #44 as `1eef97b`; Proof XOR PASS on tip `9d4fa76`
+
+## Phase 3 worker globals coherence (0018)
+
+Real unified diff [`0018-darkstr-worker-globals-coherence.patch`](0018-darkstr-worker-globals-coherence.patch) against post-0017 155.0.1-1 (DarkstrFfi alphabetical moz.build):
+
+- `DarkstrWorkerHooks.sys.mjs` + Parent/Child JSWindowActor — DedicatedWorker/SharedWorker constructor wrap
+- Payload: persona snapshot (navigator) + optional depth seeds (OffscreenCanvas/WebGL in worker); same gates as 0016/0017
+- Content: `Cu.waiveXrays` + `Cu.exportFunction`; DOMWindowCreated + pageshow; `darkstr.worker.lastError` / `lastInstall`
+- Apply + rebuild: `./mach build --allow-subdirectory-build browser/components` then **`make install-dist_bin`** + LibreWolf.app moz-src mirror (see `docs/PHASE-3-WORKER-0018-MINI-APPLY.sh` / `docs/PHASE-3-STATUS.md`)
+- ServiceWorker / Worklets **not** claimed
 
 ## M3 soft park savedAcceptLanguages und (0015)
 
