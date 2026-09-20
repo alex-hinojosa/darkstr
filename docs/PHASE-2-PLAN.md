@@ -296,7 +296,7 @@ Still **no** Mozilla/LibreWolf vendor:
 - [x] DocShell strict-next-nav notes extended (`strict_next_nav_armed`; live patch still not claimed)
 - [x] Native-Compatible site list UI: **docs / PM notes only** this drop (Phase 1 WebExt list remains; no UI string churn)
 - [x] Track D: one-paragraph quarterly Servo/Ladybird note in `M4-STATUS.md` — no eng investment
-- [ ] Live native chaff timer / canvas / WebGL / Audio / worker C++ hooks on private fork (train-pinned — not invented in public stubs)
+- [x] Live native **chaff timer** on private fork (`0016` / `PHASE-3-STATUS.md`) — canvas / WebGL / Audio / worker still open
 - [ ] Chrome privacy-pane Native-Compatible site list UI (when PM schedules; not this control-plane PR)
 
 ### Exit criteria for “Phase 2 done”

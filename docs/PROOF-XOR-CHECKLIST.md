@@ -35,7 +35,8 @@ When the PR touches chaff scheduler, canvas/Audio/WebGL/worker depth, or strict-
 - [ ] Chaff arms only when `pollution_active` / `allow_persona_chaff` (Homogeneous / Native-Compatible / RFP conflict idle)
 - [ ] Quiet/Balanced/Loud volume + timing remain Phase 1 poisoner-parity (or documented deltas)
 - [ ] Depth seeds come from the same `PersonaSnapshot`; readable only when `pollution_active`
-- [ ] No claim that untested C++ chaff timers or canvas/WebGL/Audio/worker hooks landed unless Proof-checked on a fork artifact
+- [ ] Chaff timer `0016`: idle by default; Pollution+hooks → arms; Homogeneous/NC → idle; no `privacy.*` writes from module
+- [ ] No claim that canvas/WebGL/Audio/worker hooks landed unless Proof-checked on a fork artifact (`0016` = scheduler only)
 - [ ] Native-Compatible site list UI changes (if any) called out for Product Manager; prefer docs-only
 - [ ] Track D Servo/Ladybird remains docs-only — no eng ship dependency
 - [ ] Status: [`M4-STATUS.md`](M4-STATUS.md) · Hooks: [`GECKO-HOOKS.md`](GECKO-HOOKS.md) §2.2 / §2.5

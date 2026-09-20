@@ -1,0 +1,412 @@
+# darkstr Phase 3 pin 1 — train-pinned live native chaff timer (chrome JS)
+# Train: Firefox FIREFOX_155_0_1_RELEASE / LibreWolf 155.0.1-1
+# Brand: darkstr — not official LibreWolf. No Cloudflare/TLS/JA3 claims.
+# Apply (after 0002/0003): patch -d "$DARKSTR_GECKO_ROOT" -p1 < patches/0016-darkstr-chaff-native-scheduler.patch
+# Requires M3 DarkstrNativePersona already present (BrowserGlue context).
+# Gates: pollution_active + darkstr.nativePersonaHooks (default-off). Quiet/Balanced/Loud from darkstr.chaosLevel.
+# Rebuild: ./mach build --allow-subdirectory-build browser/components
+# Honesty: scheduler + ordinary HTTP beacons only; no canvas/WebGL/Audio/worker hooks; no Approach A; no fresh DMG.
+#
+
+--- a/browser/components/BrowserGlue.sys.mjs
++++ b/browser/components/BrowserGlue.sys.mjs
+@@ -32,6 +32,7 @@
+     "moz-src:///browser/components/DefaultBrowserCheck.sys.mjs",
+   DarkstrModeXor: "moz-src:///browser/components/DarkstrModeXor.sys.mjs",
+   DarkstrNativePersona: "moz-src:///browser/components/DarkstrNativePersona.sys.mjs",
++  DarkstrChaffScheduler: "moz-src:///browser/components/DarkstrChaffScheduler.sys.mjs",
+   DesktopActorRegistry:
+     "moz-src:///browser/components/DesktopActorRegistry.sys.mjs",
+   Discovery: "resource:///modules/Discovery.sys.mjs",
+@@ -367,6 +368,9 @@
+ 
+     // darkstr M3: native persona hooks (UA/CH-REMOVE/Navigator/strictFirstDoc).
+     lazy.DarkstrNativePersona.init();
++
++    // darkstr Phase 3: native chaff timer (Quiet/Balanced/Loud; default-off).
++    lazy.DarkstrChaffScheduler.init();
+   },
+ 
+   // cleanup (called on application shutdown)
+@@ -384,6 +388,10 @@
+       lazy.DarkstrNativePersona.uninit();
+     } catch (_e) {}
+ 
++    try {
++      lazy.DarkstrChaffScheduler.uninit();
++    } catch (_e) {}
++
+     if (this._lateTasksIdleObserver) {
+       this._userIdleService.removeIdleObserver(
+         this._lateTasksIdleObserver,
+--- a/browser/components/moz.build
++++ b/browser/components/moz.build
+@@ -121,6 +121,7 @@
+     "DarkstrNativePersona.sys.mjs",
+     "DarkstrNativePersonaChild.sys.mjs",
+     "DarkstrNativePersonaParent.sys.mjs",
++    "DarkstrChaffScheduler.sys.mjs",
+     "DefaultBrowserCheck.sys.mjs",
+     "DesktopActorRegistry.sys.mjs",
+     "ProfileDataUpgrader.sys.mjs",
+--- a/browser/components/DarkstrChaffScheduler.sys.mjs
++++ b/browser/components/DarkstrChaffScheduler.sys.mjs
+@@ -0,0 +1,358 @@
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
++
++/**
++ * darkstr Phase 3 pin 1 — thin native chaff timer glue (chrome JS).
++ *
++ * Train pin: Firefox / LibreWolf 155.0.1-1 (FIREFOX_155_0_1_RELEASE).
++ * Brand: darkstr — not official LibreWolf. Pollution browser, not Cloudflare bypass.
++ *
++ * Mirrors public control plane (no Rust FFI required in this drop):
++ *   duppel_chaff::ChaffSchedulerPlan / ChaosLevel / ChaffSchedule / plan_fire
++ *   duppel_bridge::allow_persona_chaff / PrefApplyPlan
++ *
++ * Gates (default-off — timer idle unless explicitly allowed):
++ *   pollution_active = mode=="pollution" && !nativeCompatible
++ *   allow = pollution_active && darkstr.nativePersonaHooks
++ * Homogeneous / Native-Compatible / hooks false → cancel timer, idle.
++ *
++ * Quiet / Balanced / Loud from darkstr.chaosLevel (Phase 1 poisoner parity):
++ *   Quiet    interval 8–20 min, batch 1,    stagger base 4000 ms
++ *   Balanced interval 3–8 min,  batch 1–3,  stagger base 1500 ms
++ *   Loud     interval 1–3 min,  batch 5–15, stagger base 500 ms
++ *
++ * Beacons: ordinary HTTP channels to Phase 1 poisoner endpoints only
++ * (google-analytics collect / facebook tr). No TLS/JA3 games, no CF claims.
++ * Does not write privacy.* prefs.
++ *
++ * Canvas / WebGL / Audio / worker hooks are NOT in this module (later pins).
++ */
++
++const MODE_PREF = "darkstr.mode";
++const NATIVE_PREF = "darkstr.nativeCompatible";
++const HOOKS_PREF = "darkstr.nativePersonaHooks";
++const CHAOS_PREF = "darkstr.chaosLevel";
++const ARMED_PREF = "darkstr.chaff.schedulerArmed";
++const LAST_PLAN_PREF = "darkstr.chaff.lastPlan";
++const LAST_FIRE_PREF = "darkstr.chaff.lastFireAt";
++
++const SCHEDULES = {
++  quiet: { minMin: 8, maxMin: 20, batchMin: 1, batchMax: 1, staggerBase: 4000 },
++  balanced: {
++    minMin: 3,
++    maxMin: 8,
++    batchMin: 1,
++    batchMax: 3,
++    staggerBase: 1500,
++  },
++  loud: { minMin: 1, maxMin: 3, batchMin: 5, batchMax: 15, staggerBase: 500 },
++};
++
++// Phase 1 poisoner.js endpoints — ordinary HTTP only.
++const BEACON_ENDPOINTS = [
++  "https://www.google-analytics.com/collect",
++  "https://www.google-analytics.com/g/collect",
++  "https://www.facebook.com/tr/",
++];
++
++function parseChaosLevel(raw) {
++  const v = String(raw || "balanced").toLowerCase();
++  if (v === "quiet" || v === "stealth") {
++    return "quiet";
++  }
++  if (v === "loud" || v === "chaos") {
++    return "loud";
++  }
++  return "balanced";
++}
++
++function unit01() {
++  return Math.random();
++}
++
++function pickIntervalMinutes(level) {
++  const s = SCHEDULES[level] || SCHEDULES.balanced;
++  return s.minMin + unit01() * (s.maxMin - s.minMin);
++}
++
++function pickBatchCount(level) {
++  const s = SCHEDULES[level] || SCHEDULES.balanced;
++  if (s.batchMin === s.batchMax) {
++    return s.batchMin;
++  }
++  return (
++    s.batchMin + Math.floor(unit01() * (s.batchMax - s.batchMin + 1))
++  );
++}
++
++function staggerDelayMs(level, index) {
++  const s = SCHEDULES[level] || SCHEDULES.balanced;
++  // Mirror ChaffSchedule::stagger.delay_for_index: base * (index+1) + jitter.
++  return s.staggerBase * (index + 1) + Math.floor(unit01() * s.staggerBase);
++}
++
++export var DarkstrChaffScheduler = {
++  _inited: false,
++  _timer: null,
++  _batchTimers: [],
++  _observer: null,
++  _applying: false,
++
++  init() {
++    if (this._inited) {
++      return;
++    }
++    this._inited = true;
++    this._observer = this._observe.bind(this);
++    Services.prefs.addObserver(MODE_PREF, this._observer);
++    Services.prefs.addObserver(NATIVE_PREF, this._observer);
++    Services.prefs.addObserver(HOOKS_PREF, this._observer);
++    Services.prefs.addObserver(CHAOS_PREF, this._observer);
++    this.refreshPlan();
++  },
++
++  uninit() {
++    if (!this._inited) {
++      return;
++    }
++    try {
++      Services.prefs.removeObserver(MODE_PREF, this._observer);
++      Services.prefs.removeObserver(NATIVE_PREF, this._observer);
++      Services.prefs.removeObserver(HOOKS_PREF, this._observer);
++      Services.prefs.removeObserver(CHAOS_PREF, this._observer);
++    } catch (_e) {
++      // Observers may already be gone during shutdown.
++    }
++    this._cancelAll();
++    this._inited = false;
++  },
++
++  _observe(_subject, topic, data) {
++    if (topic !== "nsPref:changed") {
++      return;
++    }
++    if (
++      data === MODE_PREF ||
++      data === NATIVE_PREF ||
++      data === HOOKS_PREF ||
++      data === CHAOS_PREF
++    ) {
++      this.refreshPlan();
++    }
++  },
++
++  /**
++   * Resolve ChaffSchedulerPlan-equivalent gate + schedule.
++   * @returns {{
++   *   armed: boolean,
++   *   pollutionActive: boolean,
++   *   allowChaff: boolean,
++   *   level: string,
++   *   intervalMinutes: number|null,
++   *   beaconCount: number|null,
++   * }}
++   */
++  resolvePlan() {
++    let mode = "homogeneous";
++    try {
++      mode = Services.prefs.getStringPref(MODE_PREF, "homogeneous");
++    } catch (_e) {
++      mode = "homogeneous";
++    }
++    if (mode !== "pollution" && mode !== "homogeneous") {
++      mode = "homogeneous";
++    }
++
++    let nativeCompatible = false;
++    try {
++      nativeCompatible = Services.prefs.getBoolPref(NATIVE_PREF, false);
++    } catch (_e) {
++      nativeCompatible = false;
++    }
++
++    let nativeHooks = false;
++    try {
++      nativeHooks = Services.prefs.getBoolPref(HOOKS_PREF, false);
++    } catch (_e) {
++      nativeHooks = false;
++    }
++
++    let chaosRaw = "balanced";
++    try {
++      chaosRaw = Services.prefs.getStringPref(CHAOS_PREF, "balanced");
++    } catch (_e) {
++      chaosRaw = "balanced";
++    }
++    const level = parseChaosLevel(chaosRaw);
++
++    // pollution_active / allow_persona_chaff (Rust) + default-off hooks gate.
++    const pollutionActive = mode === "pollution" && !nativeCompatible;
++    const allowChaff = pollutionActive;
++    const armed = pollutionActive && allowChaff && nativeHooks;
++
++    if (!armed) {
++      return {
++        armed: false,
++        pollutionActive,
++        allowChaff,
++        level,
++        intervalMinutes: null,
++        beaconCount: null,
++      };
++    }
++
++    return {
++      armed: true,
++      pollutionActive,
++      allowChaff,
++      level,
++      intervalMinutes: pickIntervalMinutes(level),
++      beaconCount: pickBatchCount(level),
++    };
++  },
++
++  /**
++   * Arm or cancel nsITimer from current prefs. Safe to call repeatedly.
++   * @returns {object} plan from resolvePlan()
++   */
++  refreshPlan() {
++    if (this._applying) {
++      return this.resolvePlan();
++    }
++    this._applying = true;
++    try {
++      const plan = this.resolvePlan();
++      this._persistDiagnostics(plan);
++      if (!plan.armed) {
++        this._cancelAll();
++        return plan;
++      }
++      this._armIntervalTimer(plan);
++      return plan;
++    } finally {
++      this._applying = false;
++    }
++  },
++
++  _persistDiagnostics(plan) {
++    try {
++      Services.prefs.setBoolPref(ARMED_PREF, !!plan.armed);
++    } catch (_e) {}
++    try {
++      const summary = plan.armed
++        ? `${plan.level};interval=${plan.intervalMinutes?.toFixed?.(2) ?? "?"};batch=${plan.beaconCount}`
++        : `${plan.level};idle`;
++      Services.prefs.setStringPref(LAST_PLAN_PREF, summary);
++    } catch (_e) {}
++  },
++
++  _cancelAll() {
++    if (this._timer) {
++      try {
++        this._timer.cancel();
++      } catch (_e) {}
++      this._timer = null;
++    }
++    for (const t of this._batchTimers) {
++      try {
++        t.cancel();
++      } catch (_e) {}
++    }
++    this._batchTimers = [];
++  },
++
++  _armIntervalTimer(plan) {
++    this._cancelAll();
++    const delayMs = Math.max(
++      1000,
++      Math.floor((plan.intervalMinutes || 3) * 60 * 1000)
++    );
++    const timer = Cc["@mozilla.org/timer;1"].createInstance(Ci.nsITimer);
++    // TYPE_ONE_SHOT — re-arm after each fire so chaosLevel/gates re-resolve.
++    timer.initWithCallback(
++      () => {
++        this._onIntervalFire();
++      },
++      delayMs,
++      Ci.nsITimer.TYPE_ONE_SHOT
++    );
++    this._timer = timer;
++  },
++
++  _onIntervalFire() {
++    const plan = this.resolvePlan();
++    this._persistDiagnostics(plan);
++    if (!plan.armed) {
++      this._cancelAll();
++      return;
++    }
++    this._scheduleBatch(plan);
++    // Re-arm next interval with a fresh draw.
++    const next = this.resolvePlan();
++    if (next.armed) {
++      this._armIntervalTimer(next);
++    }
++  },
++
++  _scheduleBatch(plan) {
++    const count = plan.beaconCount || 1;
++    const level = plan.level;
++    for (let i = 0; i < count; i++) {
++      const delay = staggerDelayMs(level, i);
++      const timer = Cc["@mozilla.org/timer;1"].createInstance(Ci.nsITimer);
++      timer.initWithCallback(
++        () => {
++          this._fireOneBeacon(i, count, level);
++        },
++        delay,
++        Ci.nsITimer.TYPE_ONE_SHOT
++      );
++      this._batchTimers.push(timer);
++    }
++  },
++
++  /**
++   * Minimal ordinary HTTP fire to a Phase 1 poisoner endpoint.
++   * Payload is intentionally thin (tid + random cid); full persona-coherent
++   * poisoner bodies remain WebExt until a later depth pin.
++   */
++  _fireOneBeacon(index, total, level) {
++    try {
++      const endpoint =
++        BEACON_ENDPOINTS[Math.floor(unit01() * BEACON_ENDPOINTS.length)];
++      const cid = `${Math.floor(unit01() * 1e9)}.${Math.floor(unit01() * 1e9)}`;
++      const qs = new URLSearchParams({
++        v: "1",
++        t: "pageview",
++        tid: "UA-DARKSTR-0",
++        cid,
++        dp: `/darkstr/chaff/${level}/${index}`,
++        dl: "https://example.invalid/darkstr-chaff",
++        z: String(Date.now()),
++      }).toString();
++      const url = endpoint.includes("?")
++        ? `${endpoint}&${qs}`
++        : `${endpoint}?${qs}`;
++
++      // Ordinary channel — chrome fetch; no TLS fingerprint games.
++      fetch(url, {
++        method: "GET",
++        credentials: "omit",
++        cache: "no-store",
++        redirect: "manual",
++      }).catch(() => {
++        // Beacon best-effort; network errors are expected (no-cors-ish).
++      });
++
++      try {
++        Services.prefs.setStringPref(
++          LAST_FIRE_PREF,
++          `${new Date().toISOString()};${level};${index + 1}/${total};${endpoint}`
++        );
++      } catch (_e) {}
++    } catch (_e) {
++      // Soft-fail — scheduler stays armed.
++    }
++  },
++};
