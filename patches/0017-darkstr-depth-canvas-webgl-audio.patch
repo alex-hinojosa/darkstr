@@ -1,0 +1,622 @@
+# darkstr Phase 3 pin 2 — train-pinned live Canvas/WebGL/Audio depth hooks (chrome JS)
+# Train: Firefox FIREFOX_155_0_1_RELEASE / LibreWolf 155.0.1-1
+# Brand: darkstr — not official LibreWolf. No Cloudflare/TLS/JA3 claims.
+# Apply (after 0016): patch -d "$DARKSTR_GECKO_ROOT" -p1 < patches/0017-darkstr-depth-canvas-webgl-audio.patch
+# Requires Phase 3 pin 1 DarkstrChaffScheduler + M3 DarkstrNativePersona (BrowserGlue context).
+# Gates: pollution_active + darkstr.nativePersonaHooks (default-off). Seeds from snapshot / persona.seed.
+# Rebuild: ./mach build --allow-subdirectory-build browser/components
+# Then: rm install_dist_bin.track; make install-dist_bin; mirror LibreWolf.app moz-src symlink.
+# Honesty: canvas/WebGL/Audio only; workers = pin 3; no Approach A; no fresh DMG; hooks default-off.
+#
+--- a/browser/components/BrowserGlue.sys.mjs
++++ b/browser/components/BrowserGlue.sys.mjs
+@@ -33,6 +33,7 @@
+   DarkstrModeXor: "moz-src:///browser/components/DarkstrModeXor.sys.mjs",
+   DarkstrNativePersona: "moz-src:///browser/components/DarkstrNativePersona.sys.mjs",
+   DarkstrChaffScheduler: "moz-src:///browser/components/DarkstrChaffScheduler.sys.mjs",
++  DarkstrDepthHooks: "moz-src:///browser/components/DarkstrDepthHooks.sys.mjs",
+   DesktopActorRegistry:
+     "moz-src:///browser/components/DesktopActorRegistry.sys.mjs",
+   Discovery: "resource:///modules/Discovery.sys.mjs",
+@@ -371,6 +372,9 @@
+ 
+     // darkstr Phase 3: native chaff timer (Quiet/Balanced/Loud; default-off).
+     lazy.DarkstrChaffScheduler.init();
++
++    // darkstr Phase 3 pin 2: canvas/WebGL/Audio depth hooks (default-off).
++    lazy.DarkstrDepthHooks.init();
+   },
+ 
+   // cleanup (called on application shutdown)
+@@ -392,6 +396,10 @@
+       lazy.DarkstrChaffScheduler.uninit();
+     } catch (_e) {}
+ 
++    try {
++      lazy.DarkstrDepthHooks.uninit();
++    } catch (_e) {}
++
+     if (this._lateTasksIdleObserver) {
+       this._userIdleService.removeIdleObserver(
+         this._lateTasksIdleObserver,
+--- a/browser/components/DarkstrDepthHooks.sys.mjs
++++ b/browser/components/DarkstrDepthHooks.sys.mjs
+@@ -0,0 +1,343 @@
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
++
++/**
++ * darkstr Phase 3 pin 2 — thin native Canvas 2D / WebGL / Audio depth hooks (chrome).
++ *
++ * Train pin: Firefox / LibreWolf 155.0.1-1 (FIREFOX_155_0_1_RELEASE).
++ * Brand: darkstr — not official LibreWolf. Pollution browser, not Cloudflare bypass.
++ *
++ * Mirrors public control plane (no Rust FFI required in this drop):
++ *   duppel_bridge::read_depth_seeds / DepthSurface / HookApplicatorSurface::{Canvas2dNoise,WebGlRendererStrings,AudioFingerprint}
++ *   duppel_persona::PersonaSnapshot::depth_canvas_seed / depth_audio_seed / depth_webgl_gpu
++ *
++ * Gates (default-off — idle unless explicitly allowed):
++ *   pollution_active = mode=="pollution" && !nativeCompatible
++ *   allow = pollution_active && darkstr.nativePersonaHooks
++ * Homogeneous / Native-Compatible / hooks false → no content hooks; seeds null.
++ *
++ * Seeds: prefer darkstr.persona.snapshot JSON (canvasSeed/audioSeed/gpu);
++ * fallback derive from darkstr.persona.seed (mulberry32). Does not write privacy.*.
++ *
++ * Workers = Phase 3 pin 3 — NOT in this module.
++ */
++
++const MODE_PREF = "darkstr.mode";
++const NATIVE_PREF = "darkstr.nativeCompatible";
++const HOOKS_PREF = "darkstr.nativePersonaHooks";
++const SNAPSHOT_PREF = "darkstr.persona.snapshot";
++const SEED_PREF = "darkstr.persona.seed";
++const ARMED_PREF = "darkstr.depth.hooksArmed";
++const LAST_SEEDS_PREF = "darkstr.depth.lastSeeds";
++
++// Host-OS filtered Firefox-family GPU pairs (thin subset of profiles.js).
++const GPU_BY_OS = {
++  macos: [
++    { vendor: "Apple", renderer: "Apple M1" },
++    { vendor: "Apple", renderer: "Apple M2" },
++    { vendor: "Intel Inc.", renderer: "Intel(R) Iris(R) Plus Graphics" },
++  ],
++  windows: [
++    { vendor: "Google Inc. (Intel)", renderer: "ANGLE (Intel, Intel(R) UHD Graphics 630, OpenGL 4.5)" },
++    { vendor: "Google Inc. (NVIDIA)", renderer: "ANGLE (NVIDIA, NVIDIA GeForce RTX 3060, OpenGL 4.5)" },
++    { vendor: "Google Inc. (AMD)", renderer: "ANGLE (AMD, AMD Radeon RX 580, OpenGL 4.5)" },
++  ],
++  linux: [
++    { vendor: "Intel", renderer: "Mesa Intel(R) UHD Graphics 630 (CFL GT2)" },
++    { vendor: "NVIDIA Corporation", renderer: "NVIDIA GeForce RTX 3060/PCIe/SSE2" },
++    { vendor: "AMD", renderer: "AMD Radeon RX 580 (radeonsi, polaris10, LLVM 15.0.7, DRM 3.54, 6.8.0)" },
++  ],
++};
++
++function mulberry32(seed) {
++  return function () {
++    seed |= 0;
++    seed = (seed + 0x6d2b79f5) | 0;
++    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
++    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
++    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
++  };
++}
++
++function pickFrom(arr, rng) {
++  return arr[Math.floor(rng() * arr.length)];
++}
++
++function detectHostOs() {
++  try {
++    const oscpu = Cc["@mozilla.org/network/protocol;1?name=http"].getService(
++      Ci.nsIHttpProtocolHandler
++    ).oscpu;
++    if (/Mac OS X|macOS/i.test(oscpu)) {
++      return "macos";
++    }
++    if (/Linux/i.test(oscpu)) {
++      return "linux";
++    }
++  } catch (_e) {}
++  return "windows";
++}
++
++function normalizeGpu(raw) {
++  if (!raw || typeof raw !== "object") {
++    return null;
++  }
++  const vendor = String(raw.vendor || "").trim();
++  const renderer = String(raw.renderer || "").trim();
++  if (!vendor || !renderer) {
++    return null;
++  }
++  return { vendor, renderer };
++}
++
++function readU32Field(obj, camel, snake) {
++  if (!obj || typeof obj !== "object") {
++    return null;
++  }
++  for (const k of [camel, snake]) {
++    if (typeof obj[k] === "number" && Number.isFinite(obj[k])) {
++      return obj[k] >>> 0;
++    }
++    if (typeof obj[k] === "string" && obj[k].trim() !== "") {
++      const n = Number(obj[k]);
++      if (Number.isFinite(n)) {
++        return n >>> 0;
++      }
++    }
++  }
++  return null;
++}
++
++export var DarkstrDepthHooks = {
++  _inited: false,
++  _actorRegistered: false,
++  _observer: null,
++  _seeds: null,
++  _armed: false,
++
++  init() {
++    if (this._inited) {
++      return;
++    }
++    this._inited = true;
++    this._observer = this._observe.bind(this);
++    for (const p of [MODE_PREF, NATIVE_PREF, HOOKS_PREF, SNAPSHOT_PREF, SEED_PREF]) {
++      Services.prefs.addObserver(p, this._observer);
++    }
++    this._registerActor();
++    this.refreshPlan();
++  },
++
++  uninit() {
++    if (!this._inited) {
++      return;
++    }
++    for (const p of [MODE_PREF, NATIVE_PREF, HOOKS_PREF, SNAPSHOT_PREF, SEED_PREF]) {
++      try {
++        Services.prefs.removeObserver(p, this._observer);
++      } catch (_e) {}
++    }
++    if (this._actorRegistered) {
++      try {
++        ChromeUtils.unregisterWindowActor("DarkstrDepthHooks");
++      } catch (_e) {}
++      this._actorRegistered = false;
++    }
++    this._setArmed(false, null);
++    this._inited = false;
++  },
++
++  _observe(_subject, topic, _data) {
++    if (topic !== "nsPref:changed") {
++      return;
++    }
++    this.refreshPlan();
++  },
++
++  _registerActor() {
++    if (this._actorRegistered) {
++      return;
++    }
++    try {
++      ChromeUtils.registerWindowActor("DarkstrDepthHooks", {
++        parent: {
++          esModuleURI:
++            "moz-src:///browser/components/DarkstrDepthHooksParent.sys.mjs",
++        },
++        child: {
++          esModuleURI:
++            "moz-src:///browser/components/DarkstrDepthHooksChild.sys.mjs",
++          events: {
++            DOMWindowCreated: {},
++          },
++        },
++        allFrames: true,
++        messageManagerGroups: ["browsers"],
++        matches: ["*://*/*", "file://*"],
++      });
++      this._actorRegistered = true;
++    } catch (e) {
++      console.warn("darkstr P3: DepthHooks JSWindowActor register failed:", e);
++    }
++  },
++
++  /**
++   * Resolve depth gate + seeds (read_depth_seeds equivalent).
++   * @returns {{
++   *   pollutionActive: boolean,
++   *   nativeHooks: boolean,
++   *   armed: boolean,
++   *   seeds: {canvasSeed:number, audioSeed:number, gpu:{vendor:string,renderer:string}}|null
++   * }}
++   */
++  refreshPlan() {
++    let mode = "homogeneous";
++    try {
++      mode = Services.prefs.getStringPref(MODE_PREF, "homogeneous");
++    } catch (_e) {
++      mode = "homogeneous";
++    }
++    if (mode !== "pollution" && mode !== "homogeneous") {
++      mode = "homogeneous";
++    }
++
++    let nativeCompatible = false;
++    try {
++      nativeCompatible = Services.prefs.getBoolPref(NATIVE_PREF, false);
++    } catch (_e) {}
++
++    let nativeHooks = false;
++    try {
++      nativeHooks = Services.prefs.getBoolPref(HOOKS_PREF, false);
++    } catch (_e) {}
++
++    const pollutionActive = mode === "pollution" && !nativeCompatible;
++    const seeds = pollutionActive ? this._readDepthSeeds() : null;
++    const armed = !!(pollutionActive && nativeHooks && seeds);
++
++    this._plan = {
++      pollutionActive,
++      nativeHooks,
++      armed,
++      seeds: armed ? seeds : null,
++    };
++    this._seeds = this._plan.seeds;
++    this._setArmed(armed, this._seeds);
++    return this._plan;
++  },
++
++  getPlan() {
++    return this._plan || this.refreshPlan();
++  },
++
++  /** Depth seeds for JSWindowActor child (null when idle). */
++  depthSeedsForBrowsingContext(_bc) {
++    const plan = this.getPlan();
++    if (!plan.armed || !plan.seeds) {
++      return null;
++    }
++    return {
++      canvasSeed: plan.seeds.canvasSeed >>> 0,
++      audioSeed: plan.seeds.audioSeed >>> 0,
++      gpu: {
++        vendor: plan.seeds.gpu.vendor,
++        renderer: plan.seeds.gpu.renderer,
++      },
++    };
++  },
++
++  _readDepthSeeds() {
++    // Prefer cached persona snapshot (same JSON bridge as NativePersona).
++    try {
++      const raw = Services.prefs.getStringPref(SNAPSHOT_PREF, "");
++      if (raw) {
++        const parsed = JSON.parse(raw);
++        if (parsed && typeof parsed === "object") {
++          const canvasSeed = readU32Field(parsed, "canvasSeed", "canvas_seed");
++          const audioSeed = readU32Field(parsed, "audioSeed", "audio_seed");
++          const gpu = normalizeGpu(parsed.gpu);
++          if (canvasSeed !== null && audioSeed !== null && gpu) {
++            return { canvasSeed, audioSeed, gpu };
++          }
++          // Partial snapshot: fill missing fields from seed fallback below,
++          // but keep present fields when we have a persona seed.
++        }
++      }
++    } catch (_e) {}
++
++    let seed = 0;
++    try {
++      seed = Services.prefs.getIntPref(SEED_PREF, 0);
++    } catch (_e) {
++      seed = 0;
++    }
++    if (!seed) {
++      // Try partial snapshot fill without persona.seed.
++      try {
++        const raw = Services.prefs.getStringPref(SNAPSHOT_PREF, "");
++        if (raw) {
++          const parsed = JSON.parse(raw);
++          const canvasSeed = readU32Field(parsed, "canvasSeed", "canvas_seed");
++          const audioSeed = readU32Field(parsed, "audioSeed", "audio_seed");
++          const gpu = normalizeGpu(parsed.gpu);
++          // Need all three for a coherent depth payload.
++          if (canvasSeed !== null && audioSeed !== null && gpu) {
++            return { canvasSeed, audioSeed, gpu };
++          }
++        }
++      } catch (_e) {}
++      return null;
++    }
++    return this._generateDepthFromSeed(seed >>> 0);
++  },
++
++  _generateDepthFromSeed(seed) {
++    const rng = mulberry32(seed);
++    // Advance RNG in the same rough order as profiles.js generateProfile
++    // (UA/platform/HW/screen/color skipped via discarded picks) so canvas/audio
++    // remain correlated with a full persona when only seed is present.
++    void pickFrom([0, 1], rng); // UA group stand-in
++    void pickFrom([0, 1], rng); // UA stand-in
++    const os = detectHostOs();
++    const gpus = GPU_BY_OS[os] || GPU_BY_OS.windows;
++    const gpu = pickFrom(gpus, rng);
++    void pickFrom([4, 8, 10, 12, 16], rng);
++    void pickFrom([4, 8, 16, 32], rng);
++    void pickFrom([0, 1], rng); // screen
++    void pickFrom([24, 30], rng); // colorDepth
++    // gpu already picked above to match host OS; re-pick for seed stream parity
++    // with profiles.js (gpu after screen/colorDepth):
++    const gpu2 = pickFrom(gpus, rng);
++    void pickFrom([0, 1], rng); // languages
++    void pickFrom([0, 1], rng); // timezone
++    const canvasSeed = (rng() * 0xffffffff) >>> 0;
++    const audioSeed = (rng() * 0xffffffff) >>> 0;
++    return {
++      canvasSeed,
++      audioSeed,
++      gpu: gpu2 || gpu,
++    };
++  },
++
++  _setArmed(armed, seeds) {
++    this._armed = !!armed;
++    try {
++      Services.prefs.setBoolPref(ARMED_PREF, this._armed);
++    } catch (_e) {}
++    try {
++      if (this._armed && seeds) {
++        Services.prefs.setStringPref(
++          LAST_SEEDS_PREF,
++          JSON.stringify({
++            canvasSeed: seeds.canvasSeed >>> 0,
++            audioSeed: seeds.audioSeed >>> 0,
++            gpu: seeds.gpu,
++          })
++        );
++      } else {
++        Services.prefs.setStringPref(LAST_SEEDS_PREF, "");
++      }
++    } catch (_e) {}
++  },
++};
+--- a/browser/components/DarkstrDepthHooksChild.sys.mjs
++++ b/browser/components/DarkstrDepthHooksChild.sys.mjs
+@@ -0,0 +1,193 @@
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
++
++/**
++ * darkstr Phase 3 pin 2 — JSWindowActor child.
++ * Thin Canvas 2D noise / WebGL vendor·renderer / AudioBuffer noise from depth seeds.
++ * Brand: darkstr — not official LibreWolf. Workers NOT claimed (pin 3).
++ *
++ * Parity notes (Phase 1 anti-fingerprint chrome-port, thinned):
++ *   Canvas: deterministic ±0–3 RGB noise via hash(seed,i,val); toDataURL/toBlob/getImageData
++ *   WebGL: UNMASKED_VENDOR/RENDERER (0x9245/0x9246); readPixels RGBA noise
++ *   Audio: AudioBuffer.getChannelData once-per-channel micro-noise from audioSeed
++ */
++
++function disguise(fn, name, length) {
++  try {
++    Object.defineProperty(fn, "name", { value: name, configurable: true });
++    if (typeof length === "number") {
++      Object.defineProperty(fn, "length", { value: length, configurable: true });
++    }
++  } catch (_e) {}
++  return fn;
++}
++
++function pixelNoise(seed, i, val) {
++  let h = seed ^ (i * 2654435761);
++  h = (h ^ (val * 2246822519)) >>> 0;
++  h = Math.imul(h ^ (h >>> 16), 0x45d9f3b);
++  h = Math.imul(h ^ (h >>> 16), 0x45d9f3b);
++  h = (h ^ (h >>> 16)) >>> 0;
++  const magnitude = (h >>> 1) & 3;
++  return h & 1 ? magnitude : -magnitude;
++}
++
++function applyCanvasNoise(px, seed) {
++  for (let i = 0; i < px.length; i += 4) {
++    px[i] = Math.max(0, Math.min(255, px[i] + pixelNoise(seed, i, px[i])));
++    px[i + 1] = Math.max(
++      0,
++      Math.min(255, px[i + 1] + pixelNoise(seed, i + 1, px[i + 1]))
++    );
++    px[i + 2] = Math.max(
++      0,
++      Math.min(255, px[i + 2] + pixelNoise(seed, i + 2, px[i + 2]))
++    );
++  }
++}
++
++function installDepthHooks(win, seeds) {
++  const canvasSeed = seeds.canvasSeed >>> 0;
++  const audioSeed = seeds.audioSeed >>> 0;
++  const gpu = seeds.gpu || { vendor: "Apple", renderer: "Apple M1" };
++
++  const doc = win.document;
++  const HTMLCanvasElement = win.HTMLCanvasElement;
++  const CanvasRenderingContext2D = win.CanvasRenderingContext2D;
++  if (!HTMLCanvasElement || !CanvasRenderingContext2D) {
++    return;
++  }
++
++  const origToDataURL = HTMLCanvasElement.prototype.toDataURL;
++  const origToBlob = HTMLCanvasElement.prototype.toBlob;
++  const origGetImageData = CanvasRenderingContext2D.prototype.getImageData;
++
++  function noisyClone(src) {
++    const c = doc.createElement("canvas");
++    c.width = src.width;
++    c.height = src.height;
++    const cctx = c.getContext("2d");
++    cctx.drawImage(src, 0, 0);
++    const id = origGetImageData.call(cctx, 0, 0, c.width, c.height);
++    applyCanvasNoise(id.data, canvasSeed);
++    cctx.putImageData(id, 0, 0);
++    return c;
++  }
++
++  HTMLCanvasElement.prototype.toDataURL = disguise(function (...args) {
++    try {
++      if (this.width > 0 && this.height > 0) {
++        return origToDataURL.apply(noisyClone(this), args);
++      }
++    } catch (_e) {}
++    return origToDataURL.apply(this, args);
++  }, "toDataURL");
++
++  HTMLCanvasElement.prototype.toBlob = disguise(function (cb, ...args) {
++    try {
++      if (this.width > 0 && this.height > 0) {
++        return origToBlob.call(noisyClone(this), cb, ...args);
++      }
++    } catch (_e) {}
++    return origToBlob.call(this, cb, ...args);
++  }, "toBlob");
++
++  CanvasRenderingContext2D.prototype.getImageData = disguise(
++    function (...args) {
++      const id = origGetImageData.apply(this, args);
++      applyCanvasNoise(id.data, canvasSeed);
++      return id;
++    },
++    "getImageData",
++    4
++  );
++
++  // WebGL: vendor/renderer + readPixels noise (thin — no full cap-bucket spoof).
++  function patchWebGL(proto) {
++    if (!proto) {
++      return;
++    }
++    const origGetParameter = proto.getParameter;
++    if (origGetParameter) {
++      proto.getParameter = disguise(function (param) {
++        if (param === 0x9245) {
++          return gpu.vendor;
++        }
++        if (param === 0x9246) {
++          return gpu.renderer;
++        }
++        return origGetParameter.call(this, param);
++      }, "getParameter");
++    }
++    const origReadPixels = proto.readPixels;
++    if (origReadPixels) {
++      proto.readPixels = disguise(function (x, y, w, h, format, type, pixels) {
++        origReadPixels.call(this, x, y, w, h, format, type, pixels);
++        if (
++          pixels &&
++          format === 0x1908 /* RGBA */ &&
++          type === 0x1401 /* UNSIGNED_BYTE */
++        ) {
++          applyCanvasNoise(pixels, canvasSeed);
++        }
++      }, "readPixels");
++    }
++  }
++  if (win.WebGLRenderingContext) {
++    patchWebGL(win.WebGLRenderingContext.prototype);
++  }
++  if (win.WebGL2RenderingContext) {
++    patchWebGL(win.WebGL2RenderingContext.prototype);
++  }
++
++  // Audio: once-per-channel getChannelData noise.
++  if (win.AudioBuffer && win.AudioBuffer.prototype.getChannelData) {
++    const origGetChannelData = win.AudioBuffer.prototype.getChannelData;
++    const noisedBuffers = new WeakMap();
++    win.AudioBuffer.prototype.getChannelData = disguise(function (channel) {
++      const data = origGetChannelData.call(this, channel);
++      let noised = noisedBuffers.get(this);
++      if (!noised) {
++        noised = new Set();
++        noisedBuffers.set(this, noised);
++      }
++      if (noised.has(channel)) {
++        return data;
++      }
++      noised.add(channel);
++      const seed = audioSeed ^ (channel * 0x9e3779b9);
++      for (let i = 0; i < data.length; i++) {
++        let h = seed ^ (i * 2654435761);
++        h = Math.imul(h ^ ((data[i] * 1e6) >>> 0), 0x45d9f3b);
++        h = (h ^ (h >>> 16)) >>> 0;
++        data[i] += ((h % 200) - 100) * 0.0000005;
++      }
++      return data;
++    }, "getChannelData");
++  }
++}
++
++export class DarkstrDepthHooksChild extends JSWindowActorChild {
++  async handleEvent(event) {
++    if (event.type !== "DOMWindowCreated") {
++      return;
++    }
++    let seeds;
++    try {
++      seeds = await this.sendQuery("DarkstrDepthHooks:GetSeeds");
++    } catch (_e) {
++      return;
++    }
++    if (!seeds || typeof seeds.canvasSeed !== "number") {
++      return;
++    }
++    const win = this.contentWindow;
++    if (!win) {
++      return;
++    }
++    try {
++      installDepthHooks(win, seeds);
++    } catch (_e) {}
++  }
++}
+--- a/browser/components/DarkstrDepthHooksParent.sys.mjs
++++ b/browser/components/DarkstrDepthHooksParent.sys.mjs
+@@ -0,0 +1,24 @@
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
++
++/**
++ * darkstr Phase 3 pin 2 — JSWindowActor parent. Returns depth seeds for content hooks.
++ * Brand: darkstr — not official LibreWolf.
++ */
++
++export class DarkstrDepthHooksParent extends JSWindowActorParent {
++  receiveMessage(message) {
++    if (message.name !== "DarkstrDepthHooks:GetSeeds") {
++      return null;
++    }
++    try {
++      const { DarkstrDepthHooks } = ChromeUtils.importESModule(
++        "moz-src:///browser/components/DarkstrDepthHooks.sys.mjs"
++      );
++      return DarkstrDepthHooks.depthSeedsForBrowsingContext(this.browsingContext);
++    } catch (_e) {
++      return null;
++    }
++  }
++}
+--- a/browser/components/moz.build
++++ b/browser/components/moz.build
+@@ -118,6 +118,9 @@
+ 
+ MOZ_SRC_FILES += [
+     "DarkstrChaffScheduler.sys.mjs",
++    "DarkstrDepthHooks.sys.mjs",
++    "DarkstrDepthHooksChild.sys.mjs",
++    "DarkstrDepthHooksParent.sys.mjs",
+     "DarkstrFfi.sys.mjs",
+     "DarkstrModeXor.sys.mjs",
+     "DarkstrNativePersona.sys.mjs",

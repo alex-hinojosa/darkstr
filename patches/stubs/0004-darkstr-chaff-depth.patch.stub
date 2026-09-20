@@ -4,13 +4,18 @@
 #   patches/0016-darkstr-chaff-native-scheduler.patch
 #   → DarkstrChaffScheduler.sys.mjs (nsITimer + Quiet/Balanced/Loud + ordinary HTTP beacons)
 #   → Gates: pollution_active + darkstr.nativePersonaHooks (default-off)
+#   → Mini: apply + mach + install-dist_bin; Proof XOR PASS after dist install
 #   → See docs/PHASE-3-STATUS.md
 #
-# Remaining intent from this stub (NOT in 0016 — later pins):
-#   Canvas 2D noise       → PersonaSnapshot::canvas_seed / depth_canvas_seed
-#   WebGL renderer strings → depth_webgl_gpu
-#   Audio fingerprint      → audio_seed / OfflineAudioContext
-#   Workers                → Dedicated/Shared worker globals
+# Phase 3 pin 2 (2026-09-19): **canvas / WebGL / Audio depth landed** as a real train-pinned patch:
+#   patches/0017-darkstr-depth-canvas-webgl-audio.patch
+#   → DarkstrDepthHooks.sys.mjs + Parent/Child JSWindowActor
+#   → Seeds: depth_canvas_seed / depth_audio_seed / depth_webgl_gpu (snapshot or persona.seed)
+#   → Gates: pollution_active + darkstr.nativePersonaHooks (default-off)
+#   → See docs/PHASE-3-STATUS.md
+#
+# Remaining intent from this stub (NOT in 0016/0017 — later pins):
+#   Workers                → Dedicated/Shared worker globals (Phase 3 pin 3)
 #   DocShell strict-next-nav → SubsequentNav arm (extends M3)
 #
 # Authoritative enums (must match unit tests):

@@ -121,7 +121,7 @@ duppel_persona::PersonaSnapshot::depth_canvas_seed / depth_audio_seed / depth_we
 
 ## Next after merge
 
-1. ~~Private-fork: thin chaff timer glue calling `ChaffSchedulerPlan` (train-pinned `.patch`).~~ → **Phase 3 pin 1:** `patches/0016-darkstr-chaff-native-scheduler.patch` (`docs/PHASE-3-STATUS.md`).
-2. Canvas/WebGL/Audio hooks reading depth seeds from cached snapshot when pollution_active.
-3. Worker globals coherence with same persona seed.
+1. ~~Private-fork: thin chaff timer glue calling `ChaffSchedulerPlan` (train-pinned `.patch`).~~ → **Phase 3 pin 1:** `patches/0016-darkstr-chaff-native-scheduler.patch` — merged PR #43 / `d5fb026`; Mini XOR **PASS** after `install-dist_bin` (`docs/PHASE-3-STATUS.md`).
+2. ~~Canvas/WebGL/Audio hooks reading depth seeds from cached snapshot when pollution_active.~~ → **Phase 3 pin 2:** `patches/0017-darkstr-depth-canvas-webgl-audio.patch` (`docs/PHASE-3-STATUS.md`).
+3. Worker globals coherence with same persona seed (**Phase 3 pin 3**).
 4. Chrome privacy-pane Native-Compatible site list only when PM schedules UI work.
