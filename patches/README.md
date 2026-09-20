@@ -16,8 +16,9 @@ These stubs document *how* a real bsys6 / LibreWolf recipe would layer darkstr p
 | [`stubs/0006-darkstr-cpp-navigator-docshell.patch.stub`](stubs/0006-darkstr-cpp-navigator-docshell.patch.stub) | Pointer only — superseded by real `0006-…patch` |
 | [`0007-darkstr-cpp-docshell-nav-sot.patch`](0007-darkstr-cpp-docshell-nav-sot.patch) | **Real** train-pinned C++ DocShell first/subsequent SoT (155.0.1-1) — chrome Map fallback |
 | [`stubs/0007-darkstr-cpp-docshell-nav-sot.patch.stub`](stubs/0007-darkstr-cpp-docshell-nav-sot.patch.stub) | Pointer only — superseded by real `0007-…patch` |
-| [`stubs/0004-darkstr-chaff-depth.patch.stub`](stubs/0004-darkstr-chaff-depth.patch.stub) | M4 depth leftovers (canvas/WebGL/Audio/worker). **Scheduler → [`0016-darkstr-chaff-native-scheduler.patch`](0016-darkstr-chaff-native-scheduler.patch)** |
+| [`stubs/0004-darkstr-chaff-depth.patch.stub`](stubs/0004-darkstr-chaff-depth.patch.stub) | M4 depth leftovers (workers). **Scheduler → [`0016`](0016-darkstr-chaff-native-scheduler.patch)**; **canvas/WebGL/Audio → [`0017`](0017-darkstr-depth-canvas-webgl-audio.patch)** |
 | [`0016-darkstr-chaff-native-scheduler.patch`](0016-darkstr-chaff-native-scheduler.patch) | **Real** Phase 3 pin 1 — chrome chaff timer (`DarkstrChaffScheduler.sys.mjs`, default-off) |
+| [`0017-darkstr-depth-canvas-webgl-audio.patch`](0017-darkstr-depth-canvas-webgl-audio.patch) | **Real** Phase 3 pin 2 — canvas/WebGL/Audio depth (`DarkstrDepthHooks*.sys.mjs`, default-off) |
 | [`scripts/apply-darkstr-patches.sh`](scripts/apply-darkstr-patches.sh) | Example apply order for a real tree |
 
 Design pin: [`../docs/GECKO-HOOKS.md`](../docs/GECKO-HOOKS.md). Bridge: [`../docs/PREF-BRIDGE.md`](../docs/PREF-BRIDGE.md).
@@ -164,8 +165,18 @@ Real unified diff [`0016-darkstr-chaff-native-scheduler.patch`](0016-darkstr-cha
 
 - `DarkstrChaffScheduler.sys.mjs` — `nsITimer` + Quiet/Balanced/Loud + ordinary HTTP beacons
 - Gates: `pollution_active` + `darkstr.nativePersonaHooks` (default-off)
-- Apply + rebuild: `./mach build --allow-subdirectory-build browser/components` (see `docs/PHASE-3-CHAFF-0016-MINI-APPLY.sh` / `docs/PHASE-3-STATUS.md`)
-- Stub `0004` retained for canvas/WebGL/Audio/worker depth notes only
+- Apply + rebuild: `./mach build --allow-subdirectory-build browser/components` then **`make install-dist_bin`** (see `docs/PHASE-3-CHAFF-0016-MINI-APPLY.sh` / `docs/PHASE-3-STATUS.md`)
+- Stub `0004` retained for worker leftovers; canvas/WebGL/Audio → `0017`
+
+## Phase 3 depth canvas / WebGL / Audio (0017)
+
+Real unified diff [`0017-darkstr-depth-canvas-webgl-audio.patch`](0017-darkstr-depth-canvas-webgl-audio.patch) against post-0016 155.0.1-1 (DarkstrFfi alphabetical moz.build):
+
+- `DarkstrDepthHooks.sys.mjs` + Parent/Child JSWindowActor — canvas noise, WebGL vendor/renderer, audio getChannelData
+- Seeds from `darkstr.persona.snapshot` / `darkstr.persona.seed` when `pollution_active`
+- Gates: `pollution_active` + `darkstr.nativePersonaHooks` (default-off)
+- Apply + rebuild: `./mach build --allow-subdirectory-build browser/components` then **`make install-dist_bin`** + LibreWolf.app moz-src mirror (see `docs/PHASE-3-DEPTH-0017-MINI-APPLY.sh` / `docs/PHASE-3-STATUS.md`)
+- Workers **not** in this patch (pin 3)
 
 ## M3 soft park savedAcceptLanguages und (0015)
 

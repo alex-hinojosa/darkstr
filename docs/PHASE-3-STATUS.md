@@ -1,4 +1,4 @@
-# Phase 3 status — pin 1: native chaff timer glue
+# Phase 3 status — pin 2: Canvas / WebGL / Audio depth hooks
 
 **Date:** 2026-09-19 (CDT)  
 **Owner:** Builder  
@@ -7,35 +7,51 @@
 
 ## Goal (this pin)
 
-Ship the **first Phase 3 pin**: train-pinned thin native **chaff timer** glue on
-LibreWolf/Firefox **155.0.1-1**, calling into the existing Rust control plane
-(`duppel_chaff::ChaffSchedulerPlan` / Quiet·Balanced·Loud). Convert stub intent in
-`patches/stubs/0004-darkstr-chaff-depth.patch.stub` into a **real scheduler-only**
-patch — not canvas/WebGL/Audio/workers yet.
+Ship **Phase 3 pin 2**: train-pinned thin native **Canvas 2D / WebGL / Audio** depth
+hooks on LibreWolf/Firefox **155.0.1-1**, reading snapshot seeds when
+`pollution_active` (`depth_canvas_seed` / `depth_audio_seed` / `depth_webgl_gpu` /
+`duppel_bridge::read_depth_seeds`). Convert stub leftovers in
+`patches/stubs/0004-darkstr-chaff-depth.patch.stub` into a **real depth** patch —
+workers remain pin 3.
 
-## What landed
+## Pin 1 (merged) — XOR PASS
+
+| Item | Status |
+|------|--------|
+| `patches/0016-darkstr-chaff-native-scheduler.patch` | **Merged** PR #43 as `d5fb026` |
+| Mini apply + `mach build browser/components` | **DONE** (2026-09-19) |
+| `make install-dist_bin` + LibreWolf.app `moz-src` | **DONE** (subdirectory build alone left BrowserGlue wired but MOZ_SRC missing) |
+| Proof XOR (module present + gate idle default) | **PASS** after dist install fix |
+
+**Install lesson (carry forward):** after subdirectory `mach build`, run
+`rm install_dist_bin.track; make install-dist_bin` and mirror/symlink new
+`*.sys.mjs` into `LibreWolf.app/Contents/Resources/moz-src/browser/components/`.
+
+## What landed (pin 2)
 
 | Deliverable | Status |
 |-------------|--------|
-| `patches/0016-darkstr-chaff-native-scheduler.patch` | **New** — `DarkstrChaffScheduler.sys.mjs` + BrowserGlue + moz.build |
-| Chrome `nsITimer` arming | Quiet/Balanced/Loud interval + batch + stagger (poisoner / Rust parity) |
-| Ordinary HTTP beacons | Phase 1 poisoner endpoints (GA collect / Meta `tr`) — thin query payload |
+| `patches/0017-darkstr-depth-canvas-webgl-audio.patch` | **New** — `DarkstrDepthHooks*.sys.mjs` + BrowserGlue + moz.build |
+| Canvas 2D | Deterministic ±0–3 RGB noise on `toDataURL` / `toBlob` / `getImageData` from `canvasSeed` |
+| WebGL | `UNMASKED_VENDOR` / `UNMASKED_RENDERER` from persona GPU; `readPixels` RGBA noise |
+| Audio | `AudioBuffer.getChannelData` once-per-channel micro-noise from `audioSeed` |
 | Gates default-off | Idle unless `pollution_active` **and** `darkstr.nativePersonaHooks` |
-| `darkstr.chaosLevel` default | `"balanced"` in `darkstr.cfg` (timer still idle without hooks) |
-| Diagnostics prefs | `darkstr.chaff.schedulerArmed` / `lastPlan` / `lastFireAt` (no `privacy.*`) |
-| Apply-script markers | `0016` idempotent skip when markers present |
-| Stub `0004` | Kept as historical note; points at `0016` for scheduler; depth leftovers remain stub |
-| Docs | This file; M4-STATUS Next; GECKO-HOOKS §2.2; PHASE-2-PLAN / EXIT checkbox |
+| Seeds | Prefer `darkstr.persona.snapshot` JSON; fallback `darkstr.persona.seed` |
+| Diagnostics prefs | `darkstr.depth.hooksArmed` / `lastSeeds` / `lastInstall` / `lastError` (no `privacy.*`) |
+| Apply-script markers | `0017` idempotent skip when markers present |
+| Stub `0004` | Points at `0016` (scheduler) + `0017` (canvas/WebGL/Audio); workers still later |
+| Docs | This file; M4-STATUS Next; GECKO-HOOKS §2.5; Mini apply helper |
 
 ## Gate truth (Proof XOR)
 
-| Mode / prefs | Timer |
-|--------------|-------|
-| Default Homogeneous + hooks false | **Idle** (`schedulerArmed=false`) |
+| Mode / prefs | Depth hooks |
+|--------------|-------------|
+| Default Homogeneous + hooks false | **Idle** (`hooksArmed=false`; child gets null seeds) |
 | Pollution + hooks false | **Idle** (explicit allow required) |
-| Pollution + `nativePersonaHooks=true` + `chaosLevel` | **Arms** with Quiet/Balanced/Loud schedule |
-| Homogeneous / `nativeCompatible=true` | **Idle** (cancel) |
+| Pollution + `nativePersonaHooks=true` + snapshot/seed | **Armed** — content applies canvas/WebGL/Audio |
+| Homogeneous / `nativeCompatible=true` | **Idle** |
 | This module writes `privacy.*`? | **No** |
+| Workers hooked? | **No** (pin 3) |
 
 ## Mini apply + build
 
@@ -45,49 +61,67 @@ Operator on Mac Mini SSD (Atlas: never `mv` under `/Volumes/Mesh`):
 source ~/src/darkstr-gecko/DARKSTR_GECKO_ROOT.env
 cd ~/src/darkstr-gecko/darkstr   # or pull this PR tip
 ./patches/scripts/apply-darkstr-patches.sh --require-root
-# or: patch -d "$DARKSTR_GECKO_ROOT" -p1 < patches/0016-darkstr-chaff-native-scheduler.patch
+# or: patch -d "$DARKSTR_GECKO_ROOT" -p1 < patches/0017-darkstr-depth-canvas-webgl-audio.patch
 cd "$DARKSTR_GECKO_ROOT"
 ./mach build --allow-subdirectory-build browser/components
+# REQUIRED after subdirectory build (pin 1 lesson):
+OBJ="$DARKSTR_GECKO_ROOT/obj-aarch64-apple-darwin25.6.0"
+rm -f "$OBJ/install_dist_bin.track"
+( cd "$OBJ" && make install-dist_bin )
+# Mirror new modules into LibreWolf.app Resources/moz-src if missing
 ```
 
-Helper: [`PHASE-3-CHAFF-0016-MINI-APPLY.sh`](PHASE-3-CHAFF-0016-MINI-APPLY.sh).
+Helper: [`PHASE-3-DEPTH-0017-MINI-APPLY.sh`](PHASE-3-DEPTH-0017-MINI-APPLY.sh).
 
-**Mini (2026-09-19 CDT):** 0016 applied; alphabetical `MOZ_SRC_FILES` fix;
-`mach build browser/components` OK; **`make install-dist_bin`** required so
-`DarkstrChaffScheduler.sys.mjs` lands under `dist/.../moz-src/browser/components/`
-(subdirectory build alone left BrowserGlue wired but module missing — Proof XOR FAIL).
-Mirrored into `LibreWolf.app/Contents/Resources/moz-src/...` as well.
+**This PR executor (Grok Linux box):** no Mini SSH / no Mini filesystem — Mini apply +
+`mach build` status = **NOT RUN here**. Compose-tree dry-run apply verified on box.
 
 | Check | Status |
 |-------|--------|
-| Patch dry-run / apply on Mini tree | **DONE** (2026-09-19) |
-| `./mach build --allow-subdirectory-build browser/components` | **DONE** |
-| `make install-dist_bin` + app `moz-src` present | **DONE** (tip `dcc4847` + install) |
-| Headed Proof XOR on rebuilt app | **Not claimed** |
+| Patch dry-run on post-0016 compose (DarkstrFfi moz.build) | **DONE** (Grok box) |
+| Patch dry-run / apply on Mini tree | **NOT RUN** (no Mini access) |
+| `./mach build` + `install-dist_bin` on Mini | **NOT RUN** |
+| Headed Proof XOR on rebuilt app | **Pin 1 PASS; pin 2 `abdb6c5` FAIL (prototypes native); Xray/pageshow/seed-type fix pending Mini re-gate** |
+| Pin 2 Fission actor attachment | **DONE** (`safeForUntrustedWebProcess` on DepthHooks + NativePersona) |
+| Pin 2 content prototype stick | **Fix added:** `Cu.waiveXrays` + `Cu.exportFunction`; pageshow reinstall; lastError/lastInstall |
+| Pin 2 string seed `"42"` | **Fix added:** `getPrefType` + 1-arg `getIntPref` / string parse (2-arg default hid the throw) |
 
 ## Explicit non-claims
 
-- Canvas / WebGL / Audio / worker native hooks
+- Worker globals (Dedicated/Shared) — **pin 3**
 - Approach A (`gkrust` path dependency)
 - Fresh `./mach package` / DMG
-- Hooks / chaff timer **default-on**
+- Hooks / depth / chaff **default-on**
 - Cloudflare / TLS / JA3 bypass claims
-- Full persona-coherent poisoner bodies in chrome (thin beacon query only; WebExt poisoner remains authoritative for rich payloads)
+- Full WebGL capability-bucket spoof / font-probe / ultrasonic (WebExt path remains richer until parity PRs)
+- Live C++ Canvas/WebGL/Audio bindings (chrome JSWindowActor only this pin)
 
 ## Next
 
-1. Proof XOR on tip with live dist module present; then headed Pollution+hooks skim when ready.
-2. Phase 3 pin 2: canvas / WebGL / Audio depth hooks (train-pinned; seeds from snapshot when `pollution_active`).
-3. Phase 3 pin 3: worker globals coherence.
-4. Optional: richer chrome beacon bodies parity with `poisoner.js` (still ordinary HTTP only).
+1. Operator: Mini apply `0017` + subdirectory build + **install-dist_bin** + app moz-src; Proof XOR.
+2. Phase 3 pin 3: worker globals coherence (same persona seed).
+3. Optional: richer WebGL cap buckets / OffscreenCanvas parity with Phase 1 bootstrap.
+4. Optional: richer chrome chaff beacon bodies (ordinary HTTP only).
 
 ## Proof gates for this PR
 
-- [x] Pref keys stay `darkstr.*`; no `privacy.*` writes from chaff module
-- [x] Timer idle unless Pollution + `nativePersonaHooks` (default-off)
-- [x] Quiet/Balanced/Loud parity with Phase 1 / Rust `ChaffSchedule`
-- [x] Ordinary HTTP beacons only; no CF/TLS/JA3 claims
-- [x] Patch id `0016`; stub `0004` updated to point at it
-- [x] Docs: PHASE-3-STATUS + M4 Next + GECKO-HOOKS §2.2 + apply markers
-- [x] Mini apply + subdirectory build + dist install (operator 2026-09-19)
+- [x] Pref keys stay `darkstr.*`; no `privacy.*` writes from depth module
+- [x] Hooks idle unless Pollution + `nativePersonaHooks` (default-off)
+- [x] Seeds from snapshot / seed only when `pollution_active` (`read_depth_seeds` parity)
+- [x] Canvas + WebGL + Audio only; workers explicitly out of scope
+- [x] Patch id `0017`; stub `0004` updated to point at it
+- [x] Docs: PHASE-3-STATUS + M4 Next + GECKO-HOOKS §2.5 + apply markers + Mini helper
+- [x] Pin 1 recorded XOR PASS / merged `d5fb026` + install-dist_bin lesson
+- [ ] Mini apply + subdirectory build + dist install (operator)
 - [x] Honest non-claims listed above
+
+
+## Pin 2 Proof re-gate
+
+- `5933e21`: chrome gates/seeds OK; `getActor` failed on `webIsolated` → `safeForUntrustedWebProcess`.
+- `abdb6c5`: actor attaches; Parent `GetSeeds` returns seeds; content prototypes stayed **native**.
+  Xray wrappers meant `installDepthHooks(this.contentWindow, seeds)` did not stick; child swallowed errors;
+  `getIntPref(SEED_PREF, 0)` returned 0 on a string pref so `"42"` never armed the seed fallback.
+- Follow-up (this tip): waive content window, `Cu.exportFunction` replacements, DOMWindowCreated **and**
+  pageshow (idempotent reinstall), `darkstr.depth.lastError` / `lastInstall` (no `privacy.*`),
+  typed seed read via `getPrefType`. Re-run headed canvas/audio mutation + hooks-off identity before merge.
