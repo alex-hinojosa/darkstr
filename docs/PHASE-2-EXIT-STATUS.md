@@ -41,7 +41,7 @@ this status does not imply that hooks are enabled in a product build.
 | **Fork packaging artifact** | **OPEN — pin, not fresh package (this push).** See [`MINI-PACKAGE-PIN.md`](MINI-PACKAGE-PIN.md). This executor could not run `./mach package` on the Mini; no fresh package is claimed. Existing `obj-*/dist/LibreWolf.app` is the intended Proof target when present. |
 | **Proof fork XOR matrix** | **OPEN.** Run the headed fork artifact through Homogeneous, Pollution, and Native-Compatible cases, including no UTC letterbox under active Pollution. Use `~/src/darkstr-gecko/headed-hooks-on-skim.sh` when operator runs a headed skim. `cargo test`/fixtures alone do not close this gate. |
 | **Approach A (`gkrust` path dependency)** | **DEFERRED.** Approach B (`cdylib` + chrome ctypes) is the current FFI pin. The libxul-resident gkrust path remains future work; no Approach A claim is made. |
-| **Live native chaff/depth C++** | **OPEN; Phase 3 depth.** M4 has scheduler/depth enums, plans, seeds, and stubs only. Native timer plus canvas/WebGL/Audio/worker C++ hooks are not claimed. |
+| **Live native chaff timer** | **PARTIAL — Phase 3 pin 1.** `0016` ships chrome `DarkstrChaffScheduler` (default-off). Canvas/WebGL/Audio/worker depth still **OPEN**. See `PHASE-3-STATUS.md`. |
 | **Native-Compatible privacy-pane site-list UI** | **OPEN; Phase 2→3 / PM scheduling.** The Phase 1 WebExt site list remains the usable path; no chrome privacy-pane UI flip is made here. |
 | **Cookie sandbox/firewall** | **BACKLOG ONLY.** #34 is a documentation one-pager, not an implemented sandbox or firewall. |
 | **Full fork build/merge-train exit** | **OPEN.** Reproducible fork build, packaging, and documented Homogeneous-vs-LibreWolf deltas remain exit work. |
@@ -63,7 +63,7 @@ this status does not imply that hooks are enabled in a product build.
       `./mach package` claimed in this push).
 - [ ] Headed Proof XOR matrix on that fork artifact recorded.
 - [ ] Approach A gkrust/libxul link completed (explicitly deferred).
-- [ ] Live native chaff timer and canvas/WebGL/Audio/worker C++ depth hooks landed.
+- [x] Live native **chaff timer** landed (`0016`) — canvas/WebGL/Audio/worker depth hooks still open.
 - [ ] Chrome privacy-pane Native-Compatible site-list UI shipped.
 
 ## Explicit non-claims and operating locks

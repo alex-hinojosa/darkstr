@@ -1,30 +1,17 @@
-# STUB — not a real unified diff. Do NOT invent untested C++/Gecko patch bodies here.
+# STUB — historical notes for M4 depth surfaces. Do NOT invent untested C++ bodies here.
 #
-# M4 status (2026-09-14): public control plane landed in Rust enums/APIs.
-#   Live chaff scheduler / canvas / WebGL / Audio / worker hooks in a private
-#   LibreWolf-based tree = still TODO (train-pinned .patch only after Proof-checked
-#   against librewolf-155.0.1-1 or successor).
+# Phase 3 pin 1 (2026-09-19): **scheduler landed** as a real train-pinned patch:
+#   patches/0016-darkstr-chaff-native-scheduler.patch
+#   → DarkstrChaffScheduler.sys.mjs (nsITimer + Quiet/Balanced/Loud + ordinary HTTP beacons)
+#   → Gates: pollution_active + darkstr.nativePersonaHooks (default-off)
+#   → See docs/PHASE-3-STATUS.md
 #
-# Intent — M4 chaff native + depth kickoff (see docs/GECKO-HOOKS.md §2.2 / §2.5):
-#   Native chaff scheduler
-#     -> Quiet/Balanced/Loud intervals + batch + stagger from duppel_chaff::ChaffSchedule
-#     -> Arm only when pollution_active / allow_persona_chaff
-#     -> Pref: darkstr.chaosLevel (plus darkstr.mode / nativeCompatible gates)
-#     -> Ordinary nsHttp channels for beacons — NO TLS/JA3 games, no Cloudflare claims
-#   Canvas 2D noise
-#     -> Seed from PersonaSnapshot::canvas_seed / depth_canvas_seed
-#   WebGL renderer strings
-#     -> Correlate with persona GPU family (depth_webgl_gpu)
-#   Audio fingerprint
-#     -> AudioContext / OfflineAudioContext from audio_seed
-#   Workers
-#     -> Dedicated/Shared worker globals — same persona coherence rules
-#   DocShell strict-next-nav
-#     -> SubsequentNav arm (strict_next_nav_armed); extends M3 strict-first-doc notes
-#
-# Glue reads cached snapshot / depth seeds ONLY when pollution_active:
-#   duppel_bridge::read_cached_persona / read_depth_seeds
-# Homogeneous / Native-Compatible / rfp_xor_pollution → idle.
+# Remaining intent from this stub (NOT in 0016 — later pins):
+#   Canvas 2D noise       → PersonaSnapshot::canvas_seed / depth_canvas_seed
+#   WebGL renderer strings → depth_webgl_gpu
+#   Audio fingerprint      → audio_seed / OfflineAudioContext
+#   Workers                → Dedicated/Shared worker globals
+#   DocShell strict-next-nav → SubsequentNav arm (extends M3)
 #
 # Authoritative enums (must match unit tests):
 #   duppel_chaff::ChaffSchedulerPlan / ChaosLevel / plan_fire
@@ -33,16 +20,5 @@
 #   duppel_bridge::HookApplicatorSurface::{ChaffNativeScheduler, Canvas2dNoise, …}
 #   duppel_persona::strict_next_nav_armed / prefs::CHAOS_LEVEL
 #
-# When replacing this stub with a real patch (private fork):
-#   1. Pin Firefox/LibreWolf train SHA (e.g. 155.0.1-1) and verify paths exist.
-#   2. Thin glue only — call into ChaffSchedulerPlan / depth seed helpers; no spoof logic in C++.
-#   3. Keep brand: darkstr — not official LibreWolf. No Cloudflare/TLS claims.
-#   4. Atlas: never mv under /Volumes/Mesh. No bootstrap/build in public stub PRs.
-#
-# Out of scope for this stub: live timer service, full canvas pipeline, chrome privacy-pane UI.
-#
-# Proof: docs/PROOF-XOR-CHECKLIST.md (M4 pin)
-# Status: docs/M4-STATUS.md
-# Hooks:  docs/GECKO-HOOKS.md §2.2 / §2.5
-#
 # Brand: darkstr — not official LibreWolf. No Cloudflare/TLS claims.
+# Proof: docs/PROOF-XOR-CHECKLIST.md · Status: docs/PHASE-3-STATUS.md · docs/M4-STATUS.md

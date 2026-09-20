@@ -139,6 +139,7 @@ if [[ "${APPEND_LW}" -eq 1 ]]; then
         echo 'defaultPref("darkstr.nativeCompatible", false);'
         echo 'defaultPref("darkstr.strictFirstDoc", true);'
         echo 'defaultPref("darkstr.nativePersonaHooks", false);'
+        echo 'defaultPref("darkstr.chaosLevel", "balanced");'
         echo "${MARKER_END}"
       } >> "${LW_CFG}"
     fi
@@ -240,6 +241,12 @@ patch_markers_present() {
         && grep -Fq 'Soft park 0015' "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrNativePersona.sys.mjs" \
         && grep -Fq 'never persist Gecko "und"' "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrNativePersona.sys.mjs"
       ;;
+    0016-darkstr-chaff-native-scheduler.patch)
+      [[ -f "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrChaffScheduler.sys.mjs" ]] \
+        && grep -Fq "DarkstrChaffScheduler" "${DARKSTR_GECKO_ROOT}/browser/components/BrowserGlue.sys.mjs" \
+        && grep -Fq "DarkstrChaffScheduler.sys.mjs" "${DARKSTR_GECKO_ROOT}/browser/components/moz.build" \
+        && grep -Fq "duppel_chaff::ChaffSchedulerPlan" "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrChaffScheduler.sys.mjs"
+      ;;
     *)
       return 1
       ;;
@@ -284,7 +291,7 @@ for stub in "${STUBS}"/000*.patch.stub; do
 done
 if [[ "${stub_count}" -gt 0 ]]; then
   echo "Note: ${stub_count} .patch.stub file(s) present — sketches only, not applied."
-  echo "Remaining stubs are sketches; real patches: 0002 XOR, 0003 chrome persona, 0005 C++ nsHttp, 0006/0007 C++ nav/docshell, 0008–0015 FFI/nav when present (0004 stub=chaff)."
+  echo "Remaining stubs are sketches; real patches: 0002 XOR, 0003 chrome persona, 0005 C++ nsHttp, 0006/0007 C++ nav/docshell, 0008–0015 FFI/nav, 0016 chaff timer when present (0004 stub=depth leftovers; scheduler→0016)."
 fi
 
 echo "Done. Cfg path always; real unified diffs under patches/000*.patch applied when present."
@@ -300,4 +307,5 @@ echo "M3 soft languages BC override: patches/0013-darkstr-nav-languages-bc-overr
 echo "M3 soft languages intl.accept: patches/0014-darkstr-nav-languages-intl-accept.patch (intl.accept_languages + primary-tag languageOverride). Rebuild: ./mach build --allow-subdirectory-build browser/components."
 echo "M3 soft park savedAccept und: patches/0015-darkstr-nav-languages-saved-accept-und.patch (normalize und to empty on save/restore). Rebuild: ./mach build --allow-subdirectory-build browser/components."
 echo "M-FFI-0009 ctypes soft-fail fix: patches/0009-darkstr-ffi-ctypes-softfail-fix.patch (PathUtils-less load + persist snapshot). Rebuild: ./mach build --allow-subdirectory-build browser/components."
+echo "Phase 3 chaff timer: patches/0016-darkstr-chaff-native-scheduler.patch (DarkstrChaffScheduler.sys.mjs). Rebuild: ./mach build --allow-subdirectory-build browser/components (see docs/PHASE-3-STATUS.md)."
 echo "M-FFI-0008 gecko FFI link: patches/0008-darkstr-gecko-ffi-link.patch (Approach B cdylib). Build FFI: third_party/darkstr/build-and-install-ffi.sh --prefix \"\${DARKSTR_GECKO_OBJDIR:-obj-*}/dist/bin\". Rebuild chrome: ./mach build browser/components (see docs/M-FFI-0008-STATUS.md)."

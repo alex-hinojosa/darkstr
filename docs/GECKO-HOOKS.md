@@ -100,16 +100,16 @@ Glue reads cached `PersonaSnapshot` **only** when `pollution_active` (`read_cach
 
 ### 2.2 `duppel-chaff` — pollution scheduler
 
-| Surface | Gecko / LibreWolf area | When | M4 status |
-|---------|------------------------|------|-----------|
-| Native timer / scheduler | Chrome process service or content idle tasks | M4 | `ChaffSchedulerPlan` / `scheduler_armed` encoded; Quiet/Balanced/Loud parity unit-tested; **live timer not claimed** |
-| Volume + timing | Schedule plan only (Rust) | M4 | Interval / batch / stagger match Phase 1 `poisoner.js` |
-| Pref gate | `darkstr.chaosLevel` + mode / nativeCompatible | M4 | Arms only when `pollution_active` / `allow_persona_chaff` |
-| Beacon fetches | nsHttp (ordinary channels) | M4→fork | No TLS/JA3 games; no Cloudflare claims |
+| Surface | Gecko / LibreWolf area | When | M4 / Phase 3 status |
+|---------|------------------------|------|---------------------|
+| Native timer / scheduler | Chrome `DarkstrChaffScheduler.sys.mjs` (`nsITimer`) | M4→**P3 pin 1** | Rust plan encoded; **live timer in `0016`** (default-off: needs `nativePersonaHooks`) — see `PHASE-3-STATUS.md` |
+| Volume + timing | Schedule plan (Rust) + chrome timer | M4 / P3 | Interval / batch / stagger match Phase 1 `poisoner.js` |
+| Pref gate | `darkstr.chaosLevel` + mode / nativeCompatible / `nativePersonaHooks` | M4 / P3 | Arms only when `pollution_active` **and** hooks allowed (default-off) |
+| Beacon fetches | Ordinary HTTP (`fetch` / channels) to poisoner endpoints | P3 pin 1 | No TLS/JA3 games; no Cloudflare claims; thin query payload |
 | Until native ready | Phase 1 `bridge.js` / `poisoner.js` | now | Authoritative on WebExt-only path |
 
 **Idle when:** crates idle / XOR conflict (same gates as persona).  
-**Stub:** [`../patches/stubs/0004-darkstr-chaff-depth.patch.stub`](../patches/stubs/0004-darkstr-chaff-depth.patch.stub). Status: [`M4-STATUS.md`](M4-STATUS.md).
+**Live scheduler patch:** [`../patches/0016-darkstr-chaff-native-scheduler.patch`](../patches/0016-darkstr-chaff-native-scheduler.patch). Stub `0004` retained for canvas/WebGL/Audio/worker leftovers. Status: [`PHASE-3-STATUS.md`](PHASE-3-STATUS.md) · [`M4-STATUS.md`](M4-STATUS.md).
 
 ### 2.3 `duppel-coherence` — Proof harness
 
@@ -161,14 +161,14 @@ duppel_bridge::PrefsApplicator::apply_mode_effects
         ▼
 If !crates_idle && Pollution:
         duppel_persona::generate_persona_if_active → cache snapshot
-        duppel_chaff::ChaffSchedulerPlan arm (control plane; live timer private-fork)
+        duppel_chaff::ChaffSchedulerPlan arm → DarkstrChaffScheduler (0016; default-off)
 Else:
         clear persona cache; cancel chaff
 ```
 
 nsHttp / Navigator / DocShell / canvas hooks **read** the cached snapshot only when activation says `pollution_active` — never invent a second seed.  
 M3 API: `duppel_bridge::read_cached_persona` / `duppel_persona::cached_snapshot_readable`. Live patch: [`0003-darkstr-native-persona-hooks.patch`](../patches/0003-darkstr-native-persona-hooks.patch) · stub pointer retained · [`M3-STATUS.md`](M3-STATUS.md).  
-M4 API: `duppel_chaff::ChaffSchedulerPlan` / `duppel_bridge::read_depth_seeds` / `m4_depth_surfaces`. Stub: [`0004-…`](../patches/stubs/0004-darkstr-chaff-depth.patch.stub) · [`M4-STATUS.md`](M4-STATUS.md).
+M4 API: `duppel_chaff::ChaffSchedulerPlan` / `duppel_bridge::read_depth_seeds` / `m4_depth_surfaces`. Live timer: [`0016-…`](../patches/0016-darkstr-chaff-native-scheduler.patch) · [`PHASE-3-STATUS.md`](PHASE-3-STATUS.md). Depth stub: [`0004-…`](../patches/stubs/0004-darkstr-chaff-depth.patch.stub) · [`M4-STATUS.md`](M4-STATUS.md).
 
 ---
 

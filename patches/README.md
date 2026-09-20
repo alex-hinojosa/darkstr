@@ -16,7 +16,8 @@ These stubs document *how* a real bsys6 / LibreWolf recipe would layer darkstr p
 | [`stubs/0006-darkstr-cpp-navigator-docshell.patch.stub`](stubs/0006-darkstr-cpp-navigator-docshell.patch.stub) | Pointer only — superseded by real `0006-…patch` |
 | [`0007-darkstr-cpp-docshell-nav-sot.patch`](0007-darkstr-cpp-docshell-nav-sot.patch) | **Real** train-pinned C++ DocShell first/subsequent SoT (155.0.1-1) — chrome Map fallback |
 | [`stubs/0007-darkstr-cpp-docshell-nav-sot.patch.stub`](stubs/0007-darkstr-cpp-docshell-nav-sot.patch.stub) | Pointer only — superseded by real `0007-…patch` |
-| [`stubs/0004-darkstr-chaff-depth.patch.stub`](stubs/0004-darkstr-chaff-depth.patch.stub) | M4: chaff scheduler + canvas/Audio/WebGL/worker depth notes (enums in Rust; still not a real patch) |
+| [`stubs/0004-darkstr-chaff-depth.patch.stub`](stubs/0004-darkstr-chaff-depth.patch.stub) | M4 depth leftovers (canvas/WebGL/Audio/worker). **Scheduler → [`0016-darkstr-chaff-native-scheduler.patch`](0016-darkstr-chaff-native-scheduler.patch)** |
+| [`0016-darkstr-chaff-native-scheduler.patch`](0016-darkstr-chaff-native-scheduler.patch) | **Real** Phase 3 pin 1 — chrome chaff timer (`DarkstrChaffScheduler.sys.mjs`, default-off) |
 | [`scripts/apply-darkstr-patches.sh`](scripts/apply-darkstr-patches.sh) | Example apply order for a real tree |
 
 Design pin: [`../docs/GECKO-HOOKS.md`](../docs/GECKO-HOOKS.md). Bridge: [`../docs/PREF-BRIDGE.md`](../docs/PREF-BRIDGE.md).
@@ -85,7 +86,7 @@ Real unified diff [`0005-darkstr-cpp-native-hooks.patch`](0005-darkstr-cpp-nativ
 - Chrome `DarkstrNativePersona` mirrors `darkstr.persona.ua` for C++ (no JSON in necko)
 - **Not** claimed: Navigator.cpp / nsDocShell.cpp edits, Rust FFI, Cloudflare/TLS/JA3
 
-Rebuild: `./mach build netwerk/protocol/http`. See `docs/M3-CPP-STATUS.md`. Stub `0004` remains chaff (not this patch number).
+Rebuild: `./mach build netwerk/protocol/http`. See `docs/M3-CPP-STATUS.md`. Stub `0004` is depth leftovers; scheduler is `0016` (not this patch number).
 
 ## M3-CPP-NAV Navigator + DocShell stub (2026-09-15)
 
@@ -156,6 +157,15 @@ Real unified diff [`0014-darkstr-nav-languages-intl-accept.patch`](0014-darkstr-
 - Soft only — hooks default-off. Residual OPEN until Proof re-skim.
 - Apply + rebuild: `./mach build --allow-subdirectory-build browser/components` (see `docs/M3-LANGUAGES-0014-MINI-APPLY.sh`).
 
+
+## Phase 3 chaff native scheduler (0016)
+
+Real unified diff [`0016-darkstr-chaff-native-scheduler.patch`](0016-darkstr-chaff-native-scheduler.patch) against post-0003 155.0.1-1 (also dry-runs clean with DarkstrFfi in moz.build):
+
+- `DarkstrChaffScheduler.sys.mjs` — `nsITimer` + Quiet/Balanced/Loud + ordinary HTTP beacons
+- Gates: `pollution_active` + `darkstr.nativePersonaHooks` (default-off)
+- Apply + rebuild: `./mach build --allow-subdirectory-build browser/components` (see `docs/PHASE-3-CHAFF-0016-MINI-APPLY.sh` / `docs/PHASE-3-STATUS.md`)
+- Stub `0004` retained for canvas/WebGL/Audio/worker depth notes only
 
 ## M3 soft park savedAcceptLanguages und (0015)
 
