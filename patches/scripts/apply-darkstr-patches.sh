@@ -270,6 +270,12 @@ patch_markers_present() {
         && grep -Fq "_readPersonaSeedPref" "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrWorkerHooks.sys.mjs" \
         && grep -Fq "safeForUntrustedWebProcess" "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrWorkerHooks.sys.mjs"
       ;;
+    0019-darkstr-phase3-soft-residuals.patch)
+      grep -Fq "installAudioInPage" "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrDepthHooksChild.sys.mjs" \
+        && grep -Fq "runtimeOnly" "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrWorkerHooks.sys.mjs" \
+        && grep -Fq "_reportRuntime" "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrWorkerHooksChild.sys.mjs" \
+        && grep -Fq 'spoof("hardwareConcurrency"' "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrWorkerHooksChild.sys.mjs"
+      ;;
     *)
       return 1
       ;;
@@ -314,7 +320,7 @@ for stub in "${STUBS}"/000*.patch.stub; do
 done
 if [[ "${stub_count}" -gt 0 ]]; then
   echo "Note: ${stub_count} .patch.stub file(s) present — sketches only, not applied."
-  echo "Remaining stubs are sketches; real patches: 0002 XOR, 0003 chrome persona, 0005 C++ nsHttp, 0006/0007 C++ nav/docshell, 0008-0015 FFI/nav, 0016 chaff timer, 0017 depth canvas/WebGL/Audio, 0018 worker globals when present (0004 stub=DocShell leftovers; scheduler->0016; depth->0017; workers->0018)."
+  echo "Remaining stubs are sketches; real patches: 0002 XOR, 0003 chrome persona, 0005 C++ nsHttp, 0006/0007 C++ nav/docshell, 0008-0015 FFI/nav, 0016 chaff timer, 0017 depth canvas/WebGL/Audio, 0018 worker globals + 0019 soft residuals when present (0004 stub=DocShell leftovers; scheduler->0016; depth->0017; workers->0018; soft->0019)."
 fi
 
 echo "Done. Cfg path always; real unified diffs under patches/000*.patch applied when present."
@@ -333,4 +339,5 @@ echo "M-FFI-0009 ctypes soft-fail fix: patches/0009-darkstr-ffi-ctypes-softfail-
 echo "Phase 3 chaff timer: patches/0016-darkstr-chaff-native-scheduler.patch (DarkstrChaffScheduler.sys.mjs). Rebuild: ./mach build --allow-subdirectory-build browser/components then make install-dist_bin (see docs/PHASE-3-STATUS.md)."
 echo "Phase 3 depth hooks: patches/0017-darkstr-depth-canvas-webgl-audio.patch (DarkstrDepthHooks*.sys.mjs). Rebuild: ./mach build --allow-subdirectory-build browser/components then make install-dist_bin (see docs/PHASE-3-STATUS.md / docs/PHASE-3-DEPTH-0017-MINI-APPLY.sh)."
 echo "Phase 3 worker hooks: patches/0018-darkstr-worker-globals-coherence.patch (DarkstrWorkerHooks*.sys.mjs). Rebuild: ./mach build --allow-subdirectory-build browser/components then make install-dist_bin (see docs/PHASE-3-STATUS.md / docs/PHASE-3-WORKER-0018-MINI-APPLY.sh)."
+echo "Phase 3 soft residuals: patches/0019-darkstr-phase3-soft-residuals.patch (lastInstall + OfflineAudio + HW best-effort). Rebuild: ./mach build --allow-subdirectory-build browser/components then make install-dist_bin (see docs/PHASE-3-STATUS.md / docs/PHASE-3-SOFT-0019-MINI-APPLY.sh)."
 echo "M-FFI-0008 gecko FFI link: patches/0008-darkstr-gecko-ffi-link.patch (Approach B cdylib). Build FFI: third_party/darkstr/build-and-install-ffi.sh --prefix \"\${DARKSTR_GECKO_OBJDIR:-obj-*}/dist/bin\". Rebuild chrome: ./mach build browser/components (see docs/M-FFI-0008-STATUS.md)."

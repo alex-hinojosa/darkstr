@@ -461,7 +461,7 @@
 +};
 --- a/browser/components/DarkstrDepthHooksChild.sys.mjs
 +++ b/browser/components/DarkstrDepthHooksChild.sys.mjs
-@@ -0,0 +1,386 @@
+@@ -0,0 +1,479 @@
 +/* This Source Code Form is subject to the terms of the Mozilla Public
 + * License, v. 2.0. If a copy of the MPL was not distributed with this
 + * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -739,40 +739,133 @@
 +    }
 +
 +    // AudioContext and OfflineAudioContext both expose AudioBuffer.
++    // Soft residual (pin 2 / PR #47 XOR FAIL f18c0b6): chrome-exported
++    // getChannelData + waived Float32Array.set stayed inert on OfflineAudio
++    // (deltaSum=0; startRendering sums identical to Homogeneous) while canvas
++    // PASS and depth.lastInstall=installed. Xray cross-compartment channel
++    // views swallow chrome writes. Fix: install AudioBuffer.getChannelData and
++    // OfflineAudioContext.startRendering entirely in the page compartment
++    // (Phase 1 content parity) via pageWindow.Function.
 +    if (pageWindow.AudioBuffer?.prototype?.getChannelData) {
 +      const audioProto = pageWindow.AudioBuffer.prototype;
-+      const origGetChannelData = Object.getOwnPropertyDescriptor(
-+        audioProto,
-+        "getChannelData"
-+      )?.value;
-+      const noisedBuffers = new WeakMap();
-+      replaceMethod(
-+        pageWindow,
-+        audioProto,
-+        "getChannelData",
-+        function (channel) {
-+          const data = Reflect.apply(origGetChannelData, this, [channel]);
-+          let noised = noisedBuffers.get(this);
-+          if (!noised) {
-+            noised = new Set();
-+            noisedBuffers.set(this, noised);
-+          }
-+          if (noised.has(channel)) {
-+            return data;
-+          }
-+          noised.add(channel);
-+          const rawData = Cu.waiveXrays(data);
-+          const seed = audioSeed ^ (channel * 0x9e3779b9);
-+          for (let i = 0; i < rawData.length; i++) {
-+            let h = seed ^ (i * 2654435761);
-+            h = Math.imul(h ^ ((rawData[i] * 1e6) >>> 0), 0x45d9f3b);
-+            h = (h ^ (h >>> 16)) >>> 0;
-+            rawData[i] += ((h % 200) - 100) * 0.0000005;
-+          }
-+          return data;
-+        },
-+        replacements
++      const gcdDesc = Object.getOwnPropertyDescriptor(audioProto, "getChannelData");
++      if (!gcdDesc || typeof gcdDesc.value !== "function") {
++        throw new Error("AudioBuffer.getChannelData native unavailable");
++      }
++
++      const installAudioInPage = new pageWindow.Function(
++        "seed",
++        `"use strict";
++var origGCD = AudioBuffer.prototype.getChannelData;
++var noisedBuffers = new WeakMap();
++function contentKey(data) {
++  var n = data.length | 0;
++  if (!n) { return "0"; }
++  return n + ":" + data[0] + ":" + data[n >> 1] + ":" + data[n - 1];
++}
++function noiseData(data, channel) {
++  var s = (seed ^ (channel * 0x9e3779b9)) >>> 0;
++  for (var i = 0; i < data.length; i++) {
++    var sample = data[i];
++    var h = s ^ (i * 2654435761);
++    h = Math.imul(h ^ ((sample * 1e6) >>> 0), 0x45d9f3b);
++    h = (h ^ (h >>> 16)) >>> 0;
++    data[i] = sample + ((h % 200) - 100) * 0.0000005;
++  }
++}
++function noiseBuffer(buf) {
++  var n = buf.numberOfChannels | 0;
++  for (var ch = 0; ch < n; ch++) {
++    var data = origGCD.call(buf, ch);
++    noiseData(data, ch);
++    var map = noisedBuffers.get(buf);
++    if (!map) { map = new Map(); noisedBuffers.set(buf, map); }
++    map.set(ch, contentKey(data));
++  }
++}
++function wrappedGCD(channel) {
++  var data = origGCD.call(this, channel);
++  var map = noisedBuffers.get(this);
++  if (!map) { map = new Map(); noisedBuffers.set(this, map); }
++  var key = contentKey(data);
++  if (map.get(channel) === key) { return data; }
++  noiseData(data, channel);
++  map.set(channel, contentKey(data));
++  return data;
++}
++Object.defineProperty(AudioBuffer.prototype, "getChannelData", {
++  configurable: true,
++  enumerable: true,
++  writable: true,
++  value: wrappedGCD
++});
++var wrappedSR = null;
++var origSR = null;
++var srProto = null;
++if (typeof OfflineAudioContext !== "undefined" && OfflineAudioContext.prototype) {
++  srProto = OfflineAudioContext.prototype;
++  origSR = srProto.startRendering;
++  if (typeof origSR === "function") {
++    wrappedSR = function() {
++      var result = origSR.apply(this, arguments);
++      if (result && typeof result.then === "function") {
++        return result.then(function (buffer) {
++          noiseBuffer(buffer);
++          return buffer;
++        });
++      }
++      if (result) { noiseBuffer(result); }
++      return result;
++    };
++    Object.defineProperty(srProto, "startRendering", {
++      configurable: true,
++      enumerable: true,
++      writable: true,
++      value: wrappedSR
++    });
++  }
++}
++return {
++  gcd: wrappedGCD,
++  origGCD: origGCD,
++  sr: wrappedSR,
++  origSR: origSR,
++  srProto: srProto
++};`
 +      );
++
++      let installedAudio;
++      try {
++        installedAudio = installAudioInPage(audioSeed >>> 0);
++      } catch (error) {
++        onRuntimeError("audio.installPage", error);
++        throw error;
++      }
++
++      replacements.push({
++        proto: audioProto,
++        name: "getChannelData",
++        wrapper: installedAudio.gcd,
++        originalDescriptor: gcdDesc,
++      });
++
++      if (
++        installedAudio.sr &&
++        installedAudio.origSR &&
++        pageWindow.OfflineAudioContext?.prototype
++      ) {
++        replacements.push({
++          proto: pageWindow.OfflineAudioContext.prototype,
++          name: "startRendering",
++          wrapper: installedAudio.sr,
++          originalDescriptor: {
++            configurable: true,
++            enumerable: true,
++            writable: true,
++            value: installedAudio.origSR,
++          },
++        });
++      }
 +    }
 +
 +    installedByWindow.set(rawWindow, { replacements });
