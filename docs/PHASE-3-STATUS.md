@@ -81,7 +81,8 @@ Helper: [`PHASE-3-DEPTH-0017-MINI-APPLY.sh`](PHASE-3-DEPTH-0017-MINI-APPLY.sh).
 | Patch dry-run on post-0016 compose (DarkstrFfi moz.build) | **DONE** (Grok box) |
 | Patch dry-run / apply on Mini tree | **NOT RUN** (no Mini access) |
 | `./mach build` + `install-dist_bin` on Mini | **NOT RUN** |
-| Headed Proof XOR on rebuilt app | **Not claimed** |
+| Headed Proof XOR on rebuilt app | **Pin 1 PASS; pin 2 re-gate pending** |
+| Pin 2 Fission actor attachment | **Fix added:** `safeForUntrustedWebProcess: true` on DepthHooks + NativePersona actors |
 
 ## Explicit non-claims
 
@@ -111,3 +112,13 @@ Helper: [`PHASE-3-DEPTH-0017-MINI-APPLY.sh`](PHASE-3-DEPTH-0017-MINI-APPLY.sh).
 - [x] Pin 1 recorded XOR PASS / merged `d5fb026` + install-dist_bin lesson
 - [ ] Mini apply + subdirectory build + dist install (operator)
 - [x] Honest non-claims listed above
+
+
+## Pin 2 Proof re-gate (Fission actor)
+
+Initial Mini XOR on `5933e21` proved the chrome gate/seeds but found the content
+mutation path dead under Fission (`webIsolated`): the actor registration lacked
+`safeForUntrustedWebProcess`. Follow-up adds that flag to both
+`DarkstrDepthHooks` and the pre-existing `DarkstrNativePersona` actor, plus a
+string-seed fallback (`"42"` → int) for operator/diagnostic robustness. Re-run
+headed HTTP canvas/WebGL mutation before merge.

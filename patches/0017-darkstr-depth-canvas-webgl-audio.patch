@@ -219,6 +219,8 @@
 +        allFrames: true,
 +        messageManagerGroups: ["browsers"],
 +        matches: ["*://*/*", "file://*"],
++        // Required for Fission webIsolated / web content processes.
++        safeForUntrustedWebProcess: true,
 +      });
 +      this._actorRegistered = true;
 +    } catch (e) {
@@ -314,7 +316,16 @@
 +    try {
 +      seed = Services.prefs.getIntPref(SEED_PREF, 0);
 +    } catch (_e) {
-+      seed = 0;
++      // Proof note: string "42" must not leave seeds null — coerce Char/String.
++      try {
++        const rawSeed = Services.prefs.getStringPref(SEED_PREF, "");
++        const n = Number.parseInt(rawSeed, 10);
++        if (Number.isFinite(n) && n !== 0) {
++          seed = n | 0;
++        }
++      } catch (_e2) {
++        seed = 0;
++      }
 +    }
 +    if (!seed) {
 +      // Try partial snapshot fill without persona.seed.
@@ -620,3 +631,15 @@
      "DarkstrFfi.sys.mjs",
      "DarkstrModeXor.sys.mjs",
      "DarkstrNativePersona.sys.mjs",
+
+--- a/browser/components/DarkstrNativePersona.sys.mjs
++++ b/browser/components/DarkstrNativePersona.sys.mjs
+@@ -195,6 +195,8 @@
+         allFrames: true,
+         messageManagerGroups: ["browsers"],
+         matches: ["*://*/*", "file://*"],
++        // Required for Fission webIsolated / web content processes.
++        safeForUntrustedWebProcess: true,
+       });
+       this._actorRegistered = true;
+     } catch (e) {
