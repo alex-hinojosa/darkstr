@@ -93,9 +93,9 @@ Helper: [`PHASE-3-WORKER-0018-MINI-APPLY.sh`](PHASE-3-WORKER-0018-MINI-APPLY.sh)
 | Check | Status |
 |-------|--------|
 | Patch dry-run on post-0017 compose (DarkstrFfi moz.build) | **DONE** (Grok box) |
-| Patch dry-run / apply on Mini tree | **NOT RUN** (no Mini access) |
-| `./mach build` + `install-dist_bin` on Mini | **NOT RUN** |
-| Headed Proof XOR on rebuilt app | **Pin 1 PASS; pin 2 PASS on `9d4fa76`; pin 3 pending Mini** |
+| Patch dry-run / apply on Mini tree | **DONE** (2026-09-20; force BrowserGlue/moz.build) |
+| `./mach build` + `install-dist_bin` on Mini | **DONE** |
+| Headed Proof XOR on rebuilt app | **Pin 1–3 PASS** (pin 3 tip `37820f6`, merged `e715a4d`) |
 
 ## Explicit non-claims
 
@@ -110,10 +110,13 @@ Helper: [`PHASE-3-WORKER-0018-MINI-APPLY.sh`](PHASE-3-WORKER-0018-MINI-APPLY.sh)
 
 ## Next
 
-1. Operator: Mini apply `0018` + subdirectory build + **install-dist_bin** + app moz-src (+ module refresh if re-apply); Proof XOR.
-2. Optional: richer WebGL cap buckets / OffscreenCanvas window parity with Phase 1 bootstrap.
-3. Optional: richer chrome chaff beacon bodies (ordinary HTTP only).
-4. DocShell strict-next-nav SubsequentNav arm (extends M3) — still open.
+**Pins 1–3 landed on main** (`0016`/`0017`/`0018`). Soft residuals optional:
+worker `lastInstall` overwrite, worker `hardwareConcurrency`, OfflineAudio delta.
+
+1. Optional: richer WebGL cap buckets / OffscreenCanvas window parity with Phase 1 bootstrap.
+2. Optional: richer chrome chaff beacon bodies (ordinary HTTP only).
+3. DocShell strict-next-nav SubsequentNav arm (extends M3) — still open.
+4. Soft: fresh `./mach package` when disk allows (~12 Gi free as of pin 3 merge).
 
 ## Proof gates for this PR
 
@@ -125,7 +128,8 @@ Helper: [`PHASE-3-WORKER-0018-MINI-APPLY.sh`](PHASE-3-WORKER-0018-MINI-APPLY.sh)
 - [x] Docs: PHASE-3-STATUS + M4 Next + GECKO-HOOKS §2.5 + apply markers + Mini helper
 - [x] Pin 1 recorded XOR PASS / merged `d5fb026` + install-dist_bin lesson
 - [x] Pin 2 recorded XOR PASS / merged `1eef97b` (tip `9d4fa76`) + Xray/pageshow/seed-type lessons
-- [ ] Mini apply + subdirectory build + dist install (operator)
+- [x] Mini apply + subdirectory build + dist install (operator 2026-09-20)
+- [x] Proof XOR PASS tip `37820f6` — Worker UA matches persona; constructors wrap
 - [x] Honest non-claims listed above
 
 
