@@ -109,7 +109,7 @@ Glue reads cached `PersonaSnapshot` **only** when `pollution_active` (`read_cach
 | Until native ready | Phase 1 `bridge.js` / `poisoner.js` | now | Authoritative on WebExt-only path |
 
 **Idle when:** crates idle / XOR conflict (same gates as persona).  
-**Live scheduler patch:** [`../patches/0016-darkstr-chaff-native-scheduler.patch`](../patches/0016-darkstr-chaff-native-scheduler.patch). **Live depth (canvas/WebGL/Audio):** [`../patches/0017-darkstr-depth-canvas-webgl-audio.patch`](../patches/0017-darkstr-depth-canvas-webgl-audio.patch). **Live workers:** [`../patches/0018-darkstr-worker-globals-coherence.patch`](../patches/0018-darkstr-worker-globals-coherence.patch). **Live DocShell SubsequentNav:** [`../patches/0020-darkstr-docshell-strict-next-nav.patch`](../patches/0020-darkstr-docshell-strict-next-nav.patch). Stub `0004` historical. Status: [`PHASE-3-STATUS.md`](PHASE-3-STATUS.md) · [`M4-STATUS.md`](M4-STATUS.md).
+**Live scheduler patch:** [`../patches/0016-darkstr-chaff-native-scheduler.patch`](../patches/0016-darkstr-chaff-native-scheduler.patch). **Live depth (canvas/WebGL/Audio):** [`../patches/0017-darkstr-depth-canvas-webgl-audio.patch`](../patches/0017-darkstr-depth-canvas-webgl-audio.patch). **Live workers:** [`../patches/0018-darkstr-worker-globals-coherence.patch`](../patches/0018-darkstr-worker-globals-coherence.patch). **Live DocShell SubsequentNav:** [`../patches/0020-darkstr-docshell-strict-next-nav.patch`](../patches/0020-darkstr-docshell-strict-next-nav.patch). **Live WebGL caps + OffscreenCanvas:** [`../patches/0023-darkstr-depth-webgl-caps-offscreencanvas.patch`](../patches/0023-darkstr-depth-webgl-caps-offscreencanvas.patch). Stub `0004` historical. Status: [`PHASE-3-STATUS.md`](PHASE-3-STATUS.md) · [`M4-STATUS.md`](M4-STATUS.md).
 
 ### 2.3 `duppel-coherence` — Proof harness
 
@@ -136,6 +136,7 @@ M4 named **strict-next-nav** (`duppel_persona::strict_next_nav_armed`). Live arm
 |---------|------------|------|---------------------|
 | Canvas 2D noise | Chrome `DarkstrDepthHooksChild` (`toDataURL`/`toBlob`/`getImageData`) | M4→**P3 pin 2** | `DepthSurface::Canvas2d` + `depth_canvas_seed`; **live in `0017`** (default-off) |
 | WebGL renderer strings | Same actor — `getParameter(0x9245/0x9246)` + `readPixels` noise | M4→**P3 pin 2** | `DepthSurface::WebGl` + `depth_webgl_gpu`; **live in `0017`** |
+| WebGL cap buckets + OffscreenCanvas | Same actor — persona-family MAX_*/viewport/line/point/anisotropy; `OffscreenCanvas.convertToBlob` + OC2D `getImageData` | M4→**P3 optional `0023`** | Honest subset vs Phase 1 `webgl.js`; **live in `0023`** (ext lists / precision / fail-closed unknown **not** claimed) |
 | Audio fingerprint | Same actor — page-compartment `AudioBuffer.getChannelData` + OfflineAudio `startRendering` | M4→**P3 pin 2** + **0019 v2** | `DepthSurface::{AudioContext, OfflineAudioContext}` + `depth_audio_seed`; **live in `0017`/`0019`**; chrome Xray set FAIL → page `installAudioInPage` |
 | Workers | Dedicated/Shared worker globals | M4→**P3 pin 3** | `DepthSurface::{DedicatedWorker, SharedWorker}`; **live in `0018`** (default-off) |
 
@@ -170,7 +171,7 @@ Else:
 
 nsHttp / Navigator / DocShell / canvas hooks **read** the cached snapshot only when activation says `pollution_active` — never invent a second seed.  
 M3 API: `duppel_bridge::read_cached_persona` / `duppel_persona::cached_snapshot_readable`. Live patch: [`0003-darkstr-native-persona-hooks.patch`](../patches/0003-darkstr-native-persona-hooks.patch) · stub pointer retained · [`M3-STATUS.md`](M3-STATUS.md).  
-M4 API: `duppel_chaff::ChaffSchedulerPlan` / `duppel_bridge::read_depth_seeds` / `m4_depth_surfaces`. Live timer: [`0016-…`](../patches/0016-darkstr-chaff-native-scheduler.patch). Live depth (canvas/WebGL/Audio): [`0017-…`](../patches/0017-darkstr-depth-canvas-webgl-audio.patch). Live workers: [`0018-…`](../patches/0018-darkstr-worker-globals-coherence.patch) · [`PHASE-3-STATUS.md`](PHASE-3-STATUS.md). Leftovers stub: [`0004-…`](../patches/stubs/0004-darkstr-chaff-depth.patch.stub) · [`M4-STATUS.md`](M4-STATUS.md).
+M4 API: `duppel_chaff::ChaffSchedulerPlan` / `duppel_bridge::read_depth_seeds` / `m4_depth_surfaces`. Live timer: [`0016-…`](../patches/0016-darkstr-chaff-native-scheduler.patch). Live depth (canvas/WebGL/Audio): [`0017-…`](../patches/0017-darkstr-depth-canvas-webgl-audio.patch). Live workers: [`0018-…`](../patches/0018-darkstr-worker-globals-coherence.patch). Live WebGL caps/OffscreenCanvas: [`0023-…`](../patches/0023-darkstr-depth-webgl-caps-offscreencanvas.patch) · [`PHASE-3-STATUS.md`](PHASE-3-STATUS.md). Leftovers stub: [`0004-…`](../patches/stubs/0004-darkstr-chaff-depth.patch.stub) · [`M4-STATUS.md`](M4-STATUS.md).
 
 ---
 

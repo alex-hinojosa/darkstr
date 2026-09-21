@@ -1,4 +1,4 @@
-# Phase 3 status — pins 1–3 + soft residuals (0019)
+# Phase 3 status — pins 1–3 + soft residuals (0019) + DocShell (0020–0022) + WebGL/Offscreen (0023)
 
 **Date:** 2026-09-21 (CDT)  
 **Owner:** Builder  
@@ -106,7 +106,7 @@ Helper: [`PHASE-3-WORKER-0018-MINI-APPLY.sh`](PHASE-3-WORKER-0018-MINI-APPLY.sh)
 - ServiceWorker / AudioWorklet / PaintWorklet injection
 - Live C++ worker bindings (chrome JSWindowActor constructor wrap only)
 - Canvas/WebGL/Audio window depth — already **0017** (this pin = workers)
-- Full WebGL capability-bucket spoof / font-probe / ultrasonic (WebExt path remains richer)
+- Full WebGL **extension-list / shader-precision / fail-closed** spoof / font-probe / ultrasonic (WebExt path remains richer; **0023** ships honest cap-bucket + OffscreenCanvas subset only)
 
 ## Soft residuals follow-up (0019) — this PR
 
@@ -187,15 +187,54 @@ Patch: `patches/0022-darkstr-docshell-browserid-phase.patch`.
 | Homogeneous / hooks off | Idle |
 
 
+## WebGL cap buckets + OffscreenCanvas window parity (0023) — this PR
+
+| Deliverable | Status |
+|-------------|--------|
+| `patches/0023-darkstr-depth-webgl-caps-offscreencanvas.patch` | **New** — extends `DarkstrDepthHooksChild` (post-0017/0019) |
+| WebGL `getParameter` cap buckets | Persona GPU family (`apple` / `intel_low` / `intel_mid` / `nvidia_mid` / `nvidia_high`) from Phase 1 `webgl.js` — MAX_* + viewport/line/point/anisotropy |
+| UNMASKED vendor/renderer + `readPixels` noise | Unchanged from **0017** |
+| OffscreenCanvas window parity | `convertToBlob` (noisy clone) + `OffscreenCanvasRenderingContext2D.getImageData` when present; soft-optional |
+| Pin-2 lessons retained | `safeForUntrustedWebProcess`, `Cu.waiveXrays` / `Cu.exportFunction`, pageshow, `getPrefType` seed, `lastInstall`/`lastError`, install-dist_bin, DocShell SubsequentNav gate for depth delivery |
+| Gates default-off | Idle unless `pollution_active` **and** `nativePersonaHooks` |
+| Mini helper | [`PHASE-3-DEPTH-0023-MINI-APPLY.sh`](PHASE-3-DEPTH-0023-MINI-APPLY.sh) |
+
+### Honest spoof matrix (0023)
+
+| Surface | Spoofed here? |
+|---------|---------------|
+| `getParameter(UNMASKED_VENDOR/RENDERER)` | **Yes** (0017) |
+| Persona-family MAX_* / viewport / line / point / anisotropy | **Yes** (0023) |
+| `readPixels` RGBA/UNSIGNED_BYTE noise | **Yes** (0017) |
+| OffscreenCanvas `convertToBlob` / OC2D `getImageData` | **Yes** when constructors exist (0023) |
+| `getSupportedExtensions` / `getExtension` advertise lists | **No** — WebExt richer |
+| `getShaderPrecisionFormat` tiers | **No** — WebExt richer |
+| Fail-closed `null` for unknown `getParameter` | **No** — unknown params **passthrough** native |
+| Font-probe / ultrasonic / ServiceWorker | **No** |
+
+### XOR expectations (Proof) — 0023
+
+| Case | Expect |
+|------|--------|
+| Default / Homogeneous / hooks off | Idle — stock WebGL caps + no OffscreenCanvas noise; `depth.lastInstall` idle/uninstalled |
+| Pollution + hooks + depth seed; HTMLCanvas toDataURL/getImageData | Nonzero delta vs idle (0017 unchanged) |
+| Pollution + hooks + depth seed; WebGL `getParameter` MAX_TEXTURE_SIZE (etc.) | Matches persona GPU family bucket (not host when host differs) |
+| Pollution + hooks + depth seed; UNMASKED vendor/renderer | Persona `gpu.vendor` / `gpu.renderer` |
+| Pollution + hooks + depth seed; OffscreenCanvas 2D `convertToBlob` / `getImageData` | Noise diverges from idle (when OffscreenCanvas available) |
+| Pollution + hooks + `strictFirstDoc`; first https | Depth idle / null payload (0020–0022 SubsequentNav holdback) |
+| Same; subsequent https | Depth installed; caps + OffscreenCanvas armed |
+| `privacy.*` from 0023 | **None** |
+
+**Executor (Grok Linux box):** Mini apply + `mach build` = **NOT RUN** (no Mini SSH). Compose-tree dry-run apply verified on box.
+
 ## Next
 
-**Pins 1–3 + soft residuals 0019 + DocShell SubsequentNav 0020 on train (PR open).** Remaining optional:
+**Pins 1–3 + soft residuals 0019 + DocShell 0020–0022 merged on main (`a37745c`).** Optional 0023 WebGL/Offscreen **this PR (open, do not merge until Proof XOR).** Remaining:
 
-1. Optional: richer WebGL cap buckets / OffscreenCanvas window parity with Phase 1 bootstrap.
-2. Optional: richer chrome chaff beacon bodies (ordinary HTTP only).
-3. Soft: fresh `./mach package` when disk allows.
-4. Soft: worker `hardwareConcurrency` if Mini still shows host after instance spoof (C++ non-configurable — document only).
-5. Soft: Mini apply 0019 v2 + Proof OfflineAudio re-skim if not yet operator-done.
+1. Optional: richer chrome chaff beacon bodies (ordinary HTTP only).
+2. Soft: fresh `./mach package` when disk allows (~9.5 Gi Mini — no mach package from this pin).
+3. Soft: worker `hardwareConcurrency` if Mini still shows host after instance spoof (C++ non-configurable — document only).
+4. Soft: Mini apply 0023 + Proof XOR caps/OffscreenCanvas gates below.
 
 ## Proof gates for this PR
 
@@ -235,3 +274,16 @@ WorkerHooks. Helper now force-applies those hunks and fails closed if missing.
 - [x] 0022: BrowserId tab-stable counter; chrome phase READ-ONLY; clear phase on init
 - [ ] Mini apply 0022 + allow-subdir C++/toolkit/library + chrome + install-dist_bin
 - [ ] Proof XOR natural: blank unarmed → first https idle → second https armed (no pref surgery)
+
+
+## Proof gates for 0023 (this PR)
+
+- [x] Pref keys stay `darkstr.*`; no `privacy.*` writes from depth module
+- [x] Hooks idle unless Pollution + `nativePersonaHooks` (default-off)
+- [x] Cap buckets align with Phase 1 `webgl.js` GPU family; honest non-claims documented
+- [x] OffscreenCanvas `convertToBlob` / OC2D `getImageData` parity when present
+- [x] Pin-2 lessons retained (waiveXrays / pageshow / getPrefType / lastInstall / install-dist_bin / SubsequentNav gate)
+- [x] Patch id `0023`; stub `0004` + apply markers + Mini helper + GECKO-HOOKS §2.5
+- [x] Compose dry-run apply on Grok box
+- [ ] Mini apply 0023 + subdirectory build + install-dist_bin (operator)
+- [ ] Proof XOR: idle default; Pollution caps match persona family; OffscreenCanvas noise; SubsequentNav holdback
