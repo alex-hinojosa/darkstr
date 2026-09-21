@@ -18,11 +18,15 @@ test -f "${PATCH}"
 test -f "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrDepthHooksChild.sys.mjs"
 
 # Prefer unified apply when markers absent; else patch --forward.
+# Full apply may fail on already-evolved DocShell (0007 vs 0020–0022). Tolerate that;
+# always force 0023 onto DepthHooksChild.
 if [[ -f "${APPLY}" ]]; then
-  bash "${APPLY}" --require-root
-else
-  patch -d "${DARKSTR_GECKO_ROOT}" -p1 --forward --batch < "${PATCH}" || true
+  bash "${APPLY}" --require-root || true
 fi
+patch -d "${DARKSTR_GECKO_ROOT}" -p1 --forward --batch < "${PATCH}" || true
+rm -f "${DARKSTR_GECKO_ROOT}/browser/components/"*.rej
+grep -Fq 'GL_CAP_BUCKETS' "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrDepthHooksChild.sys.mjs"
+grep -Fq 'OffscreenCanvas' "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrDepthHooksChild.sys.mjs"
 
 grep -Fq 'GL_CAP_BUCKETS' "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrDepthHooksChild.sys.mjs"
 grep -Fq 'getCapBucket' "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrDepthHooksChild.sys.mjs"
