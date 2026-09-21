@@ -1,0 +1,274 @@
+# darkstr Phase 3 optional pin — richer WebGL cap buckets + OffscreenCanvas window parity
+# Train: Firefox FIREFOX_155_0_1_RELEASE / LibreWolf 155.0.1-1
+# Brand: darkstr — not official LibreWolf. No Cloudflare/TLS claims.
+# Extends 0017 DepthHooksChild (post-0019 soft residuals baked).
+# Gates unchanged: pollution_active + darkstr.nativePersonaHooks (default-off).
+# Honest subset: spoofs UNMASKED vendor/renderer + persona-family MAX_*/viewport/
+# line/point/anisotropy buckets + OffscreenCanvas convertToBlob/getImageData noise.
+# NOT claimed here: getSupportedExtensions/getExtension lists, shader precision
+# tiers, fail-closed unknown getParameter (passthrough native). WebExt remains richer.
+# Apply after 0017/0019: patch -d "$DARKSTR_GECKO_ROOT" -p1 < patches/0023-...
+# Rebuild: ./mach build --allow-subdirectory-build browser/components && make install-dist_bin
+# See docs/PHASE-3-STATUS.md / docs/PHASE-3-DEPTH-0023-MINI-APPLY.sh
+#
+--- a/browser/components/DarkstrDepthHooksChild.sys.mjs
++++ b/browser/components/DarkstrDepthHooksChild.sys.mjs
+@@ -3,14 +3,23 @@
+  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+ 
+ /**
+- * darkstr Phase 3 pin 2 — JSWindowActor child.
+- * Thin Canvas 2D noise / WebGL vendor·renderer / AudioBuffer noise from depth seeds.
+- * Brand: darkstr — not official LibreWolf. Workers NOT claimed (pin 3).
++ * darkstr Phase 3 — JSWindowActor child (pin 2 + optional 0023 depth extension).
++ * Canvas 2D noise / WebGL vendor·renderer + persona GPU cap buckets / OffscreenCanvas
++ * window parity / AudioBuffer noise from depth seeds.
++ * Brand: darkstr — not official LibreWolf.
+  *
+  * Fission note: this actor runs with chrome privileges while content prototypes
+  * live behind Xrays. Always waive the content window and export replacement
+  * callables into that page's compartment; assigning chrome functions to Xray
+  * prototypes does not stick.
++ *
++ * 0023 honest subset (WebExt path remains richer):
++ *   SPOOFED — UNMASKED vendor/renderer; persona-family MAX_* / viewport / line /
++ *             point / anisotropy buckets; OffscreenCanvas convertToBlob +
++ *             OffscreenCanvasRenderingContext2D.getImageData noise (when present).
++ *   NOT SPOOFED here — getSupportedExtensions / getExtension advertise lists,
++ *             getShaderPrecisionFormat tiers, fail-closed null for unknown
++ *             getParameter (unknown params passthrough to native).
+  */
+ 
+ const installedByWindow = new WeakMap();
+@@ -113,6 +122,116 @@
+   return descriptor.value;
+ }
+ 
++
++// Phase 1 webgl.js GL_CAP_BUCKETS parity — persona GPU family only (honest subset).
++// Cap enums: MAX_TEXTURE_SIZE / MAX_CUBE_MAP_TEXTURE_SIZE / MAX_RENDERBUFFER_SIZE /
++// MAX_VERTEX_ATTRIBS / MAX_TEXTURE_IMAGE_UNITS / MAX_VERTEX_TEXTURE_IMAGE_UNITS /
++// MAX_COMBINED_TEXTURE_IMAGE_UNITS / MAX_FRAGMENT_UNIFORM_VECTORS /
++// MAX_VARYING_VECTORS / MAX_VERTEX_UNIFORM_VECTORS (+ array ranges below).
++const GL_CAP_BUCKETS = {
++  apple: {
++    0x0d33: 16384,
++    0x851c: 16384,
++    0x84e8: 16384,
++    0x8869: 16,
++    0x8872: 4096,
++    0x8b4c: 16,
++    0x8871: 30,
++    0x8824: 1024,
++    0x8b4d: 16,
++    0x8b4a: 32,
++    viewportDims: [16384, 16384],
++    lineWidthRange: [1, 1],
++    pointSizeRange: [1, 255],
++    maxAnisotropy: 16,
++  },
++  intel_low: {
++    0x0d33: 16384,
++    0x851c: 16384,
++    0x84e8: 16384,
++    0x8869: 16,
++    0x8872: 4096,
++    0x8b4c: 16,
++    0x8871: 30,
++    0x8824: 1024,
++    0x8b4d: 16,
++    0x8b4a: 32,
++    viewportDims: [16384, 16384],
++    lineWidthRange: [1, 7.375],
++    pointSizeRange: [1, 255],
++    maxAnisotropy: 16,
++  },
++  intel_mid: {
++    0x0d33: 16384,
++    0x851c: 16384,
++    0x84e8: 16384,
++    0x8869: 16,
++    0x8872: 4096,
++    0x8b4c: 16,
++    0x8871: 30,
++    0x8824: 1024,
++    0x8b4d: 16,
++    0x8b4a: 32,
++    viewportDims: [32767, 32767],
++    lineWidthRange: [1, 7.375],
++    pointSizeRange: [1, 255],
++    maxAnisotropy: 16,
++  },
++  nvidia_mid: {
++    0x0d33: 16384,
++    0x851c: 16384,
++    0x84e8: 16384,
++    0x8869: 16,
++    0x8872: 4096,
++    0x8b4c: 16,
++    0x8871: 32,
++    0x8824: 1024,
++    0x8b4d: 16,
++    0x8b4a: 32,
++    viewportDims: [32767, 32767],
++    lineWidthRange: [1, 1],
++    pointSizeRange: [1, 1024],
++    maxAnisotropy: 16,
++  },
++  nvidia_high: {
++    0x0d33: 32768,
++    0x851c: 32768,
++    0x84e8: 32768,
++    0x8869: 16,
++    0x8872: 4096,
++    0x8b4c: 16,
++    0x8871: 32,
++    0x8824: 1024,
++    0x8b4d: 16,
++    0x8b4a: 32,
++    viewportDims: [32767, 32767],
++    lineWidthRange: [1, 1],
++    pointSizeRange: [1, 1024],
++    maxAnisotropy: 16,
++  },
++};
++
++function getCapBucket(renderer) {
++  const r = String(renderer || "");
++  if (/Apple\s+M[12]/.test(r)) {
++    return GL_CAP_BUCKETS.apple;
++  }
++  if (/Iris.*Plus/.test(r)) {
++    return GL_CAP_BUCKETS.apple;
++  }
++  if (/HD\s+Graphics\s+6[12]0/.test(r)) {
++    return GL_CAP_BUCKETS.intel_low;
++  }
++  if (/UHD\s+Graphics|Iris.*Xe/.test(r)) {
++    return GL_CAP_BUCKETS.intel_mid;
++  }
++  if (/RTX\s+4/.test(r)) {
++    return GL_CAP_BUCKETS.nvidia_high;
++  }
++  // GTX, RTX 3xxx, AMD RX → nvidia_mid (shared mid-range discrete bucket)
++  return GL_CAP_BUCKETS.nvidia_mid;
++}
++
+ function installDepthHooks(rawWindow, seeds, onRuntimeError) {
+   const prior = installedByWindow.get(rawWindow);
+   if (prior && prior.replacements.every(methodIsInstalled)) {
+@@ -209,7 +328,11 @@
+       replacements
+     );
+ 
+-    // WebGL: vendor/renderer + readPixels noise (thin — no full cap-bucket spoof).
++    // WebGL: UNMASKED vendor/renderer + persona GPU cap buckets + readPixels noise.
++    // Honest subset vs Phase 1 webgl.js — see file header (extensions / precision
++    // / fail-closed unknown params remain WebExt-richer; unknown getParameter
++    // values passthrough native here).
++    const activeGlCaps = getCapBucket(gpu.renderer);
+     function patchWebGL(proto, label) {
+       if (!proto) {
+         return;
+@@ -230,6 +353,25 @@
+             if (param === 0x9246) {
+               return gpu.renderer;
+             }
++            if (Object.prototype.hasOwnProperty.call(activeGlCaps, param)) {
++              return activeGlCaps[param];
++            }
++            if (param === 0x0d3d) {
++              // MAX_VIEWPORT_DIMS
++              return new pageWindow.Int32Array(activeGlCaps.viewportDims);
++            }
++            if (param === 0x846e) {
++              // ALIASED_LINE_WIDTH_RANGE
++              return new pageWindow.Float32Array(activeGlCaps.lineWidthRange);
++            }
++            if (param === 0x8460) {
++              // ALIASED_POINT_SIZE_RANGE
++              return new pageWindow.Float32Array(activeGlCaps.pointSizeRange);
++            }
++            if (param === 0x84ff) {
++              // MAX_TEXTURE_MAX_ANISOTROPY_EXT
++              return activeGlCaps.maxAnisotropy;
++            }
+             return Reflect.apply(origGetParameter, this, [param]);
+           },
+           replacements
+@@ -274,6 +416,75 @@
+       patchWebGL(pageWindow.WebGL2RenderingContext.prototype, "WebGL2");
+     }
+ 
++    // OffscreenCanvas window parity with HTMLCanvasElement depth (Phase 1 webgl.js).
++    // Soft-optional: missing constructors skip without failing install. 2D path
++    // only — WebGL-backed OffscreenCanvas exports still covered by readPixels.
++    if (pageWindow.OffscreenCanvas?.prototype) {
++      const ocProto = pageWindow.OffscreenCanvas.prototype;
++      const origConvertToBlob = Object.getOwnPropertyDescriptor(
++        ocProto,
++        "convertToBlob"
++      )?.value;
++      let origOcGetImageData = null;
++      const Oc2d = pageWindow.OffscreenCanvasRenderingContext2D;
++      if (Oc2d?.prototype) {
++        origOcGetImageData = Object.getOwnPropertyDescriptor(
++          Oc2d.prototype,
++          "getImageData"
++        )?.value;
++      }
++      if (origOcGetImageData) {
++        replaceMethod(
++          pageWindow,
++          Oc2d.prototype,
++          "getImageData",
++          function (...args) {
++            const id = Reflect.apply(origOcGetImageData, this, args);
++            applyCanvasNoise(Cu.waiveXrays(id).data, canvasSeed);
++            return id;
++          },
++          replacements
++        );
++      }
++      if (origConvertToBlob) {
++        replaceMethod(
++          pageWindow,
++          ocProto,
++          "convertToBlob",
++          function (...args) {
++            try {
++              if (this.width > 0 && this.height > 0) {
++                const ocCtx = this.getContext("2d");
++                if (ocCtx) {
++                  const gid =
++                    origOcGetImageData ||
++                    ocCtx.getImageData.bind(ocCtx);
++                  const id = Reflect.apply(gid, ocCtx, [
++                    0,
++                    0,
++                    this.width,
++                    this.height,
++                  ]);
++                  applyCanvasNoise(Cu.waiveXrays(id).data, canvasSeed);
++                  const tmp = new pageWindow.OffscreenCanvas(
++                    this.width,
++                    this.height
++                  );
++                  const tmpCtx = tmp.getContext("2d");
++                  tmpCtx.putImageData(id, 0, 0);
++                  return Reflect.apply(origConvertToBlob, tmp, args);
++                }
++              }
++            } catch (error) {
++              onRuntimeError("offscreencanvas.convertToBlob", error);
++            }
++            return Reflect.apply(origConvertToBlob, this, args);
++          },
++          replacements
++        );
++      }
++    }
++
+     // AudioContext and OfflineAudioContext both expose AudioBuffer.
+     // Soft residual (pin 2 / PR #47 XOR FAIL f18c0b6): chrome-exported
+     // getChannelData + waived Float32Array.set stayed inert on OfflineAudio

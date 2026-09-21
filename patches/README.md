@@ -16,9 +16,10 @@ These stubs document *how* a real bsys6 / LibreWolf recipe would layer darkstr p
 | [`stubs/0006-darkstr-cpp-navigator-docshell.patch.stub`](stubs/0006-darkstr-cpp-navigator-docshell.patch.stub) | Pointer only — superseded by real `0006-…patch` |
 | [`0007-darkstr-cpp-docshell-nav-sot.patch`](0007-darkstr-cpp-docshell-nav-sot.patch) | **Real** train-pinned C++ DocShell first/subsequent SoT (155.0.1-1) — chrome Map fallback |
 | [`stubs/0007-darkstr-cpp-docshell-nav-sot.patch.stub`](stubs/0007-darkstr-cpp-docshell-nav-sot.patch.stub) | Pointer only — superseded by real `0007-…patch` |
-| [`stubs/0004-darkstr-chaff-depth.patch.stub`](stubs/0004-darkstr-chaff-depth.patch.stub) | Historical stub notes. **Scheduler → [`0016`](0016-darkstr-chaff-native-scheduler.patch)**; **canvas/WebGL/Audio → [`0017`](0017-darkstr-depth-canvas-webgl-audio.patch)**; **workers → [`0018`](0018-darkstr-worker-globals-coherence.patch)**; **soft residuals → [`0019`](0019-darkstr-phase3-soft-residuals.patch)**; **DocShell SubsequentNav → [`0020`](0020-darkstr-docshell-strict-next-nav.patch)** / [`0021`](0021-darkstr-docshell-http-scheme-count.patch) http(s) fix |
+| [`stubs/0004-darkstr-chaff-depth.patch.stub`](stubs/0004-darkstr-chaff-depth.patch.stub) | Historical stub notes. **Scheduler → [`0016`](0016-darkstr-chaff-native-scheduler.patch)**; **canvas/WebGL/Audio → [`0017`](0017-darkstr-depth-canvas-webgl-audio.patch)**; **workers → [`0018`](0018-darkstr-worker-globals-coherence.patch)**; **soft residuals → [`0019`](0019-darkstr-phase3-soft-residuals.patch)**; **DocShell SubsequentNav → [`0020`](0020-darkstr-docshell-strict-next-nav.patch)** / [`0021`](0021-darkstr-docshell-http-scheme-count.patch) http(s) fix / [`0022`](0022-darkstr-docshell-browserid-phase.patch); **WebGL caps + OffscreenCanvas → [`0023`](0023-darkstr-depth-webgl-caps-offscreencanvas.patch)** |
 | [`0016-darkstr-chaff-native-scheduler.patch`](0016-darkstr-chaff-native-scheduler.patch) | **Real** Phase 3 pin 1 — chrome chaff timer (`DarkstrChaffScheduler.sys.mjs`, default-off) |
 | [`0017-darkstr-depth-canvas-webgl-audio.patch`](0017-darkstr-depth-canvas-webgl-audio.patch) | **Real** Phase 3 pin 2 — canvas/WebGL/Audio depth (`DarkstrDepthHooks*.sys.mjs`, default-off) |
+| [`0023-darkstr-depth-webgl-caps-offscreencanvas.patch`](0023-darkstr-depth-webgl-caps-offscreencanvas.patch) | **Real** Phase 3 optional — WebGL cap buckets + OffscreenCanvas window parity |
 | [`0018-darkstr-worker-globals-coherence.patch`](0018-darkstr-worker-globals-coherence.patch) | **Real** Phase 3 pin 3 — DedicatedWorker/SharedWorker coherence (`DarkstrWorkerHooks*.sys.mjs`, default-off) |
 | [`0019-darkstr-phase3-soft-residuals.patch`](0019-darkstr-phase3-soft-residuals.patch) | **Real** Phase 3 soft residuals — lastInstall runtimeOnly + OfflineAudio page-compartment + HW best-effort |
 | [`scripts/apply-darkstr-patches.sh`](scripts/apply-darkstr-patches.sh) | Example apply order for a real tree |
@@ -223,3 +224,10 @@ Real unified diff [`0020-darkstr-docshell-strict-next-nav.patch`](0020-darkstr-d
 - Mini already on 0020v1: apply `0021` via Mini helper; after `b68286f`: apply `0022` (BrowserId + read-only phase)
 - `0022`: tab-stable BrowserId counter; chrome `navPhaseForChannel` no longer writes subsequent_nav on fallthrough; clear phase prefs on init
 - Apply + rebuild: allow-subdir `docshell/base dom/base netwerk/protocol/http` + **`toolkit/library`** XUL relink + chrome + **`make install-dist_bin`** (see `docs/PHASE-3-DOCSHELL-0020-MINI-APPLY.sh`)
+
+## Phase 3 WebGL caps + OffscreenCanvas (0023)
+
+- Extends `DarkstrDepthHooksChild` (post-0017/0019): persona GPU `GL_CAP_BUCKETS` + OffscreenCanvas `convertToBlob` / OC2D `getImageData`
+- Honest subset vs Phase 1 `webgl.js` — ext lists / shader precision / fail-closed unknown getParameter **not** claimed
+- Gates unchanged (pollution + `nativePersonaHooks`, default-off); pin-2 Xray/pageshow/install-dist_bin lessons retained
+- Mini: [`docs/PHASE-3-DEPTH-0023-MINI-APPLY.sh`](../docs/PHASE-3-DEPTH-0023-MINI-APPLY.sh)

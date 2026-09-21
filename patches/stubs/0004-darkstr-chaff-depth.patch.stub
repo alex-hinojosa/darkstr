@@ -36,8 +36,17 @@
 #   → Gates: pollution_active + darkstr.nativePersonaHooks (default-off)
 #   → See docs/PHASE-3-STATUS.md / docs/PHASE-3-DOCSHELL-0020-MINI-APPLY.sh
 #
-# Remaining intent from this stub (NOT in 0016–0022 — later pins):
+# Phase 3 optional WebGL caps + OffscreenCanvas (2026-09-21): **landed** as
+#   patches/0023-darkstr-depth-webgl-caps-offscreencanvas.patch
+#   → Extends DarkstrDepthHooksChild: persona GPU GL_CAP_BUCKETS + OffscreenCanvas
+#     convertToBlob / getImageData window parity (Phase 1 webgl.js subset)
+#   → Honest non-claims: ext lists / shader precision / fail-closed unknown params
+#   → Gates unchanged (pollution_active + nativePersonaHooks, default-off)
+#   → See docs/PHASE-3-STATUS.md / docs/PHASE-3-DEPTH-0023-MINI-APPLY.sh
+#
+# Remaining intent from this stub (NOT in 0016–0023 — later pins):
 #   ServiceWorker / Worklets → not claimed (no honest injection path yet)
+#   Full WebGL ext/precision/fail-closed spoof → WebExt path remains richer
 #
 # Authoritative enums (must match unit tests):
 #   duppel_chaff::ChaffSchedulerPlan / ChaosLevel / plan_fire

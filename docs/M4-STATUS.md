@@ -127,3 +127,4 @@ duppel_persona::PersonaSnapshot::depth_canvas_seed / depth_audio_seed / depth_we
 3b. Soft residuals (lastInstall / OfflineAudio / HW best-effort) → **`patches/0019-darkstr-phase3-soft-residuals.patch`**.
 4. Chrome privacy-pane Native-Compatible site list only when PM schedules UI work.
 5. ~~DocShell strict-next-nav SubsequentNav arm (extends M3).~~ → **Phase 3:** `patches/0020-darkstr-docshell-strict-next-nav.patch` (`docs/PHASE-3-STATUS.md`).
+6. ~~Richer WebGL cap buckets / OffscreenCanvas window parity.~~ → **Phase 3 optional:** `patches/0023-darkstr-depth-webgl-caps-offscreencanvas.patch` (`docs/PHASE-3-STATUS.md`).
