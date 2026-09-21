@@ -345,3 +345,54 @@ WorkerHooks. Helper now force-applies those hunks and fails closed if missing.
 - [x] Mini apply 0024 + subdirectory build + install-dist_bin (operator)
 - [x] Proof XOR: idle default; Pollution fires richer kinded beacons; Homogeneous idle
 
+
+## P0 FP coherence (0025) — this PR
+
+**Date:** 2026-09-21 (CDT)  
+**Goal:** Fix Proof hard fails so Pollution+hooks seed-42 is a **coherent Firefox persona** (not Chrome cosplay).
+
+| Deliverable | Status |
+|-------------|--------|
+| `patches/0025-darkstr-fp-coherence-p0.patch` | **New** — Worker arm + window HW + langs |
+| Mini helper | [`PHASE-3-FP-0025-MINI-APPLY.sh`](PHASE-3-FP-0025-MINI-APPLY.sh) |
+| Apply markers | `0025` in `patches/scripts/apply-darkstr-patches.sh` |
+| Stub `0004` | Points at `0025` |
+
+### Root causes (verified in-tree)
+
+1. **Window HW=12 (host) under Pollution+hooks, RFP off** — JS proto spoof often cannot redefine non-configurable C++ `hardwareConcurrency`; C++ `TryGetHardwareConcurrency` returned false when Int mirror missing/wrong type. Homogeneous/RFP letterboxes to 8 and hid the gap.
+2. **WorkerHooks idle while Depth installed** — `_readWorkerPayload` used `snapshotForBrowsingContext(null)` for **global** arm after 0020. With `strictFirstDoc`, BC-null always yields null → `hooksArmed=false` permanently; Depth arms from snapshot prefs without that gate. Per-BC SubsequentNav gate in `workerPayloadForBrowsingContext` was fine.
+3. **langs `["en-US"]` only** — sticky primary-tag `languageOverride` + WebIDL `[Cached]` after first-doc collapsed the live list; snapshot still had `en-US,en,es`.
+
+### Fixes
+
+| Surface | Change |
+|---------|--------|
+| Worker | Global arm from `getPlan().snapshot` / prefs (Depth parity); observe `docShellPhase`; BC gate unchanged |
+| HW | Instance-first Child spoof; clear+setIntPref coerce; C++ string parse + UA-present default 8 |
+| langs | Pulse primary `languageOverride` then clear to `""`; re-force langs mirror + `intl.accept_languages` on GetSnapshot |
+
+### Explicit non-claims (unchanged)
+
+ServiceWorker / Worklets, fonts, screen/DPR, CF/TLS/JA3, Chrome cosplay, Intl timezone (P1 — document or native later).
+
+### Mini apply + build
+
+```bash
+source ~/src/darkstr-gecko/DARKSTR_GECKO_ROOT.env
+cd ~/src/darkstr-gecko/darkstr   # pull this PR tip
+./docs/PHASE-3-FP-0025-MINI-APPLY.sh
+# or: patch + mach build browser/components + dom/base + toolkit/library + install-dist_bin
+```
+
+**Executor (Grok Linux box):** no Mini SSH / no Mini filesystem — Mini apply + `mach build` = **NOT RUN here**. Compose-tree dry-run apply verified on box.
+
+### XOR expectations (Proof)
+
+| Case | Expect |
+|------|--------|
+| Pollution + hooks + seed-42 after SubsequentNav | `navigator.hardwareConcurrency === 8` |
+| Same | `darkstr.worker.hooksArmed=true`; `lastInstall` ok/installed (or already-installed) |
+| Same | `navigator.languages` includes `es` (full snapshot list) |
+| Homogeneous / hooks off | Worker+Depth idle; HW letterbox via RFP OK; no persona langs |
+| `privacy.*` from these modules | **None** |
