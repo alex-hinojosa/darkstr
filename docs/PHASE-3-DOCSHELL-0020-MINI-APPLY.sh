@@ -47,7 +47,9 @@ if [[ -f "${APPLY}" ]]; then
 fi
 
 cd "${DARKSTR_GECKO_ROOT}"
-./mach build docshell/base dom/base netwerk/protocol/http
+./mach build --allow-subdirectory-build docshell/base dom/base netwerk/protocol/http
+# Relink XUL so C++ StrictNextNav lands in LibreWolf.app (subdirectory .o alone is not enough)
+./mach build --allow-subdirectory-build toolkit/library
 echo "mach C++ EXIT=$?"
 ./mach build --allow-subdirectory-build browser/components
 echo "mach chrome EXIT=$?"
