@@ -16,7 +16,7 @@ These stubs document *how* a real bsys6 / LibreWolf recipe would layer darkstr p
 | [`stubs/0006-darkstr-cpp-navigator-docshell.patch.stub`](stubs/0006-darkstr-cpp-navigator-docshell.patch.stub) | Pointer only — superseded by real `0006-…patch` |
 | [`0007-darkstr-cpp-docshell-nav-sot.patch`](0007-darkstr-cpp-docshell-nav-sot.patch) | **Real** train-pinned C++ DocShell first/subsequent SoT (155.0.1-1) — chrome Map fallback |
 | [`stubs/0007-darkstr-cpp-docshell-nav-sot.patch.stub`](stubs/0007-darkstr-cpp-docshell-nav-sot.patch.stub) | Pointer only — superseded by real `0007-…patch` |
-| [`stubs/0004-darkstr-chaff-depth.patch.stub`](stubs/0004-darkstr-chaff-depth.patch.stub) | Historical stub notes. **Scheduler → [`0016`](0016-darkstr-chaff-native-scheduler.patch)**; **canvas/WebGL/Audio → [`0017`](0017-darkstr-depth-canvas-webgl-audio.patch)**; **workers → [`0018`](0018-darkstr-worker-globals-coherence.patch)**; **soft residuals → [`0019`](0019-darkstr-phase3-soft-residuals.patch)**; **DocShell SubsequentNav → [`0020`](0020-darkstr-docshell-strict-next-nav.patch)** |
+| [`stubs/0004-darkstr-chaff-depth.patch.stub`](stubs/0004-darkstr-chaff-depth.patch.stub) | Historical stub notes. **Scheduler → [`0016`](0016-darkstr-chaff-native-scheduler.patch)**; **canvas/WebGL/Audio → [`0017`](0017-darkstr-depth-canvas-webgl-audio.patch)**; **workers → [`0018`](0018-darkstr-worker-globals-coherence.patch)**; **soft residuals → [`0019`](0019-darkstr-phase3-soft-residuals.patch)**; **DocShell SubsequentNav → [`0020`](0020-darkstr-docshell-strict-next-nav.patch)** / [`0021`](0021-darkstr-docshell-http-scheme-count.patch) http(s) fix |
 | [`0016-darkstr-chaff-native-scheduler.patch`](0016-darkstr-chaff-native-scheduler.patch) | **Real** Phase 3 pin 1 — chrome chaff timer (`DarkstrChaffScheduler.sys.mjs`, default-off) |
 | [`0017-darkstr-depth-canvas-webgl-audio.patch`](0017-darkstr-depth-canvas-webgl-audio.patch) | **Real** Phase 3 pin 2 — canvas/WebGL/Audio depth (`DarkstrDepthHooks*.sys.mjs`, default-off) |
 | [`0018-darkstr-worker-globals-coherence.patch`](0018-darkstr-worker-globals-coherence.patch) | **Real** Phase 3 pin 3 — DedicatedWorker/SharedWorker coherence (`DarkstrWorkerHooks*.sys.mjs`, default-off) |
@@ -211,12 +211,14 @@ Real unified diff [`0019-darkstr-phase3-soft-residuals.patch`](0019-darkstr-phas
 
 
 
-## Phase 3 DocShell SubsequentNav (0020)
+## Phase 3 DocShell SubsequentNav (0020 / 0021)
 
 Real unified diff [`0020-darkstr-docshell-strict-next-nav.patch`](0020-darkstr-docshell-strict-next-nav.patch) against post-0007 (+ Phase 3 chrome) 155.0.1-1:
 
 - `DarkstrDocShellHooks::StrictNextNavArmed` alias; n==0 / unset phase → FirstDocument parity
+- `CountsTowardStrictFirstDoc` — only http/https burn FirstDocument (about:blank / about:newtab / chrome ignored)
 - C++ Navigator + nsHttp UA gated on SubsequentNav when `darkstr.strictFirstDoc` (CH REMOVE stays pollution+hooks)
 - Chrome NativePersona / Depth / Worker per-BC delivery; diagnostic `darkstr.docshell.strictNextNavArmed`
 - Gates default-off (`pollution_active` + `nativePersonaHooks`); no `privacy.*` from this drop
-- Apply + rebuild: `./mach build docshell/base dom/base netwerk/protocol/http` then chrome subdirectory + **`make install-dist_bin`** (see `docs/PHASE-3-DOCSHELL-0020-MINI-APPLY.sh` / `docs/PHASE-3-STATUS.md`)
+- Mini already on 0020v1 (tip `5550daa`): apply [`0021-darkstr-docshell-http-scheme-count.patch`](0021-darkstr-docshell-http-scheme-count.patch) via Mini helper
+- Apply + rebuild: allow-subdir `docshell/base dom/base netwerk/protocol/http` + **`toolkit/library`** XUL relink + chrome + **`make install-dist_bin`** (see `docs/PHASE-3-DOCSHELL-0020-MINI-APPLY.sh`)

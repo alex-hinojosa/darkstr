@@ -276,8 +276,12 @@ patch_markers_present() {
         && grep -Fq "_reportRuntime" "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrWorkerHooksChild.sys.mjs" \
         && grep -Fq 'spoof("hardwareConcurrency"' "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrWorkerHooksChild.sys.mjs"
       ;;
-    0020-darkstr-docshell-strict-next-nav.patch)
-      grep -Fq "StrictNextNavArmed" "${DARKSTR_GECKO_ROOT}/docshell/base/DarkstrDocShellHooks.h" \
+    0020-darkstr-docshell-strict-next-nav.patch|0021-darkstr-docshell-http-scheme-count.patch)
+      grep -Fq "CountsTowardStrictFirstDoc" "${DARKSTR_GECKO_ROOT}/docshell/base/DarkstrDocShellHooks.h" \
+        && grep -Fq "CountsTowardStrictFirstDoc" "${DARKSTR_GECKO_ROOT}/docshell/base/DarkstrDocShellHooks.cpp" \
+        && grep -Fq "aLoadState->URI()" "${DARKSTR_GECKO_ROOT}/docshell/base/nsDocShell.cpp" \
+        && grep -Fq 'scheme !== "http"' "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrNativePersona.sys.mjs" \
+        && grep -Fq "StrictNextNavArmed" "${DARKSTR_GECKO_ROOT}/docshell/base/DarkstrDocShellHooks.h" \
         && grep -Fq "darkstr.docshell.strictNextNavArmed" "${DARKSTR_GECKO_ROOT}/docshell/base/DarkstrDocShellHooks.cpp" \
         && grep -Fq "StrictNextNavArmedMirror" "${DARKSTR_GECKO_ROOT}/dom/base/DarkstrNavigatorHooks.cpp" \
         && grep -Fq "StrictNextNavArmedMirror" "${DARKSTR_GECKO_ROOT}/netwerk/protocol/http/DarkstrNsHttpHooks.cpp" \
@@ -349,5 +353,5 @@ echo "Phase 3 chaff timer: patches/0016-darkstr-chaff-native-scheduler.patch (Da
 echo "Phase 3 depth hooks: patches/0017-darkstr-depth-canvas-webgl-audio.patch (DarkstrDepthHooks*.sys.mjs). Rebuild: ./mach build --allow-subdirectory-build browser/components then make install-dist_bin (see docs/PHASE-3-STATUS.md / docs/PHASE-3-DEPTH-0017-MINI-APPLY.sh)."
 echo "Phase 3 worker hooks: patches/0018-darkstr-worker-globals-coherence.patch (DarkstrWorkerHooks*.sys.mjs). Rebuild: ./mach build --allow-subdirectory-build browser/components then make install-dist_bin (see docs/PHASE-3-STATUS.md / docs/PHASE-3-WORKER-0018-MINI-APPLY.sh)."
 echo "Phase 3 soft residuals: patches/0019-darkstr-phase3-soft-residuals.patch (lastInstall + OfflineAudio + HW best-effort). Rebuild: ./mach build --allow-subdirectory-build browser/components then make install-dist_bin (see docs/PHASE-3-STATUS.md / docs/PHASE-3-SOFT-0019-MINI-APPLY.sh)."
-echo "Phase 3 DocShell SubsequentNav: patches/0020-darkstr-docshell-strict-next-nav.patch (strict-next-nav arm). Rebuild: ./mach build docshell/base dom/base netwerk/protocol/http && ./mach build --allow-subdirectory-build browser/components then make install-dist_bin (see docs/PHASE-3-STATUS.md / docs/PHASE-3-DOCSHELL-0020-MINI-APPLY.sh)."
+echo "Phase 3 DocShell SubsequentNav: patches/0020-darkstr-docshell-strict-next-nav.patch (strict-next-nav arm) + patches/0021-darkstr-docshell-http-scheme-count.patch (http(s)-only FirstDocument). Rebuild: allow-subdir docshell/dom/netwerk + toolkit/library + browser/components then make install-dist_bin (see docs/PHASE-3-DOCSHELL-0020-MINI-APPLY.sh)."
 echo "M-FFI-0008 gecko FFI link: patches/0008-darkstr-gecko-ffi-link.patch (Approach B cdylib). Build FFI: third_party/darkstr/build-and-install-ffi.sh --prefix \"\${DARKSTR_GECKO_OBJDIR:-obj-*}/dist/bin\". Rebuild chrome: ./mach build browser/components (see docs/M-FFI-0008-STATUS.md)."

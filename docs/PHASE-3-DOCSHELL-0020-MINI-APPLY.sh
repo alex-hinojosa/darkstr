@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
 # Run on Alexander's Mac mini (SSD). Atlas: never mv under /Volumes/Mesh.
 # Phase 3 — DocShell SubsequentNav / strict-next-nav arm (0020), extends M3 0006/0007.
-# Carries pin 1 install-dist_bin lesson + pin 2 module-refresh for chrome modules.
-# C++ rebuild: docshell/base dom/base netwerk/protocol/http
-# Chrome rebuild: browser/components + make install-dist_bin
+# Proof XOR fix: only http(s) count toward FirstDocument (about:blank/newtab ignored).
+# Carries pin 1 install-dist_bin + allow-subdir + toolkit/library XUL relink.
 set -euo pipefail
 source "${HOME}/src/darkstr-gecko/DARKSTR_GECKO_ROOT.env"
 REPO="${1:-${HOME}/src/darkstr-gecko/darkstr}"
@@ -11,22 +10,30 @@ if [[ ! -d "${REPO}" ]]; then
   REPO="${HOME}/src/darkstr"
 fi
 PATCH="${REPO}/patches/0020-darkstr-docshell-strict-next-nav.patch"
+UPGRADE="${REPO}/patches/0021-darkstr-docshell-http-scheme-count.patch"
 APPLY="${REPO}/patches/scripts/apply-darkstr-patches.sh"
 echo "DARKSTR_GECKO_ROOT=${DARKSTR_GECKO_ROOT}"
 echo "REPO=${REPO}"
 df -h "${DARKSTR_GECKO_ROOT}" | tail -1 || true
 test -f "${PATCH}"
 
-# Marker skip when already applied
-if grep -Fq 'StrictNextNavArmed' "${DARKSTR_GECKO_ROOT}/docshell/base/DarkstrDocShellHooks.h" \
-  && grep -Fq 'darkstr.docshell.strictNextNavArmed' "${DARKSTR_GECKO_ROOT}/docshell/base/DarkstrDocShellHooks.cpp" \
+DS_H="${DARKSTR_GECKO_ROOT}/docshell/base/DarkstrDocShellHooks.h"
+DS_C="${DARKSTR_GECKO_ROOT}/docshell/base/DarkstrDocShellHooks.cpp"
+NP="${DARKSTR_GECKO_ROOT}/browser/components/DarkstrNativePersona.sys.mjs"
+
+if grep -Fq 'CountsTowardStrictFirstDoc' "${DS_H}" \
+  && grep -Fq 'CountsTowardStrictFirstDoc' "${DS_C}" \
+  && grep -Fq 'aLoadState->URI()' "${DARKSTR_GECKO_ROOT}/docshell/base/nsDocShell.cpp" \
+  && grep -Fq 'scheme !== "http"' "${NP}" \
   && grep -Fq 'StrictNextNavArmedMirror' "${DARKSTR_GECKO_ROOT}/dom/base/DarkstrNavigatorHooks.cpp" \
-  && grep -Fq 'StrictNextNavArmedMirror' "${DARKSTR_GECKO_ROOT}/netwerk/protocol/http/DarkstrNsHttpHooks.cpp" \
-  && grep -Fq 'strictNextNavArmed' "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrNativePersona.sys.mjs" \
-  && grep -Fq 'SubsequentNav arm' "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrDepthHooks.sys.mjs" \
   && grep -Fq 'nextNavOk' "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrWorkerHooks.sys.mjs"; then
-  echo "0020 strict-next-nav markers already present — skip patch apply"
+  echo "0020 http-scheme + SubsequentNav markers already present — skip patch apply"
+elif grep -Fq 'StrictNextNavArmed' "${DS_H}" \
+  && [[ -f "${UPGRADE}" ]]; then
+  echo "0020v1 present — apply http-scheme upgrade (Proof XOR fix)"
+  patch -d "${DARKSTR_GECKO_ROOT}" -p1 --forward --batch < "${UPGRADE}"
 else
+  echo "Applying full 0020 (SubsequentNav + http-scheme filter)"
   patch -d "${DARKSTR_GECKO_ROOT}" -p1 --forward --batch < "${PATCH}"
 fi
 rm -f "${DARKSTR_GECKO_ROOT}/browser/components/"*.rej \
@@ -34,11 +41,15 @@ rm -f "${DARKSTR_GECKO_ROOT}/browser/components/"*.rej \
   "${DARKSTR_GECKO_ROOT}/dom/base/"*.rej \
   "${DARKSTR_GECKO_ROOT}/netwerk/protocol/http/"*.rej
 
-grep -Fq 'StrictNextNavArmed' "${DARKSTR_GECKO_ROOT}/docshell/base/DarkstrDocShellHooks.h"
-grep -Fq 'darkstr.docshell.strictNextNavArmed' "${DARKSTR_GECKO_ROOT}/docshell/base/DarkstrDocShellHooks.cpp"
+grep -Fq 'CountsTowardStrictFirstDoc' "${DS_H}"
+grep -Fq 'CountsTowardStrictFirstDoc' "${DS_C}"
+grep -Fq 'aLoadState->URI()' "${DARKSTR_GECKO_ROOT}/docshell/base/nsDocShell.cpp"
+grep -Fq 'scheme !== "http"' "${NP}"
+grep -Fq 'StrictNextNavArmed' "${DS_H}"
+grep -Fq 'darkstr.docshell.strictNextNavArmed' "${DS_C}"
 grep -Fq 'StrictNextNavArmedMirror' "${DARKSTR_GECKO_ROOT}/dom/base/DarkstrNavigatorHooks.cpp"
 grep -Fq 'StrictNextNavArmedMirror' "${DARKSTR_GECKO_ROOT}/netwerk/protocol/http/DarkstrNsHttpHooks.cpp"
-grep -Fq 'strictNextNavArmed' "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrNativePersona.sys.mjs"
+grep -Fq 'strictNextNavArmed' "${NP}"
 grep -Fq 'SubsequentNav arm' "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrDepthHooks.sys.mjs"
 grep -Fq 'nextNavOk' "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrWorkerHooks.sys.mjs"
 
@@ -47,8 +58,8 @@ if [[ -f "${APPLY}" ]]; then
 fi
 
 cd "${DARKSTR_GECKO_ROOT}"
+# Disk ~9 Gi — subdirectory + toolkit/library relink (avoid full rebuild)
 ./mach build --allow-subdirectory-build docshell/base dom/base netwerk/protocol/http
-# Relink XUL so C++ StrictNextNav lands in LibreWolf.app (subdirectory .o alone is not enough)
 ./mach build --allow-subdirectory-build toolkit/library
 echo "mach C++ EXIT=$?"
 ./mach build --allow-subdirectory-build browser/components
@@ -71,7 +82,7 @@ for mod in \
     fi
   fi
 done
-echo "Markers: StrictNextNavArmed + darkstr.docshell.strictNextNavArmed + chrome gates."
-echo "XOR: Pollution+hooks+strictFirstDoc → first nav native; subsequent → persona/depth/worker."
-echo "Default / Homogeneous / hooks off → idle. No privacy.* from 0020."
+echo "Markers: CountsTowardStrictFirstDoc + StrictNextNavArmed + http(s)-only FirstDocument."
+echo "XOR: Pollution+hooks+strictFirstDoc → first http(s) native (about:blank ignored);"
+echo "     subsequent http(s) → persona. Homogeneous/hooks-off → idle. No privacy.*."
 echo "Hooks remain default-off. Mini apply from this helper; Proof XOR = parent/operator."

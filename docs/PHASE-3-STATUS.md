@@ -138,27 +138,34 @@ Mini helper: [`PHASE-3-SOFT-0019-MINI-APPLY.sh`](PHASE-3-SOFT-0019-MINI-APPLY.sh
 | Deliverable | Status |
 |-------------|--------|
 | `patches/0020-darkstr-docshell-strict-next-nav.patch` | **New** — extends M3 `0006`/`0007` |
+| `patches/0021-darkstr-docshell-http-scheme-count.patch` | **Upgrade** — Proof XOR fix (http(s)-only FirstDocument count) |
 | `DarkstrDocShellHooks::StrictNextNavArmed` | Alias of `ShouldApplyPersona` (`duppel_persona::strict_next_nav_armed`) |
+| `CountsTowardStrictFirstDoc` | **http/https only** — about:blank / about:newtab / chrome: ignored |
 | Phase parity | n==0 / unset mirror → `FirstDocument` (chrome Map parity) |
 | C++ Navigator + nsHttp UA | Gated on SubsequentNav when `strictFirstDoc` (phase mirror) |
 | CH REMOVE | Unchanged — pollution+hooks only (0003 asymmetry) |
-| Chrome NativePersona | `strictNextNavArmed` + snapshot prefers C++ phase mirror |
+| Chrome NativePersona | `strictNextNavArmed` + snapshot prefers C++ phase mirror; `_noteTopLevelDocument` http(s)-only |
 | Depth / Worker per-BC | Null on first_document when strictFirstDoc |
 | Diagnostic | `darkstr.docshell.strictNextNavArmed` (no `privacy.*`) |
 | Gates default-off | Idle unless `pollution_active` **and** `nativePersonaHooks` |
-| Mini helper | [`PHASE-3-DOCSHELL-0020-MINI-APPLY.sh`](PHASE-3-DOCSHELL-0020-MINI-APPLY.sh) |
+| Mini helper | [`PHASE-3-DOCSHELL-0020-MINI-APPLY.sh`](PHASE-3-DOCSHELL-0020-MINI-APPLY.sh) (allow-subdir + toolkit/library relink) |
+
+### Proof XOR on tip `5550daa` — FAIL → http-scheme fix
+
+Hard FAIL: Pollution+hooks+strictFirstDoc never showed first-nav holdback. Pref mirror already `subsequent_nav` / `strictNextNavArmed=true` on about:blank; first https UA already Firefox/140. Root cause: C++ `nsDocShell::LoadURI` counted about:blank / chrome new-tab as FirstDocument so first https was already SubsequentNav. Fix: `CountsTowardStrictFirstDoc` + chrome scheme filter (http/https only).
 
 ### XOR expectations (Proof) — 0020
 
 | Case | Expect |
 |------|--------|
-| Pollution + hooks + `strictFirstDoc=true`; first top-level nav | Persona/Navigator/UA **idle**; `docShellPhase=first_document`; `strictNextNavArmed=false` |
-| Same; subsequent top-level nav | Persona surfaces **armed**; phase `subsequent_nav`; `strictNextNavArmed=true` |
-| Pollution + hooks + `strictFirstDoc=false` | Armed from first nav (no first-doc holdback) |
+| Pollution + hooks + `strictFirstDoc=true`; **first http(s)** content nav | Persona/Navigator/UA **idle**; `docShellPhase=first_document`; `strictNextNavArmed=false`; stock UA |
+| about:blank / about:newtab / chrome (no http(s) yet) | Must **not** advance counter; phase stays unset or `first_document`; armed=false |
+| Same; **subsequent http(s)** content nav | Persona surfaces **armed**; phase `subsequent_nav`; `strictNextNavArmed=true` |
+| Pollution + hooks + `strictFirstDoc=false` | Armed from first http(s) (no first-doc holdback) |
 | Default / Homogeneous / hooks off | Idle unchanged |
 | `privacy.*` from 0020 | **None** |
 
-**Executor (Grok Linux box):** Mini apply + `mach build` = **NOT RUN**. Compose dry-run apply verified.
+**Executor (Grok Linux box):** Mini apply + `mach build` = **NOT RUN** (no Mini SSH). Compose dry-run full + upgrade verified.
 
 ## Next
 
@@ -201,8 +208,9 @@ WorkerHooks. Helper now force-applies those hunks and fails closed if missing.
 - [x] Pref keys stay `darkstr.*`; diagnostic `darkstr.docshell.strictNextNavArmed` only
 - [x] Hooks idle unless Pollution + `nativePersonaHooks` (default-off)
 - [x] `strictFirstDoc` first-nav vs subsequent-nav semantics preserved / wired into C++ UA+Navigator
+- [x] Only http(s) count toward FirstDocument (`CountsTowardStrictFirstDoc`)
 - [x] CH REMOVE not regresssed (still pollution+hooks; not strict-next gated)
-- [x] Patch id `0020`; stub `0004` points at it
+- [x] Patch id `0020` + http-scheme upgrade; stub `0004` points at it
 - [x] Docs: PHASE-3-STATUS + M4 Next + GECKO-HOOKS §2.4 + apply markers + Mini helper
-- [ ] Mini apply + `mach build` docshell/dom/netwerk + browser/components + install-dist_bin
-- [ ] Proof XOR first-doc idle / subsequent armed on Mini tip
+- [ ] Mini apply upgrade + allow-subdir C++/toolkit/library + chrome + install-dist_bin
+- [ ] Proof XOR: first http(s) idle (`first_document` / armed=false / stock UA); subsequent armed

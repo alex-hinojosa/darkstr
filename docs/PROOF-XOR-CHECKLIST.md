@@ -40,7 +40,7 @@ When the PR touches chaff scheduler, canvas/Audio/WebGL/worker depth, or strict-
 - [ ] Worker hooks `0018` (Dedicated/Shared): idle by default; Pollution+hooks+persona → armed; Homogeneous/NC → idle; no `privacy.*` writes; ServiceWorker/Worklets **not** claimed
 - [ ] No claim that worker hooks landed unless Proof-checked on a fork artifact (`0018` = Worker/SharedWorker constructor wrap; ServiceWorker out of scope)
 - [ ] Soft residuals `0019` v2: worker `lastInstall` ok/installed (PASS on f18c0b6); OfflineAudio page-compartment → **nonzero deltaSum** and startRendering sums diverge from Homogeneous; HW best-effort (host OK if non-configurable)
-- [ ] DocShell SubsequentNav `0020`: Pollution+hooks+`strictFirstDoc` → first nav native / subsequent armed; diagnostic `darkstr.docshell.strictNextNavArmed`; Homogeneous/hooks-off idle; no `privacy.*`
+- [ ] DocShell SubsequentNav `0020`: Pollution+hooks+`strictFirstDoc` → **first http(s)** native (`first_document` / armed=false / stock UA); about:blank must not burn FirstDocument; subsequent http(s) armed; diagnostic `darkstr.docshell.strictNextNavArmed`; Homogeneous/hooks-off idle; no `privacy.*`
 - [ ] After Mini subdirectory `mach build`: `make install-dist_bin` + LibreWolf.app `moz-src` present (pin 1 lesson)
 - [ ] Native-Compatible site list UI changes (if any) called out for Product Manager; prefer docs-only
 - [ ] Track D Servo/Ladybird remains docs-only — no eng ship dependency
