@@ -1,0 +1,564 @@
+# darkstr Phase 3 — DocShell SubsequentNav / strict-next-nav arm (extends M3)
+# Train: Firefox FIREFOX_155_0_1_RELEASE / LibreWolf 155.0.1-1
+# Brand: darkstr — not official LibreWolf. No Cloudflare/TLS/JA3 claims.
+# Prerequisite: 0003 + 0005 + 0006 + 0007 (+ Phase 3 0016–0019 when present).
+# Apply: patch -d "$DARKSTR_GECKO_ROOT" -p1 < patches/0020-darkstr-docshell-strict-next-nav.patch
+# Gates: pollution_active + darkstr.nativePersonaHooks (default-off); strictFirstDoc
+#   first http(s) content nav stays native; SubsequentNav arms persona.
+# Rebuild: ./mach build --allow-subdirectory-build docshell/base dom/base netwerk/protocol/http
+#          ./mach build --allow-subdirectory-build toolkit/library   # XUL relink
+#          ./mach build --allow-subdirectory-build browser/components
+#        then make install-dist_bin (pin 1 lesson) for chrome modules.
+# Honesty: wires ShouldApplyPersona into nsHttp UA + Navigator; chrome
+#   NativePersona/Depth/Worker per-BC delivery; diagnostic darkstr.docshell.strictNextNavArmed.
+#   Only http/https count toward FirstDocument (CountsTowardStrictFirstDoc) — about:blank /
+#   about:newtab / chrome: ignored (Proof XOR fix). CH REMOVE stays pollution+hooks.
+#   Multi-tab phase mirror limited. No privacy.*. No Approach A. No fresh DMG.
+#
+
+diff -ruN a/browser/components/DarkstrDepthHooks.sys.mjs b/browser/components/DarkstrDepthHooks.sys.mjs
+--- a/browser/components/DarkstrDepthHooks.sys.mjs
++++ b/browser/components/DarkstrDepthHooks.sys.mjs
+@@ -15,6 +15,8 @@
+  * Gates (default-off — idle unless explicitly allowed):
+  *   pollution_active = mode=="pollution" && !nativeCompatible
+  *   allow = pollution_active && darkstr.nativePersonaHooks
++ *   per-BC delivery also requires DocShell SubsequentNav arm when strictFirstDoc
++ *   (0020 — prefers NativePersona.snapshotForBrowsingContext / phase mirror)
+  * Homogeneous / Native-Compatible / hooks false → no content hooks; seeds null.
+  *
+  * Seeds: prefer darkstr.persona.snapshot JSON (canvasSeed/audioSeed/gpu);
+@@ -275,12 +277,41 @@
+     }
+   },
+ 
+-  /** Depth seeds for JSWindowActor child (null when idle). */
+-  depthSeedsForBrowsingContext(_bc) {
++  /** Depth seeds for JSWindowActor child (null when idle / first-doc). */
++  depthSeedsForBrowsingContext(bc) {
+     const plan = this.getPlan();
+     if (!plan.armed || !plan.seeds) {
+       return null;
+     }
++    // SubsequentNav arm: reuse NativePersona first-doc gate when available.
++    try {
++      const { DarkstrNativePersona } = ChromeUtils.importESModule(
++        "moz-src:///browser/components/DarkstrNativePersona.sys.mjs"
++      );
++      if (DarkstrNativePersona.snapshotForBrowsingContext) {
++        const snap = DarkstrNativePersona.snapshotForBrowsingContext(bc);
++        if (!snap) {
++          return null;
++        }
++      }
++    } catch (_e) {
++      // Fallback: phase mirror when NativePersona unavailable.
++      try {
++        const strictFirst = Services.prefs.getBoolPref(
++          "darkstr.strictFirstDoc",
++          true
++        );
++        if (strictFirst) {
++          const phase = Services.prefs.getStringPref(
++            "darkstr.persona.docShellPhase",
++            ""
++          );
++          if (phase !== "subsequent_nav") {
++            return null;
++          }
++        }
++      } catch (_e2) {}
++    }
+     return {
+       canvasSeed: plan.seeds.canvasSeed >>> 0,
+       audioSeed: plan.seeds.audioSeed >>> 0,
+diff -ruN a/browser/components/DarkstrNativePersona.sys.mjs b/browser/components/DarkstrNativePersona.sys.mjs
+--- a/browser/components/DarkstrNativePersona.sys.mjs
++++ b/browser/components/DarkstrNativePersona.sys.mjs
+@@ -35,6 +35,7 @@
+ const HW_MIRROR_PREF = "darkstr.persona.hardwareConcurrency";
+ const LANGS_MIRROR_PREF = "darkstr.persona.languages";
+ const DOCSHELL_PHASE_MIRROR_PREF = "darkstr.persona.docShellPhase";
++const STRICT_NEXT_NAV_ARMED_PREF = "darkstr.docshell.strictNextNavArmed";
+ /** Stock content observer path (nsGlobalWindowInner) — save/restore around hooks. */
+ const ACCEPT_LANGS_PREF = "intl.accept_languages";
+ const SAVED_ACCEPT_LANGS_PREF = "darkstr.persona.savedAcceptLanguages";
+@@ -213,6 +214,13 @@
+ 
+   _noteTopLevelDocument(channel) {
+     try {
++      // Only http(s) content docs count — about:blank / about:newtab / chrome
++      // must not burn FirstDocument (Proof XOR / 0020 http-scheme filter).
++      const uri = channel.URI || channel.originalURI;
++      const scheme = String(uri?.scheme || "").toLowerCase();
++      if (scheme !== "http" && scheme !== "https") {
++        return null;
++      }
+       const li = channel.loadInfo;
+       if (!li) {
+         return null;
+@@ -547,18 +555,42 @@
+     try {
+       Services.prefs.setStringPref(DOCSHELL_PHASE_MIRROR_PREF, "subsequent_nav");
+     } catch (_e) {}
++    this._syncStrictNextNavArmedDiag("subsequent_nav");
+     return "subsequent_nav";
+   },
+ 
+-  shouldApplyForChannel(channel) {
++
++  /**
++   * duppel_persona::strict_next_nav_armed — persona surfaces arm on SubsequentNav
++   * when strictFirstDoc (default). Phase 3 / 0020 chrome mirror of C++ SoT.
++   */
++  strictNextNavArmed(phase) {
+     const plan = this.getPlan();
+-    if (!plan.applyNativeBase || !plan.snapshot) {
++    if (!plan.pollutionActive || !plan.nativeHooks) {
+       return false;
+     }
+-    if (plan.strictFirstDoc && this.navPhaseForChannel(channel) === "first_document") {
++    if (!plan.strictFirstDoc) {
++      return true;
++    }
++    return phase === "subsequent_nav";
++  },
++
++  /** Sync diagnostic pref (darkstr.* only — never privacy.*). */
++  _syncStrictNextNavArmedDiag(phase) {
++    try {
++      const armed = this.strictNextNavArmed(phase);
++      Services.prefs.setBoolPref(STRICT_NEXT_NAV_ARMED_PREF, armed);
++    } catch (_e) {}
++  },
++
++  shouldApplyForChannel(channel) {
++    const plan = this.getPlan();
++    if (!plan.applyNativeBase || !plan.snapshot) {
+       return false;
+     }
+-    return true;
++    const phase = this.navPhaseForChannel(channel);
++    this._syncStrictNextNavArmedDiag(phase);
++    return this.strictNextNavArmed(phase);
+   },
+ 
+   /** Snapshot for JSWindowActor child (null when idle / first-doc). */
+@@ -568,14 +600,31 @@
+       return null;
+     }
+     try {
++      // Prefer C++ DocShell phase mirror (0007/0020 SubsequentNav arm).
++      if (plan.strictFirstDoc) {
++        const cppPhase = Services.prefs.getStringPref(
++          DOCSHELL_PHASE_MIRROR_PREF,
++          ""
++        );
++        if (cppPhase === "first_document" || cppPhase === "") {
++          return null;
++        }
++        if (cppPhase === "subsequent_nav") {
++          this._syncStrictNextNavArmedDiag("subsequent_nav");
++          return plan.snapshot;
++        }
++      }
++      // Fallback: chrome Map when mirror unset / hooks race.
+       const top = bc?.top;
+       if (plan.strictFirstDoc && top && this._bcTopLoads) {
+         const n = this._bcTopLoads.get(top.id) || 0;
+         if (n <= 1) {
++          this._syncStrictNextNavArmedDiag("first_document");
+           return null;
+         }
+       }
+     } catch (_e) {}
++    this._syncStrictNextNavArmedDiag("subsequent_nav");
+     return plan.snapshot;
+   },
+ 
+diff -ruN a/browser/components/DarkstrWorkerHooks.sys.mjs b/browser/components/DarkstrWorkerHooks.sys.mjs
+--- a/browser/components/DarkstrWorkerHooks.sys.mjs
++++ b/browser/components/DarkstrWorkerHooks.sys.mjs
+@@ -22,6 +22,7 @@
+  * Gates (default-off — idle unless explicitly allowed):
+  *   pollution_active = mode=="pollution" && !nativeCompatible
+  *   allow = pollution_active && darkstr.nativePersonaHooks
++ *   per-BC delivery also requires DocShell SubsequentNav arm when strictFirstDoc (0020)
+  * Homogeneous / Native-Compatible / hooks false → no constructor wrap; payload null.
+  *
+  * Payload: prefer DarkstrNativePersona.snapshot + DarkstrDepthHooks depth seeds
+@@ -366,12 +367,40 @@
+     }
+   },
+ 
+-  /** Worker payload for JSWindowActor child (null when idle). */
+-  workerPayloadForBrowsingContext(_bc) {
++  /** Worker payload for JSWindowActor child (null when idle / first-doc). */
++  workerPayloadForBrowsingContext(bc) {
+     const plan = this.getPlan();
+     if (!plan.armed || !plan.payload?.persona) {
+       return null;
+     }
++    // SubsequentNav arm: null on first_document when strictFirstDoc.
++    try {
++      const { DarkstrNativePersona } = ChromeUtils.importESModule(
++        "moz-src:///browser/components/DarkstrNativePersona.sys.mjs"
++      );
++      if (DarkstrNativePersona.snapshotForBrowsingContext) {
++        const snap = DarkstrNativePersona.snapshotForBrowsingContext(bc);
++        if (!snap) {
++          return null;
++        }
++      }
++    } catch (_e) {
++      try {
++        const strictFirst = Services.prefs.getBoolPref(
++          "darkstr.strictFirstDoc",
++          true
++        );
++        if (strictFirst) {
++          const phase = Services.prefs.getStringPref(
++            "darkstr.persona.docShellPhase",
++            ""
++          );
++          if (phase !== "subsequent_nav") {
++            return null;
++          }
++        }
++      } catch (_e2) {}
++    }
+     const persona = plan.payload.persona;
+     const depth = plan.payload.depth || null;
+     return {
+@@ -405,10 +434,10 @@
+       const { DarkstrNativePersona } = ChromeUtils.importESModule(
+         "moz-src:///browser/components/DarkstrNativePersona.sys.mjs"
+       );
++      // Prefer BC-aware snapshot (strict-next-nav). Do NOT fall back to raw
++      // getPlan().snapshot here — that skipped first-doc idle (0020).
+       persona = normalizePersona(
+-        DarkstrNativePersona.snapshotForBrowsingContext?.(null) ||
+-          DarkstrNativePersona.getPlan?.()?.snapshot ||
+-          null
++        DarkstrNativePersona.snapshotForBrowsingContext?.(null) || null
+       );
+     } catch (_e) {}
+     try {
+@@ -428,10 +457,27 @@
+       }
+     } catch (_e) {}
+ 
+-    if (!persona) {
++    // Pref fallbacks only when SubsequentNav arm allows (or strictFirstDoc off).
++    let nextNavOk = true;
++    try {
++      const strictFirst = Services.prefs.getBoolPref(
++        "darkstr.strictFirstDoc",
++        true
++      );
++      if (strictFirst) {
++        const phase = Services.prefs.getStringPref(
++          "darkstr.persona.docShellPhase",
++          ""
++        );
++        nextNavOk = phase === "subsequent_nav";
++      }
++    } catch (_e) {
++      nextNavOk = true;
++    }
++    if (!persona && nextNavOk) {
+       persona = this._readPersonaFromPrefs();
+     }
+-    if (!depth) {
++    if (!depth && nextNavOk) {
+       depth = this._readDepthFromPrefs();
+     }
+     if (!persona) {
+diff -ruN a/docshell/base/DarkstrDocShellHooks.cpp b/docshell/base/DarkstrDocShellHooks.cpp
+--- a/docshell/base/DarkstrDocShellHooks.cpp
++++ b/docshell/base/DarkstrDocShellHooks.cpp
+@@ -7,6 +7,7 @@
+ #include "DarkstrDocShellHooks.h"
+ 
+ #include "mozilla/Preferences.h"
++#include "nsIURI.h"
+ #include "nsString.h"
+ #include "nsTHashMap.h"
+ 
+@@ -22,11 +23,16 @@
+ 
+ void SyncPhaseMirror(uint32_t aCount) {
+   // Mirror for chrome JS / prefs consumers. Multi-tab limited (last writer).
+-  if (aCount <= 1) {
+-    Preferences::SetCString("darkstr.persona.docShellPhase", "first_document"_ns);
+-  } else {
++  const bool subsequent = aCount > 1;
++  if (subsequent) {
+     Preferences::SetCString("darkstr.persona.docShellPhase", "subsequent_nav"_ns);
++  } else {
++    Preferences::SetCString("darkstr.persona.docShellPhase", "first_document"_ns);
+   }
++  // Diagnostic only (darkstr.* — never privacy.*). Proof XOR reads this.
++  const bool strictFirst = Preferences::GetBool("darkstr.strictFirstDoc", true);
++  const bool armed = !strictFirst || subsequent;
++  Preferences::SetBool("darkstr.docshell.strictNextNavArmed", armed);
+ }
+ 
+ }  // namespace
+@@ -48,9 +54,13 @@
+     return NavPhase::SubsequentNav;
+   }
+   nsAutoCString phase;
+-  if (NS_SUCCEEDED(
+-          Preferences::GetCString("darkstr.persona.docShellPhase", phase)) &&
+-      phase.EqualsLiteral("first_document")) {
++  if (NS_FAILED(
++          Preferences::GetCString("darkstr.persona.docShellPhase", phase)) ||
++      phase.IsEmpty()) {
++    // Unset → FirstDocument under strict-first-doc chrome parity (n==0).
++    return NavPhase::FirstDocument;
++  }
++  if (phase.EqualsLiteral("first_document")) {
+     return NavPhase::FirstDocument;
+   }
+   return NavPhase::SubsequentNav;
+@@ -66,7 +76,8 @@
+   }
+   uint32_t n = 0;
+   if (!TopLoads().Get(aBrowsingContextId, &n) || n == 0) {
+-    return PhaseFromChromeMirror();
++    // Unknown / not-yet-noted BC → FirstDocument (chrome Map n==0 parity).
++    return NavPhase::FirstDocument;
+   }
+   return n <= 1 ? NavPhase::FirstDocument : NavPhase::SubsequentNav;
+ }
+@@ -82,12 +93,30 @@
+   return true;
+ }
+ 
++bool DarkstrDocShellHooks::StrictNextNavArmed(uint64_t aBrowsingContextId) {
++  // duppel_persona::strict_next_nav_armed — SubsequentNav arm when strictFirstDoc.
++  return ShouldApplyPersona(aBrowsingContextId);
++}
++
++bool DarkstrDocShellHooks::CountsTowardStrictFirstDoc(nsIURI* aURI) {
++  if (!aURI) {
++    return false;
++  }
++  nsAutoCString scheme;
++  if (NS_FAILED(aURI->GetScheme(scheme))) {
++    return false;
++  }
++  // Proof XOR: about:blank / about:newtab / chrome must not burn FirstDocument
++  // so the first intentional http(s) content nav stays native under strictFirstDoc.
++  return scheme.EqualsLiteral("http") || scheme.EqualsLiteral("https");
++}
++
+ void DarkstrDocShellHooks::NoteTopLevelDocumentLoadAttempt(
+-    uint64_t aBrowsingContextId) {
++    uint64_t aBrowsingContextId, nsIURI* aURI) {
+   if (!PollutionNativeHooksActive()) {
+     return;
+   }
+-  if (aBrowsingContextId == 0) {
++  if (aBrowsingContextId == 0 || !CountsTowardStrictFirstDoc(aURI)) {
+     return;
+   }
+   uint32_t n = 0;
+diff -ruN a/docshell/base/DarkstrDocShellHooks.h b/docshell/base/DarkstrDocShellHooks.h
+--- a/docshell/base/DarkstrDocShellHooks.h
++++ b/docshell/base/DarkstrDocShellHooks.h
+@@ -13,6 +13,13 @@
+  * When pollution + darkstr.nativePersonaHooks: per-BrowsingContext LoadURI
+  * counter is SoT; chrome prefers darkstr.persona.docShellPhase mirror.
+  * Chrome Map remains fallback if C++ idle / hooks off.
++ *
++ * Phase 3 / 0020: StrictNextNavArmed aliases ShouldApplyPersona
++ * (duppel_persona::strict_next_nav_armed). First doc stays native when
++ * darkstr.strictFirstDoc; persona surfaces arm on SubsequentNav.
++ *
++ * Only http(s) top-level loads count (CountsTowardStrictFirstDoc) — about:blank,
++ * about:newtab, chrome:, resource:, etc. must not burn FirstDocument.
+  */
+ 
+ #ifndef mozilla_DarkstrDocShellHooks_h
+@@ -20,6 +27,8 @@
+ 
+ #include <stdint.h>
+ 
++class nsIURI;
++
+ namespace mozilla {
+ 
+ class DarkstrDocShellHooks final {
+@@ -37,8 +46,21 @@
+   /** true when persona surfaces should apply (respects strictFirstDoc). */
+   static bool ShouldApplyPersona(uint64_t aBrowsingContextId);
+ 
+-  /** Call-in from nsDocShell::LoadURI for top-content document navigations. */
+-  static void NoteTopLevelDocumentLoadAttempt(uint64_t aBrowsingContextId);
++  /**
++   * Alias of ShouldApplyPersona — M4/Phase-3 strict-next-nav arm
++   * (duppel_persona::strict_next_nav_armed). Prefer this name at call sites.
++   */
++  static bool StrictNextNavArmed(uint64_t aBrowsingContextId);
++
++  /**
++   * true for http / https only. about:blank, about:newtab, chrome:, resource:,
++   * blob:, data:, etc. return false so they do not consume FirstDocument.
++   */
++  static bool CountsTowardStrictFirstDoc(nsIURI* aURI);
++
++  /** Call-in from nsDocShell::LoadURI for top-content http(s) document navigations. */
++  static void NoteTopLevelDocumentLoadAttempt(uint64_t aBrowsingContextId,
++                                              nsIURI* aURI);
+ 
+  private:
+   DarkstrDocShellHooks() = delete;
+diff -ruN a/dom/base/DarkstrNavigatorHooks.cpp b/dom/base/DarkstrNavigatorHooks.cpp
+--- a/dom/base/DarkstrNavigatorHooks.cpp
++++ b/dom/base/DarkstrNavigatorHooks.cpp
+@@ -13,6 +13,23 @@
+ 
+ namespace mozilla::dom {
+ 
++namespace {
++
++/** SubsequentNav arm via DocShell phase mirror (0007/0020). Multi-tab limited. */
++bool StrictNextNavArmedMirror() {
++  if (!Preferences::GetBool("darkstr.strictFirstDoc", true)) {
++    return true;
++  }
++  nsAutoCString phase;
++  if (NS_FAILED(Preferences::GetCString("darkstr.persona.docShellPhase", phase)) ||
++      phase.IsEmpty()) {
++    return false;  // unset = first_document parity
++  }
++  return phase.EqualsLiteral("subsequent_nav");
++}
++
++}  // namespace
++
+ bool DarkstrNavigatorHooks::PollutionNativeHooksActive() {
+   if (!Preferences::GetBool("darkstr.nativePersonaHooks", false)) {
+     return false;
+@@ -27,7 +44,7 @@
+ 
+ bool DarkstrNavigatorHooks::TryGetUserAgent(nsAString& aOut) {
+   aOut.Truncate();
+-  if (!PollutionNativeHooksActive()) {
++  if (!PollutionNativeHooksActive() || !StrictNextNavArmedMirror()) {
+     return false;
+   }
+   nsAutoCString ua;
+@@ -41,7 +58,7 @@
+ 
+ bool DarkstrNavigatorHooks::TryGetPlatform(nsAString& aOut) {
+   aOut.Truncate();
+-  if (!PollutionNativeHooksActive()) {
++  if (!PollutionNativeHooksActive() || !StrictNextNavArmedMirror()) {
+     return false;
+   }
+   nsAutoCString platform;
+@@ -55,7 +72,7 @@
+ 
+ bool DarkstrNavigatorHooks::TryGetHardwareConcurrency(uint64_t& aOut) {
+   aOut = 0;
+-  if (!PollutionNativeHooksActive()) {
++  if (!PollutionNativeHooksActive() || !StrictNextNavArmedMirror()) {
+     return false;
+   }
+   int32_t hw = Preferences::GetInt("darkstr.persona.hardwareConcurrency", 0);
+@@ -68,7 +85,7 @@
+ 
+ bool DarkstrNavigatorHooks::TryGetLanguages(nsTArray<nsString>& aOut) {
+   aOut.Clear();
+-  if (!PollutionNativeHooksActive()) {
++  if (!PollutionNativeHooksActive() || !StrictNextNavArmedMirror()) {
+     return false;
+   }
+   nsAutoCString langs;
+diff -ruN a/dom/base/DarkstrNavigatorHooks.h b/dom/base/DarkstrNavigatorHooks.h
+--- a/dom/base/DarkstrNavigatorHooks.h
++++ b/dom/base/DarkstrNavigatorHooks.h
+@@ -15,7 +15,8 @@
+  *   userAgent, platform, hardwareConcurrency, languages
+  *
+  * Reads chrome-mirrored prefs written by DarkstrNativePersona (0006).
+- * Gate: pollution + darkstr.nativePersonaHooks (default false) + !nativeCompatible.
++ * Gate: pollution + darkstr.nativePersonaHooks (default false) + !nativeCompatible
++ * + DocShell SubsequentNav arm when darkstr.strictFirstDoc (0020 / phase mirror).
+  */
+ 
+ #ifndef mozilla_dom_DarkstrNavigatorHooks_h
+diff -ruN a/netwerk/protocol/http/DarkstrNsHttpHooks.cpp b/netwerk/protocol/http/DarkstrNsHttpHooks.cpp
+--- a/netwerk/protocol/http/DarkstrNsHttpHooks.cpp
++++ b/netwerk/protocol/http/DarkstrNsHttpHooks.cpp
+@@ -28,6 +28,23 @@
+ // Storage for UserAgentOverride() return — refreshed each call.
+ static nsCString gDarkstrUaOverride;
+ 
++namespace {
++
++/** SubsequentNav arm via DocShell phase mirror (0007/0020). Multi-tab limited. */
++bool StrictNextNavArmedMirror() {
++  if (!Preferences::GetBool("darkstr.strictFirstDoc", true)) {
++    return true;
++  }
++  nsAutoCString phase;
++  if (NS_FAILED(Preferences::GetCString("darkstr.persona.docShellPhase", phase)) ||
++      phase.IsEmpty()) {
++    return false;
++  }
++  return phase.EqualsLiteral("subsequent_nav");
++}
++
++}  // namespace
++
+ bool DarkstrNsHttpHooks::PollutionNativeHooksActive() {
+   if (!Preferences::GetBool("darkstr.nativePersonaHooks", false)) {
+     return false;
+@@ -68,7 +85,9 @@
+ 
+ const nsCString* DarkstrNsHttpHooks::UserAgentOverride() {
+   gDarkstrUaOverride.Truncate();
+-  if (!PollutionNativeHooksActive()) {
++  // UA follows strict-next-nav (chrome shouldApplyForChannel parity).
++  // CH REMOVE stays pollution+hooks only (chrome 0003 asymmetry).
++  if (!PollutionNativeHooksActive() || !StrictNextNavArmedMirror()) {
+     return nullptr;
+   }
+ 
+diff -ruN a/netwerk/protocol/http/DarkstrNsHttpHooks.h b/netwerk/protocol/http/DarkstrNsHttpHooks.h
+--- a/netwerk/protocol/http/DarkstrNsHttpHooks.h
++++ b/netwerk/protocol/http/DarkstrNsHttpHooks.h
+@@ -12,10 +12,11 @@
+  *
+  * Surfaces (this file):
+  *   1) User-Agent override from chrome-mirrored `darkstr.persona.ua` (or snapshot JSON)
+- *      when pollution + darkstr.nativePersonaHooks (and not nativeCompatible).
+- *   2) Client Hints REMOVE only (never SET) on the request head.
++ *      when pollution + darkstr.nativePersonaHooks + SubsequentNav arm (0020).
++ *   2) Client Hints REMOVE only (never SET) on the request head (pollution+hooks;
++ *      not gated on strict-next-nav — chrome 0003 parity).
+  *
+- * Navigator / DocShell remain chrome-JS SoT (0003 DarkstrNativePersona*) for now.
++ * DocShell phase SoT: 0007; SubsequentNav arm wiring: 0020.
+  */
+ 
+ #ifndef mozilla_net_DarkstrNsHttpHooks_h
+diff -ruN a/docshell/base/nsDocShell.cpp b/docshell/base/nsDocShell.cpp
+--- a/docshell/base/nsDocShell.cpp
++++ b/docshell/base/nsDocShell.cpp
+@@ -726,8 +726,9 @@
+   // darkstr M3-CPP-DOCSHELL: C++ first/subsequent SoT on top-level document
+   // LoadURI (TYPE_DOCUMENT analogue — DocShell navigations are documents).
+-  if (mBrowsingContext && mBrowsingContext->IsTopContent()) {
++  // 0020: only http(s) count toward strict-first-doc (ignore about:blank/newtab).
++  if (mBrowsingContext && mBrowsingContext->IsTopContent() && aLoadState) {
+     DarkstrDocShellHooks::NoteTopLevelDocumentLoadAttempt(
+-        mBrowsingContext->Id());
++        mBrowsingContext->Id(), aLoadState->URI());
+   }
+ 
+   MOZ_ASSERT(aLoadState, "Must have a valid load state!");

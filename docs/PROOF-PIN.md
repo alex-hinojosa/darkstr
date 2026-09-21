@@ -170,7 +170,7 @@ Chrome key names and the activation matrix above remain the pin. M4 first drop s
 | Chaff scheduler | `ChaffSchedulerPlan` gated on `pollution_active` / `allow_persona_chaff`; Quiet/Balanced/Loud parity |
 | Pref | `darkstr.chaosLevel` (internal product; may stay storage longer) |
 | Canvas / Audio / WebGL / workers | `DepthSurface` + seeds from `PersonaSnapshot` via `read_depth_seeds` |
-| DocShell strict-next-nav | `strict_next_nav_armed` (SubsequentNav) — extends M3 notes |
+| DocShell strict-next-nav | `strict_next_nav_armed` (SubsequentNav) — **live `0020`** extends M3 |
 | Native-Compatible site list UI | **Unchanged** this PR — Phase 1 WebExt list; chrome pane = docs/PM only |
 
 See `docs/M4-STATUS.md`, `docs/GECKO-HOOKS.md` §2.2 / §2.5, stub `patches/stubs/0004-darkstr-chaff-depth.patch.stub`. Live Mini tree is for path checks only until a train-pinned patch is Proof-verified.

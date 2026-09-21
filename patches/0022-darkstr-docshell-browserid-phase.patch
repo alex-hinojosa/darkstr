@@ -1,0 +1,362 @@
+# darkstr 0022 — BrowserId counter + read-only chrome phase (Proof XOR fix on b68286f)
+# Train: Firefox FIREFOX_155_0_1_RELEASE / LibreWolf 155.0.1-1
+# Brand: darkstr — not official LibreWolf. No Cloudflare/TLS/JA3 claims.
+# Prerequisite: 0020 + 0021 (http(s)-only FirstDocument) already on tree.
+# Apply: patch -d "$DARKSTR_GECKO_ROOT" -p1 --forward --batch < patches/0022-darkstr-docshell-browserid-phase.patch
+#
+# Fixes:
+# 1) Natural-session poison: chrome navPhaseForChannel fallthrough wrote subsequent_nav
+#    on background HTTP / no-BC; prefs.js could also persist armed. Now READ-ONLY resolve;
+#    only _noteTopLevelDocument / C++ SyncPhaseMirror write. Clear phase prefs on init.
+# 2) Subsequent never arms: counter keyed by BrowsingContext::Id() reset on Fission /
+#    cross-group nav. Now BrowserId (tab-stable) in C++ + chrome Map.
+#
+# Rebuild: allow-subdir docshell/base + toolkit/library + browser/components + install-dist_bin
+#
+
+diff -ruN a/browser/components/DarkstrNativePersona.sys.mjs b/browser/components/DarkstrNativePersona.sys.mjs
+--- a/browser/components/DarkstrNativePersona.sys.mjs
++++ b/browser/components/DarkstrNativePersona.sys.mjs
+@@ -131,6 +131,7 @@
+     }
+     this._inited = true;
+     this._bcTopLoads = new Map();
++    this._resetNavPhaseMirror("init");
+ 
+     this._prefObserver = this._observePref.bind(this);
+     for (const p of [MODE_PREF, NATIVE_PREF, HOOKS_PREF, STRICT_PREF, SNAPSHOT_PREF, SEED_PREF]) {
+@@ -212,6 +213,36 @@
+     }
+   },
+ 
++  /**
++   * Clear persisted phase/armed prefs + chrome Map. Call on init so a prior
++   * Pollution session cannot leave subsequent_nav in prefs.js (Proof XOR).
++   * Does not write privacy.*.
++   */
++  _resetNavPhaseMirror(_reason) {
++    try {
++      if (Services.prefs.prefHasUserValue(DOCSHELL_PHASE_MIRROR_PREF)) {
++        Services.prefs.clearUserPref(DOCSHELL_PHASE_MIRROR_PREF);
++      }
++    } catch (_e) {}
++    try {
++      if (Services.prefs.prefHasUserValue(STRICT_NEXT_NAV_ARMED_PREF)) {
++        Services.prefs.clearUserPref(STRICT_NEXT_NAV_ARMED_PREF);
++      }
++    } catch (_e) {}
++    if (this._bcTopLoads) {
++      this._bcTopLoads.clear();
++    }
++  },
++
++  /** Write phase + armed after a real http(s) top-level count (only writer besides C++). */
++  _syncPhaseMirrorFromCount(n) {
++    const phase = n <= 1 ? "first_document" : "subsequent_nav";
++    try {
++      Services.prefs.setStringPref(DOCSHELL_PHASE_MIRROR_PREF, phase);
++    } catch (_e) {}
++    this._syncStrictNextNavArmedDiag(phase);
++  },
++
+   _noteTopLevelDocument(channel) {
+     try {
+       // Only http(s) content docs count — about:blank / about:newtab / chrome
+@@ -240,9 +271,14 @@
+       if (!bc) {
+         return null;
+       }
+-      const id = bc.id;
+-      const n = (this._bcTopLoads.get(id) || 0) + 1;
+-      this._bcTopLoads.set(id, n);
++      // BrowserId is tab-stable across Fission / cross-group nav (BC id is not).
++      const key = bc.browserId || bc.id;
++      if (!key) {
++        return null;
++      }
++      const n = (this._bcTopLoads.get(key) || 0) + 1;
++      this._bcTopLoads.set(key, n);
++      this._syncPhaseMirrorFromCount(n);
+       return n;
+     } catch (_e) {
+       return null;
+@@ -519,44 +555,40 @@
+    * DocShellNavPhase for a channel's browsing context.
+    * First top-level load → FirstDocument; else SubsequentNav.
+    */
++  /**
++   * Resolve DocShellNavPhase for a channel. READ-ONLY — must not write phase
++   * prefs (fallthrough used to poison subsequent_nav on background HTTP /
++   * about:blank Proof sessions). Only _noteTopLevelDocument / C++ SyncPhaseMirror
++   * write the mirror.
++   */
+   navPhaseForChannel(channel) {
+     try {
+-      const bc = channel.loadInfo?.browsingContext?.top;
+-      // Prefer C++ SoT mirror (DarkstrDocShellHooks writes on top LoadURI).
+-      try {
+-        const plan = this.getPlan();
+-        if (plan?.nativeHooks && plan?.pollutionActive) {
+-          const cppPhase = Services.prefs.getStringPref(
+-            DOCSHELL_PHASE_MIRROR_PREF,
+-            ""
+-          );
+-          if (
+-            cppPhase === "first_document" ||
+-            cppPhase === "subsequent_nav"
+-          ) {
+-            return cppPhase;
+-          }
++      const plan = this.getPlan();
++      if (plan?.nativeHooks && plan?.pollutionActive) {
++        const cppPhase = Services.prefs.getStringPref(
++          DOCSHELL_PHASE_MIRROR_PREF,
++          ""
++        );
++        if (
++          cppPhase === "first_document" ||
++          cppPhase === "subsequent_nav"
++        ) {
++          return cppPhase;
+         }
+-      } catch (_e) {}
+-      // Fallback: chrome Map (WebExt-only / pre-C++ / mirror race).
++      }
++      const bc = channel.loadInfo?.browsingContext?.top;
+       if (bc && this._bcTopLoads) {
+-        const n = this._bcTopLoads.get(bc.id) || 0;
+-        if (n <= 1) {
+-          try {
+-            Services.prefs.setStringPref(
+-              DOCSHELL_PHASE_MIRROR_PREF,
+-              "first_document"
+-            );
+-          } catch (_e) {}
+-          return "first_document";
++        const key = bc.browserId || bc.id;
++        const n = this._bcTopLoads.get(key) || 0;
++        if (n > 1) {
++          return "subsequent_nav";
+         }
++        // n==0 or n==1 → first_document (strict-first default; do not write prefs)
++        return "first_document";
+       }
+     } catch (_e) {}
+-    try {
+-      Services.prefs.setStringPref(DOCSHELL_PHASE_MIRROR_PREF, "subsequent_nav");
+-    } catch (_e) {}
+-    this._syncStrictNextNavArmedDiag("subsequent_nav");
+-    return "subsequent_nav";
++    // Unknown → first_document under strict-first (do NOT write subsequent_nav).
++    return "first_document";
+   },
+ 
+ 
+@@ -588,43 +620,39 @@
+     if (!plan.applyNativeBase || !plan.snapshot) {
+       return false;
+     }
+-    const phase = this.navPhaseForChannel(channel);
+-    this._syncStrictNextNavArmedDiag(phase);
+-    return this.strictNextNavArmed(phase);
++    // Read-only phase resolve — diag prefs written only by count paths.
++    return this.strictNextNavArmed(this.navPhaseForChannel(channel));
+   },
+ 
+-  /** Snapshot for JSWindowActor child (null when idle / first-doc). */
++  /** Snapshot for JSWindowActor child (null when idle / first-doc). READ-ONLY. */
+   snapshotForBrowsingContext(bc) {
+     const plan = this.getPlan();
+     if (!plan.applyNativeBase || !plan.snapshot) {
+       return null;
+     }
+     try {
+-      // Prefer C++ DocShell phase mirror (0007/0020 SubsequentNav arm).
+       if (plan.strictFirstDoc) {
+         const cppPhase = Services.prefs.getStringPref(
+           DOCSHELL_PHASE_MIRROR_PREF,
+           ""
+         );
+-        if (cppPhase === "first_document" || cppPhase === "") {
+-          return null;
+-        }
+         if (cppPhase === "subsequent_nav") {
+-          this._syncStrictNextNavArmedDiag("subsequent_nav");
+           return plan.snapshot;
+         }
+-      }
+-      // Fallback: chrome Map when mirror unset / hooks race.
+-      const top = bc?.top;
+-      if (plan.strictFirstDoc && top && this._bcTopLoads) {
+-        const n = this._bcTopLoads.get(top.id) || 0;
+-        if (n <= 1) {
+-          this._syncStrictNextNavArmedDiag("first_document");
++        if (cppPhase === "first_document" || cppPhase === "") {
++          // Fallback Map when C++ mirror unset / race (BrowserId key).
++          const top = bc?.top;
++          if (top && this._bcTopLoads) {
++            const key = top.browserId || top.id;
++            const n = this._bcTopLoads.get(key) || 0;
++            if (n > 1) {
++              return plan.snapshot;
++            }
++          }
+           return null;
+         }
+       }
+     } catch (_e) {}
+-    this._syncStrictNextNavArmedDiag("subsequent_nav");
+     return plan.snapshot;
+   },
+ 
+diff -ruN a/docshell/base/DarkstrDocShellHooks.cpp b/docshell/base/DarkstrDocShellHooks.cpp
+--- a/docshell/base/DarkstrDocShellHooks.cpp
++++ b/docshell/base/DarkstrDocShellHooks.cpp
+@@ -16,7 +16,7 @@
+ namespace {
+ 
+ nsTHashMap<nsUint64HashKey, uint32_t>& TopLoads() {
+-  // Main-thread DocShell LoadURI path only (155 train).
++  // Keyed by BrowserId (tab-stable). Main-thread DocShell LoadURI path (155).
+   static nsTHashMap<nsUint64HashKey, uint32_t> sTopLoads;
+   return sTopLoads;
+ }
+@@ -67,35 +67,35 @@
+ }
+ 
+ DarkstrDocShellHooks::NavPhase DarkstrDocShellHooks::CurrentPhase(
+-    uint64_t aBrowsingContextId) {
++    uint64_t aBrowserId) {
+   if (!PollutionNativeHooksActive()) {
+     return NavPhase::SubsequentNav;
+   }
+-  if (aBrowsingContextId == 0) {
++  if (aBrowserId == 0) {
+     return PhaseFromChromeMirror();
+   }
+   uint32_t n = 0;
+-  if (!TopLoads().Get(aBrowsingContextId, &n) || n == 0) {
+-    // Unknown / not-yet-noted BC → FirstDocument (chrome Map n==0 parity).
++  if (!TopLoads().Get(aBrowserId, &n) || n == 0) {
++    // Unknown / not-yet-noted tab → FirstDocument (chrome Map n==0 parity).
+     return NavPhase::FirstDocument;
+   }
+   return n <= 1 ? NavPhase::FirstDocument : NavPhase::SubsequentNav;
+ }
+ 
+-bool DarkstrDocShellHooks::ShouldApplyPersona(uint64_t aBrowsingContextId) {
++bool DarkstrDocShellHooks::ShouldApplyPersona(uint64_t aBrowserId) {
+   if (!PollutionNativeHooksActive()) {
+     return false;
+   }
+   if (Preferences::GetBool("darkstr.strictFirstDoc", true) &&
+-      CurrentPhase(aBrowsingContextId) == NavPhase::FirstDocument) {
++      CurrentPhase(aBrowserId) == NavPhase::FirstDocument) {
+     return false;
+   }
+   return true;
+ }
+ 
+-bool DarkstrDocShellHooks::StrictNextNavArmed(uint64_t aBrowsingContextId) {
++bool DarkstrDocShellHooks::StrictNextNavArmed(uint64_t aBrowserId) {
+   // duppel_persona::strict_next_nav_armed — SubsequentNav arm when strictFirstDoc.
+-  return ShouldApplyPersona(aBrowsingContextId);
++  return ShouldApplyPersona(aBrowserId);
+ }
+ 
+ bool DarkstrDocShellHooks::CountsTowardStrictFirstDoc(nsIURI* aURI) {
+@@ -112,17 +112,17 @@
+ }
+ 
+ void DarkstrDocShellHooks::NoteTopLevelDocumentLoadAttempt(
+-    uint64_t aBrowsingContextId, nsIURI* aURI) {
++    uint64_t aBrowserId, nsIURI* aURI) {
+   if (!PollutionNativeHooksActive()) {
+     return;
+   }
+-  if (aBrowsingContextId == 0 || !CountsTowardStrictFirstDoc(aURI)) {
++  if (aBrowserId == 0 || !CountsTowardStrictFirstDoc(aURI)) {
+     return;
+   }
+   uint32_t n = 0;
+-  (void)TopLoads().Get(aBrowsingContextId, &n);
++  (void)TopLoads().Get(aBrowserId, &n);
+   n += 1;
+-  TopLoads().InsertOrUpdate(aBrowsingContextId, n);
++  TopLoads().InsertOrUpdate(aBrowserId, n);
+   SyncPhaseMirror(n);
+ }
+ 
+diff -ruN a/docshell/base/DarkstrDocShellHooks.h b/docshell/base/DarkstrDocShellHooks.h
+--- a/docshell/base/DarkstrDocShellHooks.h
++++ b/docshell/base/DarkstrDocShellHooks.h
+@@ -20,6 +20,10 @@
+  *
+  * Only http(s) top-level loads count (CountsTowardStrictFirstDoc) — about:blank,
+  * about:newtab, chrome:, resource:, etc. must not burn FirstDocument.
++ *
++ * Counter key must be BrowserId (stable across Fission / cross-group nav), NOT
++ * BrowsingContext::Id() which is replaced on many navigations (Proof: second
++ * https stayed first_document when keyed by BC id).
+  */
+ 
+ #ifndef mozilla_DarkstrDocShellHooks_h
+@@ -37,20 +41,20 @@
+ 
+   static bool PollutionNativeHooksActive();
+ 
+-  /** C++ SoT phase for a BrowsingContext id. */
+-  static NavPhase CurrentPhase(uint64_t aBrowsingContextId);
++  /** C++ SoT phase for a BrowserId (tab-stable). */
++  static NavPhase CurrentPhase(uint64_t aBrowserId);
+ 
+   /** Pref mirror fallback (compat); prefer CurrentPhase(bcId). */
+   static NavPhase PhaseFromChromeMirror();
+ 
+   /** true when persona surfaces should apply (respects strictFirstDoc). */
+-  static bool ShouldApplyPersona(uint64_t aBrowsingContextId);
++  static bool ShouldApplyPersona(uint64_t aBrowserId);
+ 
+   /**
+    * Alias of ShouldApplyPersona — M4/Phase-3 strict-next-nav arm
+    * (duppel_persona::strict_next_nav_armed). Prefer this name at call sites.
+    */
+-  static bool StrictNextNavArmed(uint64_t aBrowsingContextId);
++  static bool StrictNextNavArmed(uint64_t aBrowserId);
+ 
+   /**
+    * true for http / https only. about:blank, about:newtab, chrome:, resource:,
+@@ -58,9 +62,8 @@
+    */
+   static bool CountsTowardStrictFirstDoc(nsIURI* aURI);
+ 
+-  /** Call-in from nsDocShell::LoadURI for top-content http(s) document navigations. */
+-  static void NoteTopLevelDocumentLoadAttempt(uint64_t aBrowsingContextId,
+-                                              nsIURI* aURI);
++  /** Call-in from nsDocShell::LoadURI; aBrowserId = BrowsingContext::BrowserId(). */
++  static void NoteTopLevelDocumentLoadAttempt(uint64_t aBrowserId, nsIURI* aURI);
+ 
+  private:
+   DarkstrDocShellHooks() = delete;
+diff -ruN a/docshell/base/nsDocShell.cpp b/docshell/base/nsDocShell.cpp
+--- a/docshell/base/nsDocShell.cpp
++++ b/docshell/base/nsDocShell.cpp
+@@ -1,10 +1,13 @@
+ placeholder
+-  // darkstr M3-CPP-DOCSHELL: C++ first/subsequent SoT on top-level document
+-  // LoadURI (TYPE_DOCUMENT analogue — DocShell navigations are documents).
+-  // 0020: only http(s) count toward strict-first-doc (ignore about:blank/newtab).
++  // darkstr M3-CPP-DOCSHELL / 0020–0022: http(s)-only FirstDocument count,
++  // keyed by BrowserId (stable across Fission / cross-group nav).
+   if (mBrowsingContext && mBrowsingContext->IsTopContent() && aLoadState) {
+-    DarkstrDocShellHooks::NoteTopLevelDocumentLoadAttempt(
+-        mBrowsingContext->Id(), aLoadState->URI());
++    uint64_t browserId = mBrowsingContext->BrowserId();
++    if (!browserId) {
++      browserId = mBrowsingContext->Id();
++    }
++    DarkstrDocShellHooks::NoteTopLevelDocumentLoadAttempt(browserId,
++                                                          aLoadState->URI());
+   }
+ 
+   MOZ_ASSERT(aLoadState, "Must have a valid load state!");

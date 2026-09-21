@@ -293,10 +293,10 @@ Still **no** Mozilla/LibreWolf vendor:
 
 - [x] `duppel-chaff` scheduler control plane behind prefs; Quiet/Balanced/Loud parity (`M4-STATUS.md`, GECKO-HOOKS §2.2)
 - [x] Canvas/Audio/WebGL + worker **enums/APIs/tests**; seeds from `PersonaSnapshot` (GECKO-HOOKS §2.5)
-- [x] DocShell strict-next-nav notes extended (`strict_next_nav_armed`; live patch still not claimed)
+- [x] DocShell strict-next-nav notes extended (`strict_next_nav_armed`); live arm → Phase 3 `0020`
 - [x] Native-Compatible site list UI: **docs / PM notes only** this drop (Phase 1 WebExt list remains; no UI string churn)
 - [x] Track D: one-paragraph quarterly Servo/Ladybird note in `M4-STATUS.md` — no eng investment
-- [x] Live native **chaff timer** on private fork (`0016` / `PHASE-3-STATUS.md`) — canvas / WebGL / Audio / worker still open
+- [x] Live native **chaff timer** / depth / workers / DocShell SubsequentNav on private fork (`0016`–`0020` / `PHASE-3-STATUS.md`)
 - [ ] Chrome privacy-pane Native-Compatible site list UI (when PM schedules; not this control-plane PR)
 
 ### Exit criteria for “Phase 2 done”

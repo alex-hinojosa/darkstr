@@ -1,0 +1,116 @@
+# darkstr 0021 / 0020 upgrade — http(s)-only FirstDocument counting (Proof XOR fix on 5550daa)
+# Apply when StrictNextNavArmed present but CountsTowardStrictFirstDoc missing (Mini already on 0020v1).
+# patch -d "$DARKSTR_GECKO_ROOT" -p1 --forward --batch < patches/0021-darkstr-docshell-http-scheme-count.patch
+#
+
+diff -ruN a/browser/components/DarkstrNativePersona.sys.mjs b/browser/components/DarkstrNativePersona.sys.mjs
+--- a/browser/components/DarkstrNativePersona.sys.mjs
++++ b/browser/components/DarkstrNativePersona.sys.mjs
+@@ -214,6 +214,13 @@
+ 
+   _noteTopLevelDocument(channel) {
+     try {
++      // Only http(s) content docs count — about:blank / about:newtab / chrome
++      // must not burn FirstDocument (Proof XOR / 0020 http-scheme filter).
++      const uri = channel.URI || channel.originalURI;
++      const scheme = String(uri?.scheme || "").toLowerCase();
++      if (scheme !== "http" && scheme !== "https") {
++        return null;
++      }
+       const li = channel.loadInfo;
+       if (!li) {
+         return null;
+diff -ruN a/docshell/base/DarkstrDocShellHooks.cpp b/docshell/base/DarkstrDocShellHooks.cpp
+--- a/docshell/base/DarkstrDocShellHooks.cpp
++++ b/docshell/base/DarkstrDocShellHooks.cpp
+@@ -7,6 +7,7 @@
+ #include "DarkstrDocShellHooks.h"
+ 
+ #include "mozilla/Preferences.h"
++#include "nsIURI.h"
+ #include "nsString.h"
+ #include "nsTHashMap.h"
+ 
+@@ -97,12 +98,25 @@
+   return ShouldApplyPersona(aBrowsingContextId);
+ }
+ 
++bool DarkstrDocShellHooks::CountsTowardStrictFirstDoc(nsIURI* aURI) {
++  if (!aURI) {
++    return false;
++  }
++  nsAutoCString scheme;
++  if (NS_FAILED(aURI->GetScheme(scheme))) {
++    return false;
++  }
++  // Proof XOR: about:blank / about:newtab / chrome must not burn FirstDocument
++  // so the first intentional http(s) content nav stays native under strictFirstDoc.
++  return scheme.EqualsLiteral("http") || scheme.EqualsLiteral("https");
++}
++
+ void DarkstrDocShellHooks::NoteTopLevelDocumentLoadAttempt(
+-    uint64_t aBrowsingContextId) {
++    uint64_t aBrowsingContextId, nsIURI* aURI) {
+   if (!PollutionNativeHooksActive()) {
+     return;
+   }
+-  if (aBrowsingContextId == 0) {
++  if (aBrowsingContextId == 0 || !CountsTowardStrictFirstDoc(aURI)) {
+     return;
+   }
+   uint32_t n = 0;
+diff -ruN a/docshell/base/DarkstrDocShellHooks.h b/docshell/base/DarkstrDocShellHooks.h
+--- a/docshell/base/DarkstrDocShellHooks.h
++++ b/docshell/base/DarkstrDocShellHooks.h
+@@ -17,6 +17,9 @@
+  * Phase 3 / 0020: StrictNextNavArmed aliases ShouldApplyPersona
+  * (duppel_persona::strict_next_nav_armed). First doc stays native when
+  * darkstr.strictFirstDoc; persona surfaces arm on SubsequentNav.
++ *
++ * Only http(s) top-level loads count (CountsTowardStrictFirstDoc) — about:blank,
++ * about:newtab, chrome:, resource:, etc. must not burn FirstDocument.
+  */
+ 
+ #ifndef mozilla_DarkstrDocShellHooks_h
+@@ -24,6 +27,8 @@
+ 
+ #include <stdint.h>
+ 
++class nsIURI;
++
+ namespace mozilla {
+ 
+ class DarkstrDocShellHooks final {
+@@ -47,8 +52,15 @@
+    */
+   static bool StrictNextNavArmed(uint64_t aBrowsingContextId);
+ 
+-  /** Call-in from nsDocShell::LoadURI for top-content document navigations. */
+-  static void NoteTopLevelDocumentLoadAttempt(uint64_t aBrowsingContextId);
++  /**
++   * true for http / https only. about:blank, about:newtab, chrome:, resource:,
++   * blob:, data:, etc. return false so they do not consume FirstDocument.
++   */
++  static bool CountsTowardStrictFirstDoc(nsIURI* aURI);
++
++  /** Call-in from nsDocShell::LoadURI for top-content http(s) document navigations. */
++  static void NoteTopLevelDocumentLoadAttempt(uint64_t aBrowsingContextId,
++                                              nsIURI* aURI);
+ 
+  private:
+   DarkstrDocShellHooks() = delete;
+diff -ruN a/docshell/base/nsDocShell.cpp b/docshell/base/nsDocShell.cpp
+--- a/docshell/base/nsDocShell.cpp
++++ b/docshell/base/nsDocShell.cpp
+@@ -726,8 +726,9 @@
+   // darkstr M3-CPP-DOCSHELL: C++ first/subsequent SoT on top-level document
+   // LoadURI (TYPE_DOCUMENT analogue — DocShell navigations are documents).
+-  if (mBrowsingContext && mBrowsingContext->IsTopContent()) {
++  // 0020: only http(s) count toward strict-first-doc (ignore about:blank/newtab).
++  if (mBrowsingContext && mBrowsingContext->IsTopContent() && aLoadState) {
+     DarkstrDocShellHooks::NoteTopLevelDocumentLoadAttempt(
+-        mBrowsingContext->Id());
++        mBrowsingContext->Id(), aLoadState->URI());
+   }
+ 
+   MOZ_ASSERT(aLoadState, "Must have a valid load state!");
