@@ -44,9 +44,19 @@
 #   → Gates unchanged (pollution_active + nativePersonaHooks, default-off)
 #   → See docs/PHASE-3-STATUS.md / docs/PHASE-3-DEPTH-0023-MINI-APPLY.sh
 #
-# Remaining intent from this stub (NOT in 0016–0023 — later pins):
+# Phase 3 optional richer chaff beacon bodies (2026-09-21): **landed** as
+#   patches/0024-darkstr-chaff-richer-beacon-bodies.patch
+#   → Extends DarkstrChaffScheduler: Phase 1 poisoner.js session clusters +
+#     GA Universal / GA4 / Meta PageView query payloads (ordinary HTTP only)
+#   → Honest non-claims: no CF/TLS/JA3; WebExt may remain richer (ISOLATED
+#     sendBeacon + DOM ad-container chaff + interaction-coupled bridge fire)
+#   → Gates unchanged (pollution_active + nativePersonaHooks, default-off)
+#   → See docs/PHASE-3-STATUS.md / docs/PHASE-3-CHAFF-0024-MINI-APPLY.sh
+#
+# Remaining intent from this stub (NOT in 0016–0024 — later pins):
 #   ServiceWorker / Worklets → not claimed (no honest injection path yet)
 #   Full WebGL ext/precision/fail-closed spoof → WebExt path remains richer
+#   ISOLATED-world sendBeacon / DOM chaff native parity → WebExt remains richer
 #
 # Authoritative enums (must match unit tests):
 #   duppel_chaff::ChaffSchedulerPlan / ChaosLevel / plan_fire
