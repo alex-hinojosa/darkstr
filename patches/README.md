@@ -211,7 +211,7 @@ Real unified diff [`0019-darkstr-phase3-soft-residuals.patch`](0019-darkstr-phas
 
 
 
-## Phase 3 DocShell SubsequentNav (0020 / 0021)
+## Phase 3 DocShell SubsequentNav (0020 / 0021 / 0022)
 
 Real unified diff [`0020-darkstr-docshell-strict-next-nav.patch`](0020-darkstr-docshell-strict-next-nav.patch) against post-0007 (+ Phase 3 chrome) 155.0.1-1:
 
@@ -220,5 +220,6 @@ Real unified diff [`0020-darkstr-docshell-strict-next-nav.patch`](0020-darkstr-d
 - C++ Navigator + nsHttp UA gated on SubsequentNav when `darkstr.strictFirstDoc` (CH REMOVE stays pollution+hooks)
 - Chrome NativePersona / Depth / Worker per-BC delivery; diagnostic `darkstr.docshell.strictNextNavArmed`
 - Gates default-off (`pollution_active` + `nativePersonaHooks`); no `privacy.*` from this drop
-- Mini already on 0020v1 (tip `5550daa`): apply [`0021-darkstr-docshell-http-scheme-count.patch`](0021-darkstr-docshell-http-scheme-count.patch) via Mini helper
+- Mini already on 0020v1: apply `0021` via Mini helper; after `b68286f`: apply `0022` (BrowserId + read-only phase)
+- `0022`: tab-stable BrowserId counter; chrome `navPhaseForChannel` no longer writes subsequent_nav on fallthrough; clear phase prefs on init
 - Apply + rebuild: allow-subdir `docshell/base dom/base netwerk/protocol/http` + **`toolkit/library`** XUL relink + chrome + **`make install-dist_bin`** (see `docs/PHASE-3-DOCSHELL-0020-MINI-APPLY.sh`)

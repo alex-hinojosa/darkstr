@@ -11,6 +11,7 @@ if [[ ! -d "${REPO}" ]]; then
 fi
 PATCH="${REPO}/patches/0020-darkstr-docshell-strict-next-nav.patch"
 UPGRADE="${REPO}/patches/0021-darkstr-docshell-http-scheme-count.patch"
+FIX022="${REPO}/patches/0022-darkstr-docshell-browserid-phase.patch"
 APPLY="${REPO}/patches/scripts/apply-darkstr-patches.sh"
 echo "DARKSTR_GECKO_ROOT=${DARKSTR_GECKO_ROOT}"
 echo "REPO=${REPO}"
@@ -21,20 +22,26 @@ DS_H="${DARKSTR_GECKO_ROOT}/docshell/base/DarkstrDocShellHooks.h"
 DS_C="${DARKSTR_GECKO_ROOT}/docshell/base/DarkstrDocShellHooks.cpp"
 NP="${DARKSTR_GECKO_ROOT}/browser/components/DarkstrNativePersona.sys.mjs"
 
-if grep -Fq 'CountsTowardStrictFirstDoc' "${DS_H}" \
-  && grep -Fq 'CountsTowardStrictFirstDoc' "${DS_C}" \
-  && grep -Fq 'aLoadState->URI()' "${DARKSTR_GECKO_ROOT}/docshell/base/nsDocShell.cpp" \
-  && grep -Fq 'scheme !== "http"' "${NP}" \
-  && grep -Fq 'StrictNextNavArmedMirror' "${DARKSTR_GECKO_ROOT}/dom/base/DarkstrNavigatorHooks.cpp" \
-  && grep -Fq 'nextNavOk' "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrWorkerHooks.sys.mjs"; then
-  echo "0020 http-scheme + SubsequentNav markers already present — skip patch apply"
-elif grep -Fq 'StrictNextNavArmed' "${DS_H}" \
-  && [[ -f "${UPGRADE}" ]]; then
-  echo "0020v1 present — apply http-scheme upgrade (Proof XOR fix)"
-  patch -d "${DARKSTR_GECKO_ROOT}" -p1 --forward --batch < "${UPGRADE}"
+if grep -Fq 'BrowserId()' "${DARKSTR_GECKO_ROOT}/docshell/base/nsDocShell.cpp" \
+  && grep -Fq '_resetNavPhaseMirror' "${NP}" \
+  && grep -Fq 'READ-ONLY' "${NP}" \
+  && grep -Fq 'CountsTowardStrictFirstDoc' "${DS_H}" \
+  && grep -Fq 'scheme !== "http"' "${NP}"; then
+  echo "0022 BrowserId + read-only phase markers already present — skip patch apply"
 else
-  echo "Applying full 0020 (SubsequentNav + http-scheme filter)"
-  patch -d "${DARKSTR_GECKO_ROOT}" -p1 --forward --batch < "${PATCH}"
+  if ! grep -Fq 'CountsTowardStrictFirstDoc' "${DS_H}"; then
+    if grep -Fq 'StrictNextNavArmed' "${DS_H}" && [[ -f "${UPGRADE}" ]]; then
+      echo "0020v1 present — apply http-scheme upgrade 0021"
+      patch -d "${DARKSTR_GECKO_ROOT}" -p1 --forward --batch < "${UPGRADE}"
+    else
+      echo "Applying full 0020 (SubsequentNav + http-scheme filter)"
+      patch -d "${DARKSTR_GECKO_ROOT}" -p1 --forward --batch < "${PATCH}"
+    fi
+  fi
+  if [[ -f "${FIX022}" ]] && ! grep -Fq 'BrowserId()' "${DARKSTR_GECKO_ROOT}/docshell/base/nsDocShell.cpp"; then
+    echo "Applying 0022 BrowserId + read-only chrome phase (Proof XOR fix)"
+    patch -d "${DARKSTR_GECKO_ROOT}" -p1 --forward --batch < "${FIX022}"
+  fi
 fi
 rm -f "${DARKSTR_GECKO_ROOT}/browser/components/"*.rej \
   "${DARKSTR_GECKO_ROOT}/docshell/base/"*.rej \
@@ -43,8 +50,12 @@ rm -f "${DARKSTR_GECKO_ROOT}/browser/components/"*.rej \
 
 grep -Fq 'CountsTowardStrictFirstDoc' "${DS_H}"
 grep -Fq 'CountsTowardStrictFirstDoc' "${DS_C}"
+grep -Fq 'BrowserId()' "${DARKSTR_GECKO_ROOT}/docshell/base/nsDocShell.cpp"
 grep -Fq 'aLoadState->URI()' "${DARKSTR_GECKO_ROOT}/docshell/base/nsDocShell.cpp"
 grep -Fq 'scheme !== "http"' "${NP}"
+grep -Fq '_resetNavPhaseMirror' "${NP}"
+grep -Fq 'READ-ONLY' "${NP}"
+grep -Fq 'browserId' "${NP}"
 grep -Fq 'StrictNextNavArmed' "${DS_H}"
 grep -Fq 'darkstr.docshell.strictNextNavArmed' "${DS_C}"
 grep -Fq 'StrictNextNavArmedMirror' "${DARKSTR_GECKO_ROOT}/dom/base/DarkstrNavigatorHooks.cpp"
@@ -82,7 +93,7 @@ for mod in \
     fi
   fi
 done
-echo "Markers: CountsTowardStrictFirstDoc + StrictNextNavArmed + http(s)-only FirstDocument."
-echo "XOR: Pollution+hooks+strictFirstDoc → first http(s) native (about:blank ignored);"
-echo "     subsequent http(s) → persona. Homogeneous/hooks-off → idle. No privacy.*."
+echo "Markers: BrowserId + read-only phase + CountsTowardStrictFirstDoc + StrictNextNavArmed."
+echo "XOR: blank unarmed → first https idle (first_document/UA155) → second https armed (UA140)."
+echo "Homogeneous/hooks-off → idle. No privacy.*. Do not clear prefs manually for Proof."
 echo "Hooks remain default-off. Mini apply from this helper; Proof XOR = parent/operator."

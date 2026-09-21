@@ -167,6 +167,26 @@ Hard FAIL: Pollution+hooks+strictFirstDoc never showed first-nav holdback. Pref 
 
 **Executor (Grok Linux box):** Mini apply + `mach build` = **NOT RUN** (no Mini SSH). Compose dry-run full + upgrade verified.
 
+### Proof XOR on tip `b68286f` — FAIL → BrowserId + read-only phase (0022)
+
+Hard FAIL again: natural Pollution+hooks+strictFirstDoc still had `subsequent_nav`/`armed=true` on about:blank; first https UA 140. Diagnostic clear-prefs showed http(s) filter OK for **first** https, but **second** https stayed `first_document`/UA 155.
+
+Root causes:
+1. Chrome `navPhaseForChannel` **fallthrough wrote `subsequent_nav`** on background HTTP / no-BC (and prefs.js could persist). Fix: phase resolve is **READ-ONLY**; only count paths write; clear phase prefs on `init`.
+2. Counter keyed by **BrowsingContext::Id()** which resets on Fission/cross-group nav → every https looked like first. Fix: key by **BrowserId** (tab-stable) in C++ + chrome Map.
+
+Patch: `patches/0022-darkstr-docshell-browserid-phase.patch`.
+
+### XOR expectations (Proof) — 0022
+
+| Step | Expect |
+|------|--------|
+| about:blank (natural, no pref clear) | phase unset or `first_document`; `strictNextNavArmed` unset/false; stock UA |
+| First https | `first_document`; armed=false; UA 155 (stock) |
+| Second https | `subsequent_nav`; armed=true; persona UA (e.g. 140) |
+| Homogeneous / hooks off | Idle |
+
+
 ## Next
 
 **Pins 1–3 + soft residuals 0019 + DocShell SubsequentNav 0020 on train (PR open).** Remaining optional:
@@ -212,5 +232,6 @@ WorkerHooks. Helper now force-applies those hunks and fails closed if missing.
 - [x] CH REMOVE not regresssed (still pollution+hooks; not strict-next gated)
 - [x] Patch id `0020` + http-scheme upgrade; stub `0004` points at it
 - [x] Docs: PHASE-3-STATUS + M4 Next + GECKO-HOOKS §2.4 + apply markers + Mini helper
-- [ ] Mini apply upgrade + allow-subdir C++/toolkit/library + chrome + install-dist_bin
-- [ ] Proof XOR: first http(s) idle (`first_document` / armed=false / stock UA); subsequent armed
+- [x] 0022: BrowserId tab-stable counter; chrome phase READ-ONLY; clear phase on init
+- [ ] Mini apply 0022 + allow-subdir C++/toolkit/library + chrome + install-dist_bin
+- [ ] Proof XOR natural: blank unarmed → first https idle → second https armed (no pref surgery)

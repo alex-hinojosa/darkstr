@@ -126,7 +126,7 @@ Does **not** ship as user-facing UI. Does **not** reimplement CreepJS.
 |---------|------------|------|--------|
 | First document vs next nav | Top-level document LoadURI count (C++) + chrome fallback | M3 / M3-CPP-NAV / M3-CPP-DOCSHELL | **C++ SoT** in `0007` `DarkstrDocShellHooks` when hooks on; chrome Map/`0003` fallback; `0006` stub superseded |
 | Pref | `darkstr.strictFirstDoc` | M1+ chrome defaults | Semantics unchanged from Proof pin |
-| SubsequentNav arm | `StrictNextNavArmed` + phase mirror gates Navigator/nsHttp UA + chrome Depth/Worker delivery | Phase 3 / **`0020`** | **Live** in [`../patches/0020-darkstr-docshell-strict-next-nav.patch`](../patches/0020-darkstr-docshell-strict-next-nav.patch); **http(s)-only** FirstDocument count (`CountsTowardStrictFirstDoc`); diagnostic `darkstr.docshell.strictNextNavArmed` |
+| SubsequentNav arm | `StrictNextNavArmed` + phase mirror gates Navigator/nsHttp UA + chrome Depth/Worker delivery | Phase 3 / **`0020`–`0022`** | **Live** `0020`+`0021` http(s)-only + **`0022` BrowserId** (tab-stable) + read-only chrome phase (no fallthrough poison); diagnostic `darkstr.docshell.strictNextNavArmed` |
 
 M4 named **strict-next-nav** (`duppel_persona::strict_next_nav_armed`). Live arm: `0020` wires existing `ShouldApplyPersona` into C++ Navigator + nsHttp UA and chrome per-BC delivery (default-off). Until `darkstr.nativePersonaHooks` is flipped on a fork build, WebExt tab-scoped DNR + MAIN inject remain the Phase 1 path (`WebExtMainInjectPolicy::AllowFallback`).
 
