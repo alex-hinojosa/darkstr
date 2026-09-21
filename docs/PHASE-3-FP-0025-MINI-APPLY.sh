@@ -42,9 +42,9 @@ grep -Fq 'Pulse primary' "${COMP}/DarkstrNativePersonaParent.sys.mjs"
 grep -Fq 'stale string value' "${COMP}/DarkstrNativePersona.sys.mjs"
 grep -Fq 'persona default 8' "${DARKSTR_GECKO_ROOT}/dom/base/DarkstrNavigatorHooks.cpp"
 
-if [[ -f "${APPLY}" ]]; then
-  bash "${APPLY}" --require-root
-fi
+# Do NOT run full apply-darkstr-patches here: older DocShell 0007 fails on the
+# already-evolved 0020–0022 tree (same lesson as 0023 helper). This helper only
+# applies 0025, then builds.
 
 cd "${DARKSTR_GECKO_ROOT}"
 # Chrome JS + C++ Navigator hooks
