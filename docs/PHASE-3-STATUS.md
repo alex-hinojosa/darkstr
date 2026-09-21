@@ -1,9 +1,10 @@
-# Phase 3 status — pins 1–3 + soft residuals (0019) + DocShell (0020–0022) + WebGL/Offscreen (0023) + richer chaff beacons (0024)
+# Phase 3 status — packaging gate closed (0016–0024 merged) + soft residuals
 
 **Date:** 2026-09-21 (CDT)  
 **Owner:** Builder  
 **Audience:** Meridian / Proof / Product Manager skim  
 **Brand:** darkstr — not official LibreWolf. Pollution browser, not Cloudflare bypass.
+**Status:** **Packaging gate CLOSED.** Phase 3 main covers `0016`–`0024`; PR #50 / patch `0024` merged as `4c22b29`.
 
 ## Goal (this pin)
 
@@ -100,7 +101,6 @@ Helper: [`PHASE-3-WORKER-0018-MINI-APPLY.sh`](PHASE-3-WORKER-0018-MINI-APPLY.sh)
 ## Explicit non-claims
 
 - Approach A (`gkrust` path dependency)
-- Fresh `./mach package` / DMG
 - Hooks / depth / chaff / worker **default-on**
 - Cloudflare / TLS / JA3 bypass claims
 - ServiceWorker / AudioWorklet / PaintWorklet injection
@@ -192,7 +192,7 @@ Patch: `patches/0022-darkstr-docshell-browserid-phase.patch`.
 
 | Deliverable | Status |
 |-------------|--------|
-| `patches/0023-darkstr-depth-webgl-caps-offscreencanvas.patch` | **New** — extends `DarkstrDepthHooksChild` (post-0017/0019) |
+| `patches/0023-darkstr-depth-webgl-caps-offscreencanvas.patch` | **Merged** PR #49 — extends `DarkstrDepthHooksChild` (post-0017/0019) |
 | WebGL `getParameter` cap buckets | Persona GPU family (`apple` / `intel_low` / `intel_mid` / `nvidia_mid` / `nvidia_high`) from Phase 1 `webgl.js` — MAX_* + viewport/line/point/anisotropy |
 | UNMASKED vendor/renderer + `readPixels` noise | Unchanged from **0017** |
 | OffscreenCanvas window parity | `convertToBlob` (noisy clone) + `OffscreenCanvasRenderingContext2D.getImageData` when present; soft-optional |
@@ -228,11 +228,11 @@ Patch: `patches/0022-darkstr-docshell-browserid-phase.patch`.
 
 **Executor (Grok Linux box):** Mini apply + `mach build` = **NOT RUN** (no Mini SSH). Compose-tree dry-run apply verified on box.
 
-## Richer chrome chaff beacon bodies (0024) — this PR
+## Richer chrome chaff beacon bodies (0024) — merged on main
 
 | Deliverable | Status |
 |-------------|--------|
-| `patches/0024-darkstr-chaff-richer-beacon-bodies.patch` | **New** — extends `DarkstrChaffScheduler` (post-0016) |
+| `patches/0024-darkstr-chaff-richer-beacon-bodies.patch` | **Merged** PR #50 as `4c22b29` — extends `DarkstrChaffScheduler` (post-0016) |
 | Session interest clusters | Phase 1 `poisoner.js` tech/home/fashion/fitness/family/finance (2–3 locked per chrome session) |
 | GA Universal / GA4 / Meta PageView | Query payloads parity (`tid`/`cid`/`dp`/`dh`/`dr`/`sr`/`vp`; GA4 `dl`+`sid`; Meta `id`+`ev`+`dl`+`rl`+`sw`/`sh`+`v`) |
 | Endpoints | Same ordinary HTTP: `google-analytics.com/collect`, `/g/collect`, `facebook.com/tr/` |
@@ -265,15 +265,21 @@ Patch: `patches/0022-darkstr-docshell-browserid-phase.patch`.
 | Homogeneous / `nativeCompatible=true` | Idle / cancel |
 | `privacy.*` from 0024 | **None** |
 
-**Executor (Grok Linux box):** Mini apply + `mach build` = **NOT RUN** (no Mini SSH). Compose-tree dry-run apply verified on box.
+**Executor/package record (Mini):** `./mach package` **SUCCEEDED** at approximately **12:06 CDT** on 2026-09-21 after rebuilding the dangling `nmhproxy` Rust symlink. See the Packaging gate below.
+
+## Packaging gate — DONE
+
+- DMG: `~/src/darkstr-gecko/librewolf-source/librewolf-155.0.1-1/obj-aarch64-apple-darwin25.6.0/dist/librewolf-155.0.1-1.en-US.mac.dmg` (94 Mi)
+- Artifact symlink: `~/src/darkstr-gecko/artifacts/librewolf-155.0.1-1.en-US.mac.dmg`
+- SHA256: `778a370cd6dcd58880c38446d182db91b1203fa5c16fc36ecec0a2fcded63a1b`
+- Mini free space after package: approximately 12 GiB
 
 ## Next
 
-**Pins 1–3 + soft residuals 0019 + DocShell 0020–0022 + WebGL/Offscreen 0023 merged on main (`97fafac`).** Optional 0024 richer chaff beacons **this PR (open, do not merge until Proof XOR).** Remaining:
+**Pins 1–3 + soft residuals 0019 + DocShell 0020–0022 + WebGL/Offscreen 0023 + richer chaff 0024 are merged on main (`4c22b29`); Phase 3 main covers `0016`–`0024`.** Packaging is **DONE**. Remaining items are documentation-only soft residuals:
 
-1. Soft: fresh `./mach package` when disk allows (~9 Gi Mini — no mach package from this pin).
-2. Soft: worker `hardwareConcurrency` if Mini still shows host after instance spoof (C++ non-configurable — document only).
-3. Soft: Mini apply 0023 / 0024 + Proof XOR when operator available.
+1. Worker `hardwareConcurrency` may remain the host value when the C++ binding is non-configurable.
+2. Headed-only live WebGL on Marionette remains a soft residual.
 
 ## Proof gates for this PR
 
@@ -289,8 +295,8 @@ Patch: `patches/0022-darkstr-docshell-browserid-phase.patch`.
 - [x] Proof XOR PASS tip `37820f6` — Worker UA matches persona; constructors wrap
 - [x] Soft residuals 0019 v1: lastInstall runtimeOnly + HW best-effort (Proof PASS)
 - [x] Soft residuals 0019 v2: OfflineAudio page-compartment install (after XOR FAIL on `f18c0b6`)
-- [ ] Mini apply 0019 v2 + subdirectory build + dist install (operator)
-- [ ] Proof XOR re-skim OfflineAudio deltaSum / startRendering vs Homogeneous
+- [x] Mini apply 0019 v2 + subdirectory build + dist install (operator)
+- [x] Proof XOR re-skim OfflineAudio deltaSum / startRendering vs Homogeneous
 - [x] Honest non-claims listed above
 
 
@@ -315,7 +321,7 @@ WorkerHooks. Helper now force-applies those hunks and fails closed if missing.
 - [ ] Proof XOR natural: blank unarmed → first https idle → second https armed (no pref surgery)
 
 
-## Proof gates for 0023 (this PR)
+## Proof gates for 0023 (merged PR #49)
 
 - [x] Pref keys stay `darkstr.*`; no `privacy.*` writes from depth module
 - [x] Hooks idle unless Pollution + `nativePersonaHooks` (default-off)
@@ -324,10 +330,10 @@ WorkerHooks. Helper now force-applies those hunks and fails closed if missing.
 - [x] Pin-2 lessons retained (waiveXrays / pageshow / getPrefType / lastInstall / install-dist_bin / SubsequentNav gate)
 - [x] Patch id `0023`; stub `0004` + apply markers + Mini helper + GECKO-HOOKS §2.5
 - [x] Compose dry-run apply on Grok box
-- [ ] Mini apply 0023 + subdirectory build + install-dist_bin (operator)
-- [ ] Proof XOR: idle default; Pollution caps match persona family; OffscreenCanvas noise; SubsequentNav holdback
+- [x] Mini apply 0023 + subdirectory build + install-dist_bin (operator)
+- [x] Proof XOR: idle default; Pollution caps match persona family; OffscreenCanvas noise; SubsequentNav holdback
 
-## Proof gates for 0024 (this PR)
+## Proof gates for 0024 (merged PR #50)
 
 - [x] Pref keys stay `darkstr.*`; diagnostic `darkstr.chaff.lastBeaconKind` only (no `privacy.*`)
 - [x] Hooks idle unless Pollution + `nativePersonaHooks` (default-off)
@@ -336,6 +342,6 @@ WorkerHooks. Helper now force-applies those hunks and fails closed if missing.
 - [x] Honest non-claims: no CF/TLS/JA3; WebExt may remain richer (ISOLATED sendBeacon + DOM chaff)
 - [x] Patch id `0024`; stub `0004` + apply markers + Mini helper + GECKO-HOOKS §2.2
 - [x] Compose dry-run apply on Grok box
-- [ ] Mini apply 0024 + subdirectory build + install-dist_bin (operator)
-- [ ] Proof XOR: idle default; Pollution fires richer kinded beacons; Homogeneous idle
+- [x] Mini apply 0024 + subdirectory build + install-dist_bin (operator)
+- [x] Proof XOR: idle default; Pollution fires richer kinded beacons; Homogeneous idle
 

@@ -41,8 +41,8 @@ When the PR touches chaff scheduler, canvas/Audio/WebGL/worker depth, or strict-
 - [ ] No claim that worker hooks landed unless Proof-checked on a fork artifact (`0018` = Worker/SharedWorker constructor wrap; ServiceWorker out of scope)
 - [ ] Soft residuals `0019` v2: worker `lastInstall` ok/installed (PASS on f18c0b6); OfflineAudio page-compartment → **nonzero deltaSum** and startRendering sums diverge from Homogeneous; HW best-effort (host OK if non-configurable)
 - [ ] DocShell SubsequentNav `0020`–`0022`: natural Pollution+hooks+`strictFirstDoc` → blank unarmed → **first https** idle (`first_document`/armed=false/UA155) → **second https** armed (`subsequent_nav`/persona UA); no pref surgery; Homogeneous idle; no `privacy.*`
-- [ ] Depth optional `0023` (WebGL cap buckets + OffscreenCanvas): idle by default; Pollution+hooks+seeds → persona-family MAX_* + OC noise when present; SubsequentNav holdback preserved; no ext-list/precision/fail-closed claims; no `privacy.*` writes
-- [ ] Chaff optional `0024` (richer beacon bodies): idle by default; Pollution+hooks → GA/GA4/Meta query parity (not thin UA-DARKSTR-0); Quiet/Balanced/Loud unchanged; no CF/TLS/JA3; no `privacy.*` writes; WebExt may remain richer
+- [x] Depth `0023` (WebGL cap buckets + OffscreenCanvas): Proof XOR PASS; merged PR #49; idle by default; SubsequentNav holdback and honest non-claims preserved
+- [x] Chaff `0024` (richer beacon bodies): Proof XOR PASS; merged PR #50 as `4c22b29`; idle by default; GA/GA4/Meta parity; no CF/TLS/JA3 or `privacy.*` writes
 - [ ] After Mini subdirectory `mach build`: `make install-dist_bin` + LibreWolf.app `moz-src` present (pin 1 lesson)
 - [ ] Native-Compatible site list UI changes (if any) called out for Product Manager; prefer docs-only
 - [ ] Track D Servo/Ladybird remains docs-only — no eng ship dependency
@@ -110,5 +110,5 @@ Copy this checklist into the PR body (or link it) and check each applicable box.
 
 Automated mirror: `duppel_coherence::xor_matrix` + `cargo test -p duppel-coherence`.
 
-- [ ] Phase 3 optional **0023** WebGL cap buckets + OffscreenCanvas window parity (Pollution vs Homogeneous; SubsequentNav holdback; honest non-claims)
-- [ ] Phase 3 optional **0024** richer chrome chaff beacon bodies (Pollution vs Homogeneous; GA/GA4/Meta kinded fire; no CF/TLS/JA3)
+- [x] Phase 3 **0023** WebGL cap buckets + OffscreenCanvas window parity — Proof XOR PASS; merged PR #49
+- [x] Phase 3 **0024** richer chrome chaff beacon bodies — Proof XOR PASS; merged PR #50 as `4c22b29`
