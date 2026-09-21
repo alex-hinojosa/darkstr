@@ -128,3 +128,4 @@ duppel_persona::PersonaSnapshot::depth_canvas_seed / depth_audio_seed / depth_we
 4. Chrome privacy-pane Native-Compatible site list only when PM schedules UI work.
 5. ~~DocShell strict-next-nav SubsequentNav arm (extends M3).~~ → **Phase 3:** `patches/0020-darkstr-docshell-strict-next-nav.patch` (`docs/PHASE-3-STATUS.md`).
 6. ~~Richer WebGL cap buckets / OffscreenCanvas window parity.~~ → **Phase 3 optional:** `patches/0023-darkstr-depth-webgl-caps-offscreencanvas.patch` (`docs/PHASE-3-STATUS.md`).
+7. ~~Richer chrome chaff beacon bodies (ordinary HTTP).~~ → **Phase 3 optional:** `patches/0024-darkstr-chaff-richer-beacon-bodies.patch` (`docs/PHASE-3-STATUS.md`).

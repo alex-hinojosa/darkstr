@@ -304,6 +304,15 @@ patch_markers_present() {
         && grep -Fq "Cu.waiveXrays" "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrDepthHooksChild.sys.mjs" \
         && grep -Fq "installAudioInPage" "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrDepthHooksChild.sys.mjs"
       ;;
+    0024-darkstr-chaff-richer-beacon-bodies.patch)
+      grep -Fq "INTEREST_CLUSTERS" "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrChaffScheduler.sys.mjs" \
+        && grep -Fq "buildBeaconConfig" "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrChaffScheduler.sys.mjs" \
+        && grep -Fq "buildGA4Payload" "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrChaffScheduler.sys.mjs" \
+        && grep -Fq "buildMetaPayload" "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrChaffScheduler.sys.mjs" \
+        && grep -Fq "LAST_BEACON_PREF" "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrChaffScheduler.sys.mjs" \
+        && grep -Fq "0024 honest subset" "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrChaffScheduler.sys.mjs" \
+        && grep -Fq "duppel_chaff::ChaffSchedulerPlan" "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrChaffScheduler.sys.mjs"
+      ;;
     *)
       return 1
       ;;
@@ -348,7 +357,7 @@ for stub in "${STUBS}"/000*.patch.stub; do
 done
 if [[ "${stub_count}" -gt 0 ]]; then
   echo "Note: ${stub_count} .patch.stub file(s) present — sketches only, not applied."
-  echo "Remaining stubs are sketches; real patches: 0002 XOR, 0003 chrome persona, 0005 C++ nsHttp, 0006/0007 C++ nav/docshell, 0008-0015 FFI/nav, 0016 chaff timer, 0017 depth canvas/WebGL/Audio, 0018 worker globals + 0019 soft residuals + 0020 DocShell SubsequentNav when present (0004 stub leftovers cleared for DocShell; scheduler->0016; depth->0017; workers->0018; soft->0019; docshell-next->0020; webgl-caps/OffscreenCanvas->0023)."
+  echo "Remaining stubs are sketches; real patches: 0002 XOR, 0003 chrome persona, 0005 C++ nsHttp, 0006/0007 C++ nav/docshell, 0008-0015 FFI/nav, 0016 chaff timer, 0017 depth canvas/WebGL/Audio, 0018 worker globals + 0019 soft residuals + 0020 DocShell SubsequentNav when present (0004 stub leftovers cleared for DocShell; scheduler->0016; depth->0017; workers->0018; soft->0019; docshell-next->0020; webgl-caps/OffscreenCanvas->0023; richer-chaff-beacons->0024)."
 fi
 
 echo "Done. Cfg path always; real unified diffs under patches/000*.patch applied when present."
@@ -370,4 +379,5 @@ echo "Phase 3 worker hooks: patches/0018-darkstr-worker-globals-coherence.patch 
 echo "Phase 3 soft residuals: patches/0019-darkstr-phase3-soft-residuals.patch (lastInstall + OfflineAudio + HW best-effort). Rebuild: ./mach build --allow-subdirectory-build browser/components then make install-dist_bin (see docs/PHASE-3-STATUS.md / docs/PHASE-3-SOFT-0019-MINI-APPLY.sh)."
 echo "Phase 3 DocShell SubsequentNav: 0020 + 0021 http(s)-only + 0022 BrowserId/read-only phase. Rebuild: allow-subdir docshell/dom/netwerk + toolkit/library + browser/components then make install-dist_bin (see docs/PHASE-3-DOCSHELL-0020-MINI-APPLY.sh)."
 echo "Phase 3 WebGL caps + OffscreenCanvas: patches/0023-darkstr-depth-webgl-caps-offscreencanvas.patch (extends 0017 DepthHooksChild). Rebuild: ./mach build --allow-subdirectory-build browser/components then make install-dist_bin (see docs/PHASE-3-DEPTH-0023-MINI-APPLY.sh)."
+echo "Phase 3 richer chaff beacons: patches/0024-darkstr-chaff-richer-beacon-bodies.patch (extends 0016 ChaffScheduler; poisoner.js query parity). Rebuild: ./mach build --allow-subdirectory-build browser/components then make install-dist_bin (see docs/PHASE-3-CHAFF-0024-MINI-APPLY.sh)."
 echo "M-FFI-0008 gecko FFI link: patches/0008-darkstr-gecko-ffi-link.patch (Approach B cdylib). Build FFI: third_party/darkstr/build-and-install-ffi.sh --prefix \"\${DARKSTR_GECKO_OBJDIR:-obj-*}/dist/bin\". Rebuild chrome: ./mach build browser/components (see docs/M-FFI-0008-STATUS.md)."

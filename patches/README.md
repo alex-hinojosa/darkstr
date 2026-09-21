@@ -16,7 +16,7 @@ These stubs document *how* a real bsys6 / LibreWolf recipe would layer darkstr p
 | [`stubs/0006-darkstr-cpp-navigator-docshell.patch.stub`](stubs/0006-darkstr-cpp-navigator-docshell.patch.stub) | Pointer only — superseded by real `0006-…patch` |
 | [`0007-darkstr-cpp-docshell-nav-sot.patch`](0007-darkstr-cpp-docshell-nav-sot.patch) | **Real** train-pinned C++ DocShell first/subsequent SoT (155.0.1-1) — chrome Map fallback |
 | [`stubs/0007-darkstr-cpp-docshell-nav-sot.patch.stub`](stubs/0007-darkstr-cpp-docshell-nav-sot.patch.stub) | Pointer only — superseded by real `0007-…patch` |
-| [`stubs/0004-darkstr-chaff-depth.patch.stub`](stubs/0004-darkstr-chaff-depth.patch.stub) | Historical stub notes. **Scheduler → [`0016`](0016-darkstr-chaff-native-scheduler.patch)**; **canvas/WebGL/Audio → [`0017`](0017-darkstr-depth-canvas-webgl-audio.patch)**; **workers → [`0018`](0018-darkstr-worker-globals-coherence.patch)**; **soft residuals → [`0019`](0019-darkstr-phase3-soft-residuals.patch)**; **DocShell SubsequentNav → [`0020`](0020-darkstr-docshell-strict-next-nav.patch)** / [`0021`](0021-darkstr-docshell-http-scheme-count.patch) http(s) fix / [`0022`](0022-darkstr-docshell-browserid-phase.patch); **WebGL caps + OffscreenCanvas → [`0023`](0023-darkstr-depth-webgl-caps-offscreencanvas.patch)** |
+| [`stubs/0004-darkstr-chaff-depth.patch.stub`](stubs/0004-darkstr-chaff-depth.patch.stub) | Historical stub notes. **Scheduler → [`0016`](0016-darkstr-chaff-native-scheduler.patch)**; **canvas/WebGL/Audio → [`0017`](0017-darkstr-depth-canvas-webgl-audio.patch)**; **workers → [`0018`](0018-darkstr-worker-globals-coherence.patch)**; **soft residuals → [`0019`](0019-darkstr-phase3-soft-residuals.patch)**; **DocShell SubsequentNav → [`0020`](0020-darkstr-docshell-strict-next-nav.patch)** / [`0021`](0021-darkstr-docshell-http-scheme-count.patch) http(s) fix / [`0022`](0022-darkstr-docshell-browserid-phase.patch); **WebGL caps + OffscreenCanvas → [`0023`](0023-darkstr-depth-webgl-caps-offscreencanvas.patch)**; **richer chaff beacons → [`0024`](0024-darkstr-chaff-richer-beacon-bodies.patch)** |
 | [`0016-darkstr-chaff-native-scheduler.patch`](0016-darkstr-chaff-native-scheduler.patch) | **Real** Phase 3 pin 1 — chrome chaff timer (`DarkstrChaffScheduler.sys.mjs`, default-off) |
 | [`0017-darkstr-depth-canvas-webgl-audio.patch`](0017-darkstr-depth-canvas-webgl-audio.patch) | **Real** Phase 3 pin 2 — canvas/WebGL/Audio depth (`DarkstrDepthHooks*.sys.mjs`, default-off) |
 | [`0023-darkstr-depth-webgl-caps-offscreencanvas.patch`](0023-darkstr-depth-webgl-caps-offscreencanvas.patch) | **Real** Phase 3 optional — WebGL cap buckets + OffscreenCanvas window parity |
@@ -170,6 +170,17 @@ Real unified diff [`0016-darkstr-chaff-native-scheduler.patch`](0016-darkstr-cha
 - Gates: `pollution_active` + `darkstr.nativePersonaHooks` (default-off)
 - Apply + rebuild: `./mach build --allow-subdirectory-build browser/components` then **`make install-dist_bin`** (see `docs/PHASE-3-CHAFF-0016-MINI-APPLY.sh` / `docs/PHASE-3-STATUS.md`)
 - Stub `0004` retained for DocShell leftovers; canvas/WebGL/Audio → `0017`; workers → `0018`
+- Optional richer beacon bodies → [`0024`](0024-darkstr-chaff-richer-beacon-bodies.patch)
+
+## Phase 3 richer chrome chaff beacon bodies (0024)
+
+Real unified diff [`0024-darkstr-chaff-richer-beacon-bodies.patch`](0024-darkstr-chaff-richer-beacon-bodies.patch) against post-0016 155.0.1-1:
+
+- Extends `DarkstrChaffScheduler.sys.mjs` — Phase 1 `poisoner.js` session interest clusters + GA Universal / GA4 / Meta PageView query payloads
+- Gates + Quiet/Balanced/Loud volume/timing unchanged (pollution + `nativePersonaHooks`, default-off)
+- Ordinary HTTP chrome `fetch` only — **no** CF/TLS/JA3; WebExt may remain richer (ISOLATED sendBeacon + DOM chaff)
+- Diagnostic: `darkstr.chaff.lastBeaconKind` (+ richer `lastFireAt`)
+- Apply + rebuild: `./mach build --allow-subdirectory-build browser/components` then **`make install-dist_bin`** (see `docs/PHASE-3-CHAFF-0024-MINI-APPLY.sh` / `docs/PHASE-3-STATUS.md`)
 
 ## Phase 3 depth canvas / WebGL / Audio (0017)
 

@@ -1,4 +1,4 @@
-# Phase 3 status — pins 1–3 + soft residuals (0019) + DocShell (0020–0022) + WebGL/Offscreen (0023)
+# Phase 3 status — pins 1–3 + soft residuals (0019) + DocShell (0020–0022) + WebGL/Offscreen (0023) + richer chaff beacons (0024)
 
 **Date:** 2026-09-21 (CDT)  
 **Owner:** Builder  
@@ -107,6 +107,7 @@ Helper: [`PHASE-3-WORKER-0018-MINI-APPLY.sh`](PHASE-3-WORKER-0018-MINI-APPLY.sh)
 - Live C++ worker bindings (chrome JSWindowActor constructor wrap only)
 - Canvas/WebGL/Audio window depth — already **0017** (this pin = workers)
 - Full WebGL **extension-list / shader-precision / fail-closed** spoof / font-probe / ultrasonic (WebExt path remains richer; **0023** ships honest cap-bucket + OffscreenCanvas subset only)
+- ISOLATED-world `sendBeacon` (real Referer/cookies) / DOM ad-container chaff / interaction-coupled bridge fire (**0024** ships ordinary chrome HTTP GA/GA4/Meta query parity only; WebExt poisoner may remain richer)
 
 ## Soft residuals follow-up (0019) — this PR
 
@@ -227,14 +228,52 @@ Patch: `patches/0022-darkstr-docshell-browserid-phase.patch`.
 
 **Executor (Grok Linux box):** Mini apply + `mach build` = **NOT RUN** (no Mini SSH). Compose-tree dry-run apply verified on box.
 
+## Richer chrome chaff beacon bodies (0024) — this PR
+
+| Deliverable | Status |
+|-------------|--------|
+| `patches/0024-darkstr-chaff-richer-beacon-bodies.patch` | **New** — extends `DarkstrChaffScheduler` (post-0016) |
+| Session interest clusters | Phase 1 `poisoner.js` tech/home/fashion/fitness/family/finance (2–3 locked per chrome session) |
+| GA Universal / GA4 / Meta PageView | Query payloads parity (`tid`/`cid`/`dp`/`dh`/`dr`/`sr`/`vp`; GA4 `dl`+`sid`; Meta `id`+`ev`+`dl`+`rl`+`sw`/`sh`+`v`) |
+| Endpoints | Same ordinary HTTP: `google-analytics.com/collect`, `/g/collect`, `facebook.com/tr/` |
+| Quiet / Balanced / Loud | Unchanged interval / batch / stagger |
+| Gates default-off | Idle unless `pollution_active` **and** `nativePersonaHooks` |
+| Diagnostic | `darkstr.chaff.lastBeaconKind` (+ richer `lastFireAt` with kind) |
+| Mini helper | [`PHASE-3-CHAFF-0024-MINI-APPLY.sh`](PHASE-3-CHAFF-0024-MINI-APPLY.sh) |
+
+### Honest matrix (0024)
+
+| Surface | Here? |
+|---------|-------|
+| Session-coherent interest clusters + screen/cid/tids/metaId | **Yes** |
+| GA Universal / GA4 / Meta PageView query on ordinary chrome fetch | **Yes** |
+| Quiet/Balanced/Loud volume+timing (0016) | **Yes** (unchanged) |
+| ISOLATED-world `sendBeacon` with real Referer + cookie jar | **No** — WebExt richer |
+| DOM ad-container attribute chaff | **No** — WebExt richer |
+| Interaction-coupled bridge fire | **No** — WebExt richer |
+| Cloudflare / TLS / JA3 fingerprint games | **No** |
+| `privacy.*` writes | **None** |
+
+### XOR expectations (Proof) — 0024
+
+| Case | Expect |
+|------|--------|
+| Default / Homogeneous / hooks off | Idle — `schedulerArmed=false`; no beacon fire |
+| Pollution + hooks false | Idle (explicit allow required) |
+| Pollution + `nativePersonaHooks=true`; Quiet/Balanced/Loud | Armed; `lastPlan` shows level+interval+batch; after fire `lastFireAt` includes `ga`/`ga4`/`meta` endpoint + kind; `lastBeaconKind` set |
+| Fired beacon URL | Query carries persona-coherent fields (not thin `UA-DARKSTR-0` / `example.invalid`) |
+| Homogeneous / `nativeCompatible=true` | Idle / cancel |
+| `privacy.*` from 0024 | **None** |
+
+**Executor (Grok Linux box):** Mini apply + `mach build` = **NOT RUN** (no Mini SSH). Compose-tree dry-run apply verified on box.
+
 ## Next
 
-**Pins 1–3 + soft residuals 0019 + DocShell 0020–0022 merged on main (`a37745c`).** Optional 0023 WebGL/Offscreen **this PR (open, do not merge until Proof XOR).** Remaining:
+**Pins 1–3 + soft residuals 0019 + DocShell 0020–0022 + WebGL/Offscreen 0023 merged on main (`97fafac`).** Optional 0024 richer chaff beacons **this PR (open, do not merge until Proof XOR).** Remaining:
 
-1. Optional: richer chrome chaff beacon bodies (ordinary HTTP only).
-2. Soft: fresh `./mach package` when disk allows (~9.5 Gi Mini — no mach package from this pin).
-3. Soft: worker `hardwareConcurrency` if Mini still shows host after instance spoof (C++ non-configurable — document only).
-4. Soft: Mini apply 0023 + Proof XOR caps/OffscreenCanvas gates below.
+1. Soft: fresh `./mach package` when disk allows (~9 Gi Mini — no mach package from this pin).
+2. Soft: worker `hardwareConcurrency` if Mini still shows host after instance spoof (C++ non-configurable — document only).
+3. Soft: Mini apply 0023 / 0024 + Proof XOR when operator available.
 
 ## Proof gates for this PR
 
@@ -287,3 +326,16 @@ WorkerHooks. Helper now force-applies those hunks and fails closed if missing.
 - [x] Compose dry-run apply on Grok box
 - [ ] Mini apply 0023 + subdirectory build + install-dist_bin (operator)
 - [ ] Proof XOR: idle default; Pollution caps match persona family; OffscreenCanvas noise; SubsequentNav holdback
+
+## Proof gates for 0024 (this PR)
+
+- [x] Pref keys stay `darkstr.*`; diagnostic `darkstr.chaff.lastBeaconKind` only (no `privacy.*`)
+- [x] Hooks idle unless Pollution + `nativePersonaHooks` (default-off)
+- [x] Quiet/Balanced/Loud volume+timing unchanged from 0016 / Phase 1 poisoner
+- [x] Beacon query/bodies align with Phase 1 `poisoner.js` GA/GA4/Meta endpoints
+- [x] Honest non-claims: no CF/TLS/JA3; WebExt may remain richer (ISOLATED sendBeacon + DOM chaff)
+- [x] Patch id `0024`; stub `0004` + apply markers + Mini helper + GECKO-HOOKS §2.2
+- [x] Compose dry-run apply on Grok box
+- [ ] Mini apply 0024 + subdirectory build + install-dist_bin (operator)
+- [ ] Proof XOR: idle default; Pollution fires richer kinded beacons; Homogeneous idle
+
