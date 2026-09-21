@@ -50,7 +50,7 @@ This PR is **docs + Rust enums/APIs + stub notes**. It does **not** claim live C
 | Homogeneous / `nativeCompatible` / RFP conflict | Scheduler cancel; no batches |
 | Quiet / Balanced / Loud | Interval + batch + stagger parity with Phase 1 poisoner |
 | Depth surfaces | Seed from same `PersonaSnapshot` only when `pollution_active` |
-| DocShell strict-next-nav | `SubsequentNav` arm (`strict_next_nav_armed`) — live patch not claimed |
+| DocShell strict-next-nav | `SubsequentNav` arm (`strict_next_nav_armed`) — **live in `0020`** |
 | Native-Compatible site list | Phase 1 WebExt popup/list remains authoritative; chrome pane = later |
 
 ### Quiet / Balanced / Loud (poisoner parity)
@@ -126,4 +126,4 @@ duppel_persona::PersonaSnapshot::depth_canvas_seed / depth_audio_seed / depth_we
 3. ~~Worker globals coherence with same persona seed.~~ → **Phase 3 pin 3:** `patches/0018-darkstr-worker-globals-coherence.patch` (`docs/PHASE-3-STATUS.md`).
 3b. Soft residuals (lastInstall / OfflineAudio / HW best-effort) → **`patches/0019-darkstr-phase3-soft-residuals.patch`**.
 4. Chrome privacy-pane Native-Compatible site list only when PM schedules UI work.
-5. DocShell strict-next-nav SubsequentNav arm (extends M3) — still open.
+5. ~~DocShell strict-next-nav SubsequentNav arm (extends M3).~~ → **Phase 3:** `patches/0020-darkstr-docshell-strict-next-nav.patch` (`docs/PHASE-3-STATUS.md`).

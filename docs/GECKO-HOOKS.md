@@ -109,7 +109,7 @@ Glue reads cached `PersonaSnapshot` **only** when `pollution_active` (`read_cach
 | Until native ready | Phase 1 `bridge.js` / `poisoner.js` | now | Authoritative on WebExt-only path |
 
 **Idle when:** crates idle / XOR conflict (same gates as persona).  
-**Live scheduler patch:** [`../patches/0016-darkstr-chaff-native-scheduler.patch`](../patches/0016-darkstr-chaff-native-scheduler.patch). **Live depth (canvas/WebGL/Audio):** [`../patches/0017-darkstr-depth-canvas-webgl-audio.patch`](../patches/0017-darkstr-depth-canvas-webgl-audio.patch). **Live workers:** [`../patches/0018-darkstr-worker-globals-coherence.patch`](../patches/0018-darkstr-worker-globals-coherence.patch). Stub `0004` retained for DocShell strict-next-nav leftovers. Status: [`PHASE-3-STATUS.md`](PHASE-3-STATUS.md) · [`M4-STATUS.md`](M4-STATUS.md).
+**Live scheduler patch:** [`../patches/0016-darkstr-chaff-native-scheduler.patch`](../patches/0016-darkstr-chaff-native-scheduler.patch). **Live depth (canvas/WebGL/Audio):** [`../patches/0017-darkstr-depth-canvas-webgl-audio.patch`](../patches/0017-darkstr-depth-canvas-webgl-audio.patch). **Live workers:** [`../patches/0018-darkstr-worker-globals-coherence.patch`](../patches/0018-darkstr-worker-globals-coherence.patch). **Live DocShell SubsequentNav:** [`../patches/0020-darkstr-docshell-strict-next-nav.patch`](../patches/0020-darkstr-docshell-strict-next-nav.patch). Stub `0004` historical. Status: [`PHASE-3-STATUS.md`](PHASE-3-STATUS.md) · [`M4-STATUS.md`](M4-STATUS.md).
 
 ### 2.3 `duppel-coherence` — Proof harness
 
@@ -126,8 +126,9 @@ Does **not** ship as user-facing UI. Does **not** reimplement CreepJS.
 |---------|------------|------|--------|
 | First document vs next nav | Top-level document LoadURI count (C++) + chrome fallback | M3 / M3-CPP-NAV / M3-CPP-DOCSHELL | **C++ SoT** in `0007` `DarkstrDocShellHooks` when hooks on; chrome Map/`0003` fallback; `0006` stub superseded |
 | Pref | `darkstr.strictFirstDoc` | M1+ chrome defaults | Semantics unchanged from Proof pin |
+| SubsequentNav arm | `StrictNextNavArmed` + phase mirror gates Navigator/nsHttp UA + chrome Depth/Worker delivery | Phase 3 / **`0020`** | **Live** in [`../patches/0020-darkstr-docshell-strict-next-nav.patch`](../patches/0020-darkstr-docshell-strict-next-nav.patch); diagnostic `darkstr.docshell.strictNextNavArmed` |
 
-M4 extends naming/notes for **strict-next-nav** (SubsequentNav arm). Until `darkstr.nativePersonaHooks` is flipped on a fork build, WebExt tab-scoped DNR + MAIN inject remain the Phase 1 path (`WebExtMainInjectPolicy::AllowFallback`).
+M4 named **strict-next-nav** (`duppel_persona::strict_next_nav_armed`). Live arm: `0020` wires existing `ShouldApplyPersona` into C++ Navigator + nsHttp UA and chrome per-BC delivery (default-off). Until `darkstr.nativePersonaHooks` is flipped on a fork build, WebExt tab-scoped DNR + MAIN inject remain the Phase 1 path (`WebExtMainInjectPolicy::AllowFallback`).
 
 ### 2.5 Canvas / WebGL / Audio + workers (M4 depth → Phase 3)
 
@@ -141,7 +142,7 @@ M4 extends naming/notes for **strict-next-nav** (SubsequentNav arm). Until `dark
 Depth seeds readable only when `pollution_active` (`duppel_bridge::read_depth_seeds`); chrome also requires `darkstr.nativePersonaHooks` (default-off).  
 Enums: `duppel_bridge::m4_depth_surfaces` / `m4_applicator_surfaces`.  
 **Live depth patch:** [`../patches/0017-darkstr-depth-canvas-webgl-audio.patch`](../patches/0017-darkstr-depth-canvas-webgl-audio.patch).  
-**Live worker patch:** [`../patches/0018-darkstr-worker-globals-coherence.patch`](../patches/0018-darkstr-worker-globals-coherence.patch). **Soft residuals:** [`../patches/0019-darkstr-phase3-soft-residuals.patch`](../patches/0019-darkstr-phase3-soft-residuals.patch) (lastInstall runtimeOnly; OfflineAudio content-key; HW best-effort). Stub `0004` retained for DocShell strict-next-nav leftovers. Status: [`PHASE-3-STATUS.md`](PHASE-3-STATUS.md) · [`M4-STATUS.md`](M4-STATUS.md).
+**Live worker patch:** [`../patches/0018-darkstr-worker-globals-coherence.patch`](../patches/0018-darkstr-worker-globals-coherence.patch). **Soft residuals:** [`../patches/0019-darkstr-phase3-soft-residuals.patch`](../patches/0019-darkstr-phase3-soft-residuals.patch) (lastInstall runtimeOnly; OfflineAudio content-key; HW best-effort). **DocShell SubsequentNav:** [`../patches/0020-darkstr-docshell-strict-next-nav.patch`](../patches/0020-darkstr-docshell-strict-next-nav.patch). Stub `0004` historical. Status: [`PHASE-3-STATUS.md`](PHASE-3-STATUS.md) · [`M4-STATUS.md`](M4-STATUS.md).
 
 M3 first native wins remain UA/CH + navigator minimum set; Phase 3 pin 2 adds canvas/WebGL/Audio chrome depth; pin 3 adds DedicatedWorker/SharedWorker constructor wrap (persona + OffscreenCanvas/WebGL in worker globals). ServiceWorker/Worklets not claimed.
 

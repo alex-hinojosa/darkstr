@@ -27,8 +27,15 @@
 #   → lastInstall runtimeOnly; OfflineAudio content-key + startRendering; HW best-effort
 #   → Also baked into refreshed 0017/0018 new-file bodies
 #
-# Remaining intent from this stub (NOT in 0016/0017/0018/0019 — later pins):
-#   DocShell strict-next-nav → SubsequentNav arm (extends M3)
+# Phase 3 DocShell SubsequentNav arm (2026-09-21): **landed** as a real train-pinned patch:
+#   patches/0020-darkstr-docshell-strict-next-nav.patch
+#   → DarkstrDocShellHooks::StrictNextNavArmed (+ phase/n==0 FirstDocument parity)
+#   → Navigator + nsHttp UA gated on SubsequentNav when strictFirstDoc
+#   → chrome NativePersona/Depth/Worker per-BC delivery + darkstr.docshell.strictNextNavArmed
+#   → Gates: pollution_active + darkstr.nativePersonaHooks (default-off)
+#   → See docs/PHASE-3-STATUS.md / docs/PHASE-3-DOCSHELL-0020-MINI-APPLY.sh
+#
+# Remaining intent from this stub (NOT in 0016–0020 — later pins):
 #   ServiceWorker / Worklets → not claimed (no honest injection path yet)
 #
 # Authoritative enums (must match unit tests):

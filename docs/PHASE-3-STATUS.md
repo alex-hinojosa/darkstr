@@ -1,6 +1,6 @@
 # Phase 3 status — pins 1–3 + soft residuals (0019)
 
-**Date:** 2026-09-19 (CDT)  
+**Date:** 2026-09-21 (CDT)  
 **Owner:** Builder  
 **Audience:** Meridian / Proof / Product Manager skim  
 **Brand:** darkstr — not official LibreWolf. Pollution browser, not Cloudflare bypass.
@@ -51,7 +51,7 @@ On re-apply, **refresh** new-file modules from the patch before markers skip
 | Payload | Prefer `DarkstrNativePersona` snapshot + `DarkstrDepthHooks` seeds; fallback snapshot/seed prefs |
 | Diagnostics prefs | `darkstr.worker.hooksArmed` / `lastPayload` / `lastInstall` / `lastError` (no `privacy.*`) |
 | Apply-script markers | `0018` idempotent skip when markers present |
-| Stub `0004` | Points at `0016` + `0017` + `0018` (workers); DocShell strict-next-nav still later |
+| Stub `0004` | Points at `0016` + `0017` + `0018` + `0019` + **`0020` DocShell SubsequentNav** |
 | Docs | This file; M4-STATUS Next; GECKO-HOOKS §2.5; Mini apply helper |
 
 ## Gate truth (Proof XOR)
@@ -133,15 +133,42 @@ Mini helper: [`PHASE-3-SOFT-0019-MINI-APPLY.sh`](PHASE-3-SOFT-0019-MINI-APPLY.sh
 | Default / Homogeneous / hooks off | Idle unchanged |
 | `privacy.*` from these modules | **None** |
 
+## DocShell SubsequentNav arm (0020) — this PR
+
+| Deliverable | Status |
+|-------------|--------|
+| `patches/0020-darkstr-docshell-strict-next-nav.patch` | **New** — extends M3 `0006`/`0007` |
+| `DarkstrDocShellHooks::StrictNextNavArmed` | Alias of `ShouldApplyPersona` (`duppel_persona::strict_next_nav_armed`) |
+| Phase parity | n==0 / unset mirror → `FirstDocument` (chrome Map parity) |
+| C++ Navigator + nsHttp UA | Gated on SubsequentNav when `strictFirstDoc` (phase mirror) |
+| CH REMOVE | Unchanged — pollution+hooks only (0003 asymmetry) |
+| Chrome NativePersona | `strictNextNavArmed` + snapshot prefers C++ phase mirror |
+| Depth / Worker per-BC | Null on first_document when strictFirstDoc |
+| Diagnostic | `darkstr.docshell.strictNextNavArmed` (no `privacy.*`) |
+| Gates default-off | Idle unless `pollution_active` **and** `nativePersonaHooks` |
+| Mini helper | [`PHASE-3-DOCSHELL-0020-MINI-APPLY.sh`](PHASE-3-DOCSHELL-0020-MINI-APPLY.sh) |
+
+### XOR expectations (Proof) — 0020
+
+| Case | Expect |
+|------|--------|
+| Pollution + hooks + `strictFirstDoc=true`; first top-level nav | Persona/Navigator/UA **idle**; `docShellPhase=first_document`; `strictNextNavArmed=false` |
+| Same; subsequent top-level nav | Persona surfaces **armed**; phase `subsequent_nav`; `strictNextNavArmed=true` |
+| Pollution + hooks + `strictFirstDoc=false` | Armed from first nav (no first-doc holdback) |
+| Default / Homogeneous / hooks off | Idle unchanged |
+| `privacy.*` from 0020 | **None** |
+
+**Executor (Grok Linux box):** Mini apply + `mach build` = **NOT RUN**. Compose dry-run apply verified.
+
 ## Next
 
-**Pins 1–3 + soft residuals 0019 on train.** Remaining optional:
+**Pins 1–3 + soft residuals 0019 + DocShell SubsequentNav 0020 on train (PR open).** Remaining optional:
 
 1. Optional: richer WebGL cap buckets / OffscreenCanvas window parity with Phase 1 bootstrap.
 2. Optional: richer chrome chaff beacon bodies (ordinary HTTP only).
-3. DocShell strict-next-nav SubsequentNav arm (extends M3) — still open.
-4. Soft: fresh `./mach package` when disk allows (~12 Gi free as of pin 3 merge).
-5. Soft: worker `hardwareConcurrency` if Mini still shows host after instance spoof (C++ non-configurable — document only).
+3. Soft: fresh `./mach package` when disk allows.
+4. Soft: worker `hardwareConcurrency` if Mini still shows host after instance spoof (C++ non-configurable — document only).
+5. Soft: Mini apply 0019 v2 + Proof OfflineAudio re-skim if not yet operator-done.
 
 ## Proof gates for this PR
 
@@ -167,3 +194,15 @@ Mini helper: [`PHASE-3-SOFT-0019-MINI-APPLY.sh`](PHASE-3-SOFT-0019-MINI-APPLY.sh
 Refreshing `DarkstrWorkerHooks*.sys.mjs` before `apply-darkstr-patches` can make
 patch report 0018 "already applied" while BrowserGlue / moz.build still lack
 WorkerHooks. Helper now force-applies those hunks and fails closed if missing.
+
+
+## Proof gates for 0020 (this PR)
+
+- [x] Pref keys stay `darkstr.*`; diagnostic `darkstr.docshell.strictNextNavArmed` only
+- [x] Hooks idle unless Pollution + `nativePersonaHooks` (default-off)
+- [x] `strictFirstDoc` first-nav vs subsequent-nav semantics preserved / wired into C++ UA+Navigator
+- [x] CH REMOVE not regresssed (still pollution+hooks; not strict-next gated)
+- [x] Patch id `0020`; stub `0004` points at it
+- [x] Docs: PHASE-3-STATUS + M4 Next + GECKO-HOOKS §2.4 + apply markers + Mini helper
+- [ ] Mini apply + `mach build` docshell/dom/netwerk + browser/components + install-dist_bin
+- [ ] Proof XOR first-doc idle / subsequent armed on Mini tip
