@@ -1,0 +1,123 @@
+--- a/browser/components/DarkstrNativePersonaChild.sys.mjs
++++ b/browser/components/DarkstrNativePersonaChild.sys.mjs
+@@ -9,50 +9,99 @@
+  * Soft residual: re-query snapshot on pageshow so FFI-filled langs (e.g. +es)
+  * win over a sticky early spoof from DOMWindowCreated.
+  *
+- * P0 FP coherence (0025): instance-first hardwareConcurrency spoof (C++ binding
+- * on Navigator.prototype is often non-configurable when RFP is off — host cores
+- * leak). languages still spoofed; WebIDL [Cached] clear remains Parent/0011–0014.
++ * P0 FP coherence (0025): instance-first hardwareConcurrency.
++ * 0026: waiveXrays + exportFunction (DepthHooks lesson) — chrome defineProperty on
++ * Xray Navigator does not stick for HW when RFP is off; page-compartment getters do.
+  */
+ 
+-function spoof(obj, prop, getter) {
++function contentWindowFor(rawWindow) {
+   try {
++    const waived = Cu.waiveXrays(rawWindow);
++    if (waived) {
++      return waived;
++    }
++  } catch (_e) {}
++  try {
++    if (rawWindow?.wrappedJSObject) {
++      return rawWindow.wrappedJSObject;
++    }
++  } catch (_e) {}
++  return rawWindow;
++}
++
++function spoofGetter(pageWindow, obj, prop, value) {
++  if (!obj) {
++    return false;
++  }
++  try {
++    const getter = Cu.exportFunction(function darkstrNavGetter() {
++      return value;
++    }, pageWindow);
+     Object.defineProperty(obj, prop, {
+       configurable: true,
+       enumerable: true,
+       get: getter,
+     });
+-  } catch (_e) {}
++    return true;
++  } catch (_e) {
++    return false;
++  }
+ }
+ 
+-function applySnapshot(win, snapshot) {
+-  if (!snapshot || !snapshot.userAgent || !win || !win.Navigator) {
++function applySnapshot(rawWindow, snapshot) {
++  if (!snapshot || !snapshot.userAgent || !rawWindow) {
+     return;
+   }
+-  const navProto = win.Navigator.prototype;
++  let pageWindow;
++  try {
++    pageWindow = contentWindowFor(rawWindow);
++  } catch (_e) {
++    return;
++  }
++  if (!pageWindow?.Navigator) {
++    return;
++  }
++  const navProto = pageWindow.Navigator.prototype;
+   let nav = null;
+   try {
+-    nav = win.navigator;
++    nav = pageWindow.navigator;
+   } catch (_e) {}
+   const hw = Number(snapshot.hardwareConcurrency) || 8;
+   const mem = Number(snapshot.deviceMemory) || 8;
+   const langs = Array.isArray(snapshot.languages)
+     ? snapshot.languages.slice()
+     : ["en-US", "en"];
+-  const spoofBoth = (prop, getter) => {
+-    // Instance first — own property wins over non-configurable prototype getter.
++  const langsCopy = langs.slice();
++  const spoofBoth = (prop, value) => {
++    // Instance first — own property wins over prototype getter.
++    spoofGetter(pageWindow, nav, prop, value);
++    spoofGetter(pageWindow, navProto, prop, value);
++  };
++  spoofBoth("userAgent", snapshot.userAgent);
++  spoofBoth("platform", snapshot.platform || "MacIntel");
++  spoofBoth("hardwareConcurrency", hw);
++  spoofBoth("deviceMemory", mem);
++  spoofBoth("language", langs[0] || "en-US");
++  // Fresh array each get so page mutation cannot poison the spoof.
++  try {
++    const langsGetter = Cu.exportFunction(function darkstrLangsGetter() {
++      return langsCopy.slice();
++    }, pageWindow);
+     if (nav) {
+-      spoof(nav, prop, getter);
++      Object.defineProperty(nav, "languages", {
++        configurable: true,
++        enumerable: true,
++        get: langsGetter,
++      });
+     }
+-    spoof(navProto, prop, getter);
+-  };
+-  spoofBoth("userAgent", () => snapshot.userAgent);
+-  spoofBoth("platform", () => snapshot.platform || "MacIntel");
+-  spoofBoth("hardwareConcurrency", () => hw);
+-  spoofBoth("deviceMemory", () => mem);
+-  spoofBoth("language", () => langs[0] || "en-US");
+-  spoofBoth("languages", () => langs.slice());
++    Object.defineProperty(navProto, "languages", {
++      configurable: true,
++      enumerable: true,
++      get: langsGetter,
++    });
++  } catch (_e) {}
+   try {
+-    spoofBoth("userAgentData", () => undefined);
++    spoofBoth("userAgentData", undefined);
+   } catch (_e) {}
+ }
+ 

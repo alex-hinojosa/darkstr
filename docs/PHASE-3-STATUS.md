@@ -6,6 +6,12 @@
 **Brand:** darkstr — not official LibreWolf. Pollution browser, not Cloudflare bypass.
 **Status:** **Packaging gate CLOSED.** Phase 3 main covers `0016`–`0024`; PR #50 / patch `0024` merged as `4c22b29`.
 
+
+## FP coherence follow-up (0026) — open PR #52 tip
+
+- `patches/0026-darkstr-fp-hw-waivexrays.patch` — NativePersonaChild `Cu.waiveXrays` + `Cu.exportFunction` for navigator HW (Proof: 0025 C++/instance-first still left window HW=12).
+- Mini helper: `PHASE-3-FP-0026-MINI-APPLY.sh` (chrome only).
+- Expect Proof: Pollution+hooks after SubsequentNav → `hardwareConcurrency===8`.
 ## Goal (this pin)
 
 Ship **Phase 3 pin 3**: train-pinned thin native **DedicatedWorker / SharedWorker**
