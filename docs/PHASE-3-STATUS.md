@@ -1,18 +1,55 @@
-# Phase 3 status — packaging gate closed (0016–0024 merged) + soft residuals
+# Phase 3 status — packaging + FP soft residuals closed (0016–0029)
 
-**Date:** 2026-09-21 (CDT)  
+**Date:** 2026-09-22 (CDT)  
 **Owner:** Builder  
 **Audience:** Meridian / Proof / Product Manager skim  
-**Brand:** darkstr — not official LibreWolf. Pollution browser, not Cloudflare bypass.
-**Status:** **Packaging gate CLOSED.** Phase 3 main covers `0016`–`0024`; PR #50 / patch `0024` merged as `4c22b29`.
+**Brand:** darkstr — not official LibreWolf. Pollution browser, not Cloudflare bypass.  
+**Main tip:** `7fa573d` (merge PR #54 / 0029)  
+**Status:** **Phase 3 eng gate CLOSED for the advertised native Firefox-persona surface.** Packaging closed (`0016`–`0024`). FP coherence P0 (`0025`–`0027`), soft P1 TZ/WebRTC (`0028`), and live WebGL unlock (`0029`) are merged and Proof-PASS.
 
+## Merged after packaging (summary)
 
-## FP coherence follow-up (0026) — open PR #52 tip
+| Patch | PR | Merge | Proof |
+|-------|-----|-------|-------|
+| `0025`–`0027` P0 FP coherence (Worker arm, HW=8 C++/waiveXrays, langs es) | [#52](https://github.com/alex-hinojosa/darkstr/pull/52) | `2cab6cd` | PASS tip `4fd7c69` (window+worker HW===8) |
+| `0028` soft P1 timezone + WebRTC | [#53](https://github.com/alex-hinojosa/darkstr/pull/53) | `558cd5d` | Live multi-site matrix PASS tip `be3646b` |
+| `0029` live WebGL context (`librewolf.webgl.prompt=false` + prefs/blocklist) | [#54](https://github.com/alex-hinojosa/darkstr/pull/54) | `7fa573d` | Soft XOR PASS tip `3478c1c` (non-null GL; Pollution UNMASKED Apple/M2 + apple caps) |
 
-- `patches/0026-darkstr-fp-hw-waivexrays.patch` — NativePersonaChild `Cu.waiveXrays` + `Cu.exportFunction` for navigator HW (Proof: 0025 C++/instance-first still left window HW=12).
-- Mini helper: `PHASE-3-FP-0026-MINI-APPLY.sh` (chrome only).
-- Expect Proof: Pollution+hooks after SubsequentNav → `hardwareConcurrency===8`.
-## Goal (this pin)
+## Phase 3 exit checklist
+
+Use this to declare Phase 3 **exit** (docs/product), not to reopen eng unless a box fails.
+
+### Must stay green (regression)
+
+- [x] Packaging pins `0016`–`0024` on main; Mini dist apply path documented
+- [x] Pollution + `nativePersonaHooks` + seed-42 + `strictFirstDoc`: first HTTPS holdback; SubsequentNav arms persona
+- [x] SubsequentNav P0: window+worker `hardwareConcurrency===8`; `navigator.languages` includes `es`; WorkerHooks armed+installed; UA Firefox/140 MacIntel
+- [x] SubsequentNav P1: window+worker TZ `Europe/Berlin`; `media.peerconnection.enabled=false` / `RTCPeerConnection` undefined; Homogeneous restores host TZ + prior WebRTC state
+- [x] Live WebGL: Homogeneous + Pollution `getContext('webgl')` non-null; Pollution UNMASKED Apple / Apple M2 + apple MAX_* (0017/0023); `librewolf.webgl.prompt===false`
+- [x] Homogeneous / hooks off: depth/worker idle; no `privacy.*` writes from darkstr modules
+
+### Explicit non-claims (do not block exit)
+
+- ServiceWorker / Worklets
+- Fonts, screen/DPR
+- CF / TLS / JA3
+- Chrome cosplay
+- Full WebGL extension-list / shader-precision / fail-closed unknown `getParameter` (WebExt path remains richer)
+- Homogeneous WebGL vendor string may stay Mozilla/Mozilla (RFP); Pollution is the apple spoof path
+
+### Optional before calling the train “shipped to operators”
+
+- [x] Refresh `PHASE-3-STATUS` / M4 Next pointers (this PR)
+- [ ] Optional Proof live multi-site matrix re-run with WebGL non-null (CreepJS / BrowserLeaks / …)
+- [ ] Fresh `mach package` DMG when Mini disk allows (last package ~94 Mi; disk was ~4 Gi free during 0029)
+
+### After exit — natural next trains
+
+1. WebExt-parity depth (extensions / shader precision) **or** document permanent non-claim
+2. Next Firefox/LibreWolf train pin (155+ → next)
+3. Operator packaging / release notes only
+
+## Goal (historical pin 3 write-up)
 
 Ship **Phase 3 pin 3**: train-pinned thin native **DedicatedWorker / SharedWorker**
 globals coherence on LibreWolf/Firefox **155.0.1-1**, so worker `navigator` (+
@@ -282,10 +319,12 @@ Patch: `patches/0022-darkstr-docshell-browserid-phase.patch`.
 
 ## Next
 
-**Pins 1–3 + soft residuals 0019 + DocShell 0020–0022 + WebGL/Offscreen 0023 + richer chaff 0024 are merged on main (`4c22b29`); Phase 3 main covers `0016`–`0024`.** Packaging is **DONE**. FP coherence P0 (`0025`–`0027`) + soft P1 TZ/WebRTC (`0028`) merged via #53 as `558cd5d`. Remaining soft residual:
+**Phase 3 eng gate CLOSED** on main tip `7fa573d` (`0016`–`0029`). Packaging + FP soft residuals (TZ/WebRTC/WebGL) are Proof-PASS. See **Phase 3 exit checklist** at the top of this file.
 
-1. Worker `hardwareConcurrency` may remain the host value when the C++ binding is non-configurable.
-2. Headed/marionette WebGL context-null → **0029** (this PR) force-enables `webgl.disabled=false` + `webgl.force-enabled` + `gfx.blocklist.all=-1` + **`librewolf.webgl.prompt=false`** (LW doorhanger gate; status 2=UNKNOWN still noted).
+Closed residuals (historical):
+
+1. ~~Worker `hardwareConcurrency` host when C++ binding non-configurable~~ → **0027** C++ content gates + Proof PASS.
+2. ~~Headed/marionette WebGL context-null~~ → **0029** merged PR #54 (`librewolf.webgl.prompt=false` real gate; prefs/blocklist necessary but not sufficient).
 
 ## Proof gates for this PR
 
@@ -425,11 +464,11 @@ Mini helper: [`PHASE-3-FP-0028-MINI-APPLY.sh`](PHASE-3-FP-0028-MINI-APPLY.sh)
 - First HTTPS holdback: live timezone stays host (`America/Chicago` on Mini); WebRTC is disabled globally under Pollution.
 - Pollution + hooks after SubsequentNav: window and dedicated-worker timezone = `Europe/Berlin`; `media.peerconnection.enabled=false`; RTCPeerConnection absent/disabled and no srflx candidate.
 - Homogeneous / hooks off: `timezoneOverride=""`; prior `media.peerconnection.enabled` state restored exactly; existing P0 HW/langs/worker gates remain PASS.
-- Headed WebGL stays a separate soft validation item; 0028 makes no new WebGL claim.
+- Headed WebGL was a separate soft item at 0028 time; closed by **0029** (merged).
 
-## Soft residual — live WebGL context enable (0029)
+## Soft residual — live WebGL context enable (0029) — **MERGED** PR #54 as `7fa573d`
 
-**Date:** 2026-09-21 (CDT)  
+**Date:** 2026-09-21 (CDT); merged 2026-09-21 (CDT)  
 **Tip-up:** 2026-09-21 (CDT) — blocklist.all=-1 + nsIGfxInfo status map (after soft XOR FAIL on `5d6a391`)  
 **Tip-up2:** 2026-09-21 (CDT) — `librewolf.webgl.prompt=false` (after soft XOR FAIL on `0f8b3b3`: prefs unlocked but getContext null with `creationError: "WebGL is currently disabled."` even headed)
 **Goal:** Make `HTMLCanvasElement.getContext('webgl'|'webgl2')` return a real context on Mini LibreWolf under marionette **and** true headed, so Proof can live-check UNMASKED vendor/renderer + apple cap buckets from **0017/0023**. Canvas 2D depth already OK.

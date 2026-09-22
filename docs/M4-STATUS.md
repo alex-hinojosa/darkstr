@@ -121,6 +121,9 @@ duppel_persona::PersonaSnapshot::depth_canvas_seed / depth_audio_seed / depth_we
 
 ## Next after merge
 
+**Phase 3 eng gate CLOSED** (2026-09-22): main tip `7fa573d` covers native pins `0016`–`0029` (packaging + FP P0/P1 + live WebGL). Exit checklist lives in [`PHASE-3-STATUS.md`](PHASE-3-STATUS.md). Remaining M4 → Phase 3 items below are historical strikethroughs.
+
+
 1. ~~Private-fork: thin chaff timer glue calling `ChaffSchedulerPlan` (train-pinned `.patch`).~~ → **Phase 3 pin 1:** `patches/0016-darkstr-chaff-native-scheduler.patch` — merged PR #43 / `d5fb026`; Mini XOR **PASS** after `install-dist_bin` (`docs/PHASE-3-STATUS.md`).
 2. ~~Canvas/WebGL/Audio hooks reading depth seeds from cached snapshot when pollution_active.~~ → **Phase 3 pin 2:** `patches/0017-darkstr-depth-canvas-webgl-audio.patch` — merged PR #44 / `1eef97b`; Proof XOR **PASS** on tip `9d4fa76` (`docs/PHASE-3-STATUS.md`).
 3. ~~Worker globals coherence with same persona seed.~~ → **Phase 3 pin 3:** `patches/0018-darkstr-worker-globals-coherence.patch` (`docs/PHASE-3-STATUS.md`).
