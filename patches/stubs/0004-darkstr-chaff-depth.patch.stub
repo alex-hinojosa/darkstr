@@ -64,9 +64,10 @@
 #   → See docs/PHASE-3-FP-0028-MINI-APPLY.sh
 #
 #   patches/0029-darkstr-webgl-context-enable.patch
-#     ModeXor force-enables webgl.disabled=false + webgl.force-enabled so
-#     getContext('webgl') is non-null (LibreWolf hardening undo). Product-level
-#     (Homogeneous + Pollution). Spoof still 0017/0023 when context exists.
+#     ModeXor force-enables webgl.disabled=false + webgl.force-enabled +
+#     gfx.blocklist.all=-1 (never +1) so getContext('webgl') is non-null
+#     (LibreWolf hardening undo). Product-level (Homogeneous + Pollution).
+#     Spoof still 0017/0023 when context exists. Status 2=UNKNOWN not blocked.
 #   → See docs/PHASE-3-WEBGL-0029-MINI-APPLY.sh
 #
 # Remaining intent from this stub (NOT in 0016–0029 — later pins):

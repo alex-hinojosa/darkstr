@@ -27,8 +27,12 @@ defaultPref("darkstr.chaosLevel", "balanced");
 // even when Canvas 2D works. Product defaults restore Firefox-coherent WebGL so
 // Proof can live-check UNMASKED vendor/renderer + apple cap buckets (0017/0023).
 // ModeXor also force-sets these on every mode apply (covers marionette profiles).
+// gfx.blocklist.all: -1 ignores feature blocklisting (SoT; mirror:once / AtStartup).
+// Do NOT set +1 — that forces block-all features. Status 2 from nsIGfxInfo is UNKNOWN
+// (not blocked); blocked starts at FEATURE_BLOCKED_DRIVER_VERSION=3.
 defaultPref("webgl.disabled", false);
 defaultPref("webgl.force-enabled", true);
+defaultPref("gfx.blocklist.all", -1);
 
 // Optional M3-CPP mirror (written by DarkstrNativePersona when hooks apply):
 // defaultPref("darkstr.persona.ua", "");

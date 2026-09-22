@@ -3,15 +3,29 @@
 # Proof matrices on Mini LibreWolf (headed + marionette) report getContext('webgl'|
 # 'webgl2') => null / "error: no webgl" even under Homogeneous/hooks-off, while
 # Canvas 2D depth already PASSes. Root cause: LibreWolf ships webgl.disabled=true
-# (and may blocklist the adapter); GPU/display is fine (2D works). Depth hooks in
-# 0017/0023 only spoof getParameter *when a context exists*.
+# (and may soft-block via the driver blocklist). GPU/display is fine (2D works;
+# earlier CreepJS pollution body_skim showed live WebGL Apple M1 on Mini). Depth
+# hooks in 0017/0023 only spoof getParameter *when a context exists*.
+#
+# Corrected facts (tip-up after soft XOR FAIL on tip 5d6a391):
+#   - nsIGfxInfo status 2 = FEATURE_STATUS_UNKNOWN (not blocked). Blocked starts at
+#     FEATURE_BLOCKED_DRIVER_VERSION=3, FEATURE_BLOCKED_DEVICE=4, …
+#   - gfx.blocklist.all > 0 forces block-all features; < 0 ignores feature
+#     blocklisting. Pref is mirror:once / AtStartup — must be in cfg before gfx
+#     init; runtime set after startup is completeness-only (startup cfg is SoT).
+#   - LibreWolf lw/librewolf.cfg may already have pref("webgl.disabled", false);
+#     that alone is insufficient when blocklist/forbid prefs still kill context.
 #
 # Fix (chrome-only, product-level — both Homogeneous and Pollution):
 #   DarkstrModeXor.applyModeEffects → _ensureWebGlContextPrefs():
 #     webgl.disabled=false
-#     webgl.force-enabled=true   (bypass driver blocklist soft-fail)
+#     webgl.force-enabled=true
+#     webgl.forbid-hardware=false / webgl.forbid-software=false (if prefs exist)
+#     try Services.prefs.setIntPref("gfx.blocklist.all", -1) (runtime; cfg SoT)
 #   Diagnostics: darkstr.webgl.ensureApplied / darkstr.webgl.lastStatus
-#   darkstr.cfg + lw append: matching defaultPref so fresh profiles inherit.
+#     (enriched ~180–400 chars: WEBGL_OPENGL + WEBGL2 numeric status + failureId;
+#      map 1=OK 2=UNKNOWN 3=BLOCKED_DRIVER … via nsIGfxInfo)
+#   darkstr.cfg + lw append: matching defaultPref including gfx.blocklist.all=-1
 #
 # Claims: live WebGL context available for Proof XOR (UNMASKED + apple caps via
 # existing 0017/0023 when Pollution+hooks SubsequentNav). Firefox persona only.
@@ -22,32 +36,37 @@
 
 --- a/browser/components/DarkstrModeXor.sys.mjs
 +++ b/browser/components/DarkstrModeXor.sys.mjs
-@@ -25,6 +25,12 @@
+@@ -25,6 +25,14 @@
   * and CB-category observer callbacks (do not fight user/stock). Writes only
   * privacy.* (does not echo darkstr.* back — avoids re-entrancy). Persona/chaff
   * remain WebExt / later M3 hooks; nativeCompatible is read for parity only here.
 + *
 + * Soft residual (0029): LibreWolf hardens webgl.disabled=true so getContext('webgl')
 + * returns null even when Canvas 2D works (headed + marionette). Force-enable WebGL
-+ * prefs on every mode apply so Proof can live-check UNMASKED vendor/renderer + apple
++ * prefs + gfx.blocklist.all=-1 (ignore feature blocklisting; +1 forces block-all)
++ * on every mode apply so Proof can live-check UNMASKED vendor/renderer + apple
 + * cap buckets from 0017/0023 under Pollution+hooks and Homogeneous. Firefox persona
 + * only — does not invent Chrome GPU strings; depth spoof still 0017/0023.
++ * Prefer unlocking path over inventing software GL (Mini GPU can work).
   */
  
  const MODE_PREF = "darkstr.mode";
-@@ -33,6 +39,11 @@
+@@ -33,6 +41,14 @@
  const FPP_PREF = "privacy.fingerprintingProtection";
  /** ContentBlockingPrefs.PREF_CB_CATEGORY on Firefox/LibreWolf 155.0.1-1 */
  const CB_CATEGORY_PREF = "browser.contentblocking.category";
 +/** 0029: LibreWolf hardening often sets webgl.disabled=true (null context). */
 +const WEBGL_DISABLED_PREF = "webgl.disabled";
 +const WEBGL_FORCE_ENABLED_PREF = "webgl.force-enabled";
++const WEBGL_FORBID_HARDWARE_PREF = "webgl.forbid-hardware";
++const WEBGL_FORBID_SOFTWARE_PREF = "webgl.forbid-software";
++const GFX_BLOCKLIST_ALL_PREF = "gfx.blocklist.all";
 +const WEBGL_ENSURE_APPLIED_PREF = "darkstr.webgl.ensureApplied";
 +const WEBGL_LAST_STATUS_PREF = "darkstr.webgl.lastStatus";
  
  export var DarkstrModeXor = {
    _inited: false,
-@@ -136,6 +147,9 @@
+@@ -136,6 +152,9 @@
      }
      this._applying = true;
      try {
@@ -57,33 +76,57 @@
        let mode = "homogeneous";
        try {
          mode = Services.prefs.getStringPref(MODE_PREF, "homogeneous");
-@@ -173,4 +187,37 @@
+@@ -173,4 +192,120 @@
        this._applying = false;
      }
    },
 +
 +  /**
 +   * 0029: undo LibreWolf webgl.disabled hardening so getContext('webgl'|'webgl2')
-+   * can return a real context. force-enabled bypasses the driver blocklist when the
-+   * Mini GPU would otherwise soft-block. Product-level (not Pollution-gated) so
-+   * Homogeneous Proof matrices also get a context. Does not spoof vendor/renderer
-+   * (0017/0023) and does not invent software GL if the GPU process is dead.
++   * can return a real context. force-enabled + forbid-* + gfx.blocklist.all=-1
++   * (ignore feature blocklisting; +1 forces block-all). Startup cfg is SoT for
++   * blocklist.all (mirror:once / AtStartup); runtime setIntPref is completeness.
++   * Product-level (not Pollution-gated). Does not spoof vendor/renderer (0017/0023)
++   * and does not invent software GL if the GPU process is dead.
++   * nsIGfxInfo status 2 = FEATURE_STATUS_UNKNOWN (not blocked).
 +   */
 +  _ensureWebGlContextPrefs() {
 +    try {
 +      Services.prefs.setBoolPref(WEBGL_DISABLED_PREF, false);
 +      Services.prefs.setBoolPref(WEBGL_FORCE_ENABLED_PREF, true);
++      try {
++        if (Services.prefs.getPrefType(WEBGL_FORBID_HARDWARE_PREF) != Services.prefs.PREF_INVALID) {
++          Services.prefs.setBoolPref(WEBGL_FORBID_HARDWARE_PREF, false);
++        }
++      } catch (_eFh) {}
++      try {
++        if (Services.prefs.getPrefType(WEBGL_FORBID_SOFTWARE_PREF) != Services.prefs.PREF_INVALID) {
++          Services.prefs.setBoolPref(WEBGL_FORBID_SOFTWARE_PREF, false);
++        }
++      } catch (_eFs) {}
++      // Completeness only — startup cfg (defaultPref gfx.blocklist.all=-1) is SoT.
++      try {
++        Services.prefs.setIntPref(GFX_BLOCKLIST_ALL_PREF, -1);
++      } catch (_eBl) {}
++
 +      const disabled = Services.prefs.getBoolPref(WEBGL_DISABLED_PREF, true);
 +      const forced = Services.prefs.getBoolPref(WEBGL_FORCE_ENABLED_PREF, false);
-+      const status =
-+        "disabled=" +
-+        String(disabled) +
-+        ",force-enabled=" +
-+        String(forced) +
-+        ",ok=" +
-+        String(!disabled);
++      let blocklistAll = "?";
++      try {
++        blocklistAll = String(Services.prefs.getIntPref(GFX_BLOCKLIST_ALL_PREF, 0));
++      } catch (_eBl2) {}
++
++      const bits = [
++        "disabled=" + String(disabled),
++        "force-enabled=" + String(forced),
++        "blocklist.all=" + blocklistAll,
++        "ok=" + String(!disabled),
++      ];
++      bits.push(this._gfxFeatureStatusSnippet());
++
++      const status = bits.join(",").slice(0, 400);
 +      Services.prefs.setBoolPref(WEBGL_ENSURE_APPLIED_PREF, !disabled);
-+      Services.prefs.setStringPref(WEBGL_LAST_STATUS_PREF, status.slice(0, 180));
++      Services.prefs.setStringPref(WEBGL_LAST_STATUS_PREF, status);
 +    } catch (e) {
 +      try {
 +        Services.prefs.setBoolPref(WEBGL_ENSURE_APPLIED_PREF, false);
@@ -92,6 +135,65 @@
 +          (e && e.message ? String(e.message) : String(e)).slice(0, 160);
 +        Services.prefs.setStringPref(WEBGL_LAST_STATUS_PREF, reason);
 +      } catch (_e2) {}
++    }
++  },
++
++  /**
++   * Enrich lastStatus with nsIGfxInfo WEBGL_OPENGL + WEBGL2 numeric status +
++   * failureId. Map: 1=OK 2=UNKNOWN 3=BLOCKED_DRIVER 4=BLOCKED_DEVICE …
++   * Status 2 is UNKNOWN (not blocked). Best-effort; never throws.
++   */
++  _gfxFeatureStatusSnippet() {
++    try {
++      const gfxInfo = Cc["@mozilla.org/gfx/info;1"].getService(Ci.nsIGfxInfo);
++      const mapName = status => {
++        switch (status) {
++          case 1:
++            return "OK";
++          case 2:
++            return "UNKNOWN";
++          case 3:
++            return "BLOCKED_DRIVER";
++          case 4:
++            return "BLOCKED_DEVICE";
++          case 5:
++            return "BLOCKED_DISALLOW";
++          case 6:
++            return "BLOCKED_OS";
++          case 7:
++            return "BLOCKED_MISC";
++          default:
++            return "STATUS_" + String(status);
++        }
++      };
++      const one = featureConst => {
++        try {
++          const failureId = {};
++          const status = gfxInfo.getFeatureStatus(featureConst, failureId);
++          const fid =
++            failureId && failureId.value != null && String(failureId.value).length
++              ? String(failureId.value)
++              : "";
++          return (
++            String(status) +
++            "=" +
++            mapName(status) +
++            (fid ? ("/" + fid) : "")
++          );
++        } catch (eOne) {
++          return "err:" + (eOne && eOne.message ? String(eOne.message) : String(eOne)).slice(0, 40);
++        }
++      };
++      const opengl = one(Ci.nsIGfxInfo.FEATURE_WEBGL_OPENGL);
++      let webgl2 = "?";
++      try {
++        webgl2 = one(Ci.nsIGfxInfo.FEATURE_WEBGL2);
++      } catch (_eW2) {
++        // FEATURE_WEBGL2 may be absent on older idl; ignore.
++      }
++      return "gfx:WEBGL_OPENGL=" + opengl + ";WEBGL2=" + webgl2;
++    } catch (e) {
++      return "gfx:err=" + (e && e.message ? String(e.message) : String(e)).slice(0, 60);
 +    }
 +  },
  };

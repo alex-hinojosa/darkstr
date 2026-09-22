@@ -285,7 +285,7 @@ Patch: `patches/0022-darkstr-docshell-browserid-phase.patch`.
 **Pins 1–3 + soft residuals 0019 + DocShell 0020–0022 + WebGL/Offscreen 0023 + richer chaff 0024 are merged on main (`4c22b29`); Phase 3 main covers `0016`–`0024`.** Packaging is **DONE**. FP coherence P0 (`0025`–`0027`) + soft P1 TZ/WebRTC (`0028`) merged via #53 as `558cd5d`. Remaining soft residual:
 
 1. Worker `hardwareConcurrency` may remain the host value when the C++ binding is non-configurable.
-2. Headed/marionette WebGL context-null → **0029** (this PR) force-enables `webgl.disabled=false` + `webgl.force-enabled`.
+2. Headed/marionette WebGL context-null → **0029** (this PR) force-enables `webgl.disabled=false` + `webgl.force-enabled` + `gfx.blocklist.all=-1` (status 2=UNKNOWN).
 
 ## Proof gates for this PR
 
@@ -429,45 +429,60 @@ Mini helper: [`PHASE-3-FP-0028-MINI-APPLY.sh`](PHASE-3-FP-0028-MINI-APPLY.sh)
 
 ## Soft residual — live WebGL context enable (0029)
 
-**Date:** 2026-09-21 (CDT)
+**Date:** 2026-09-21 (CDT)  
+**Tip-up:** 2026-09-21 (CDT) — blocklist.all=-1 + nsIGfxInfo status map (after soft XOR FAIL on `5d6a391`)
 **Goal:** Make `HTMLCanvasElement.getContext('webgl'|'webgl2')` return a real context on Mini LibreWolf under marionette **and** true headed, so Proof can live-check UNMASKED vendor/renderer + apple cap buckets from **0017/0023**. Canvas 2D depth already OK.
 
 ### Root cause
 
-LibreWolf hardens `webgl.disabled=true` (and may soft-block via the driver blocklist). That yields `null` / `error: no webgl` even under Homogeneous/hooks-off — so this is **not** a DepthHooks/Pollution gate bug. Canvas 2D PASSing proves GPU/display/marionette are fine; depth spoof in 0017/0023 only runs **when a context exists**.
+LibreWolf hardens `webgl.disabled=true` (and may soft-block via the driver blocklist). That yields `null` / `error: no webgl` even under Homogeneous/hooks-off — so this is **not** a DepthHooks/Pollution gate bug. Canvas 2D PASSing proves GPU/display/marionette are fine; earlier CreepJS pollution body_skim (fp-matrix-2026-09-21) showed live WebGL Apple M1 — Mini GPU can work. Depth spoof in 0017/0023 only runs **when a context exists**. LW `pref("webgl.disabled", false)` alone is insufficient when blocklist/forbid prefs still kill context.
+
+### Corrected facts (do not regress)
+
+| Fact | Correct reading |
+|------|-----------------|
+| nsIGfxInfo status **2** | **FEATURE_STATUS_UNKNOWN** — not blocked. Blocked starts at `FEATURE_BLOCKED_DRIVER_VERSION=3`, `FEATURE_BLOCKED_DEVICE=4`, … |
+| `gfx.blocklist.all > 0` | **Forces block-all features** |
+| `gfx.blocklist.all < 0` | **Ignores any feature blocklisting** |
+| Pref lifetime | `mirror: once` / `AtStartup` — **must be in cfg before gfx init**; runtime set after startup is completeness-only (startup cfg is SoT) |
+| Do **not** set `gfx.blocklist.all=+1` | That is the wrong direction (forces block-all) |
 
 ### Fix
 
 | Surface | 0029 behavior |
 |---------|---------------|
-| `DarkstrModeXor.applyModeEffects` | Always `_ensureWebGlContextPrefs()`: `webgl.disabled=false`, `webgl.force-enabled=true` |
+| `DarkstrModeXor.applyModeEffects` | Always `_ensureWebGlContextPrefs()`: `webgl.disabled=false`, `webgl.force-enabled=true`, `webgl.forbid-hardware/software=false` if prefs exist, try `setIntPref("gfx.blocklist.all", -1)` (runtime completeness) |
 | Mode scope | **Product-level** — Homogeneous **and** Pollution (Proof needs both) |
-| `darkstr.cfg` / `lw/librewolf.cfg` | Matching `defaultPref` (+ Mini helper `unlockPref` block) |
-| Diagnostics | `darkstr.webgl.ensureApplied` / `darkstr.webgl.lastStatus` |
+| `darkstr.cfg` / `lw/librewolf.cfg` | Matching `defaultPref` incl. **`gfx.blocklist.all=-1`** (+ Mini helper `unlockPref` block) |
+| Diagnostics | `darkstr.webgl.ensureApplied` / `darkstr.webgl.lastStatus` (~180–400 chars): WEBGL_OPENGL + WEBGL2 **numeric status + failureId**, map 1=OK 2=UNKNOWN 3=BLOCKED_DRIVER … via `Cc['@mozilla.org/gfx/info;1'].getService(Ci.nsIGfxInfo)` |
 | Build | Chrome `browser/components` only; no XUL relink |
 
-Patch: `patches/0029-darkstr-webgl-context-enable.patch`
-Mini helper: [`PHASE-3-WEBGL-0029-MINI-APPLY.sh`](PHASE-3-WEBGL-0029-MINI-APPLY.sh)
+Patch: `patches/0029-darkstr-webgl-context-enable.patch`  
+Mini helper: [`PHASE-3-WEBGL-0029-MINI-APPLY.sh`](PHASE-3-WEBGL-0029-MINI-APPLY.sh) (+ [`PHASE-3-WEBGL-0029-UPGRADE-MODEXOR.py`](PHASE-3-WEBGL-0029-UPGRADE-MODEXOR.py) for v1→enriched)
 
 ### Claims / non-claims
 
 | Claim | Yes? |
 |-------|------|
-| Live WebGL/WebGL2 context non-null (Homogeneous + Pollution) | **Yes** (pref enable) |
+| Live WebGL/WebGL2 context non-null (Homogeneous + Pollution) | **Yes** (pref + blocklist unlock) |
 | Pollution+hooks SubsequentNav UNMASKED + apple caps via 0017/0023 | **Yes** (context unblocks existing spoof) |
 | Firefox persona (LibreWolf/Gecko); seed-42 Apple / Apple M2 when hooks on | **Yes** — no Chrome cosplay |
 | Extension list / shader precision / fail-closed unknown `getParameter` | **No** — WebExt richer |
-| Invent software GL if GPU process is dead | **No** |
-| Break P0 HW=8 / Berlin TZ / WebRTC kill / Homogeneous restore | **No** — ModeXor-only webgl prefs |
+| Invent software GL if GPU process is dead | **No** — prefer unlock path |
+| Break P0 HW=8 / Berlin TZ / WebRTC kill / Homogeneous restore | **No** — ModeXor-only webgl/gfx prefs |
 
-### Proof XOR expectations (0029)
+### Proof XOR expectations (0029) — re-XOR gates
 
 | Case | Expect |
 |------|--------|
 | Homogeneous / hooks off | `getContext('webgl')` **non-null**; `darkstr.webgl.ensureApplied=true`; stock/RFP WebGL params OK |
 | Pollution + hooks after SubsequentNav | Context non-null; UNMASKED vendor/renderer = persona Apple; MAX_* matches apple cap bucket (0017/0023) |
 | Pollution + hooks; first https (strictFirstDoc) | Depth idle / holdback unchanged; context may still exist (pref is product-level) |
+| Prefs | `webgl.disabled=false`, `webgl.force-enabled=true`, **`gfx.blocklist.all=-1`** (never `+1`) |
+| `darkstr.webgl.lastStatus` | Includes WEBGL_OPENGL + WEBGL2 numeric status + failureId; **status=2 means UNKNOWN** (not blocked) |
+| getContext fail | Capture **error string** if any (not only null) |
+| Marionette still UNKNOWN | Prefer **headed GUI** re-probe before FAIL |
 | WebRTC / TZ / HW=8 / langs | Unchanged from 0025–0028 gates |
-| `privacy.*` from 0029 | **None** (only `webgl.*` + `darkstr.webgl.*`) |
+| `privacy.*` from 0029 | **None** (only `webgl.*` / `gfx.blocklist.all` + `darkstr.webgl.*`) |
 
 **Executor note:** Mini Shell/local-exec may be unavailable to some cloud executors — operator runs `PHASE-3-WEBGL-0029-MINI-APPLY.sh` on Mini SSD before Proof re-XOR.
