@@ -141,6 +141,8 @@ if [[ "${APPEND_LW}" -eq 1 ]]; then
         echo 'defaultPref("darkstr.nativePersonaHooks", false);'
         echo 'defaultPref("darkstr.chaosLevel", "balanced");'
         echo 'defaultPref("webgl.disabled", false);'
+        echo 'defaultPref("librewolf.webgl.prompt", false);'
+        echo 'defaultPref("librewolf.webgl.prompt.hide", true);'
         echo 'defaultPref("webgl.force-enabled", true);'
         echo 'defaultPref("gfx.blocklist.all", -1);'
         echo "${MARKER_END}"
@@ -340,6 +342,7 @@ patch_markers_present() {
     0029-darkstr-webgl-context-enable.patch)
       grep -Fq "Soft residual (0029)" "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrModeXor.sys.mjs" \
         && grep -Fq "_ensureWebGlContextPrefs" "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrModeXor.sys.mjs" \
+        && grep -Fq "librewolf.webgl.prompt" "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrModeXor.sys.mjs" \
         && grep -Fq "gfx.blocklist.all" "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrModeXor.sys.mjs" \
         && grep -Fq "_gfxFeatureStatusSnippet" "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrModeXor.sys.mjs"
       ;;
@@ -411,5 +414,5 @@ echo "Phase 3 DocShell SubsequentNav: 0020 + 0021 http(s)-only + 0022 BrowserId/
 echo "Phase 3 WebGL caps + OffscreenCanvas: patches/0023-darkstr-depth-webgl-caps-offscreencanvas.patch (extends 0017 DepthHooksChild). Rebuild: ./mach build --allow-subdirectory-build browser/components then make install-dist_bin (see docs/PHASE-3-DEPTH-0023-MINI-APPLY.sh)."
 echo "Phase 3 richer chaff beacons: patches/0024-darkstr-chaff-richer-beacon-bodies.patch (extends 0016 ChaffScheduler; poisoner.js query parity). Rebuild: ./mach build --allow-subdirectory-build browser/components then make install-dist_bin (see docs/PHASE-3-CHAFF-0024-MINI-APPLY.sh)."
 echo "Phase 3 FP coherence P1: patches/0028-darkstr-fp-coherence-p1-tz-webrtc.patch (native BC timezone + Pollution WebRTC kill/restore). Rebuild: browser/components only; no XUL relink (see docs/PHASE-3-FP-0028-MINI-APPLY.sh)."
-echo "Phase 3 WebGL context enable: patches/0029-darkstr-webgl-context-enable.patch (ModeXor webgl.disabled=false + force-enabled + gfx.blocklist.all=-1; nsIGfxInfo lastStatus). Rebuild: browser/components only; no XUL relink (see docs/PHASE-3-WEBGL-0029-MINI-APPLY.sh)."
+echo "Phase 3 WebGL context enable: patches/0029-darkstr-webgl-context-enable.patch (ModeXor webgl.disabled=false + force-enabled + gfx.blocklist.all=-1 + librewolf.webgl.prompt=false; nsIGfxInfo lastStatus). Rebuild: browser/components only; no XUL relink (see docs/PHASE-3-WEBGL-0029-MINI-APPLY.sh)."
 echo "M-FFI-0008 gecko FFI link: patches/0008-darkstr-gecko-ffi-link.patch (Approach B cdylib). Build FFI: third_party/darkstr/build-and-install-ffi.sh --prefix \"\${DARKSTR_GECKO_OBJDIR:-obj-*}/dist/bin\". Rebuild chrome: ./mach build browser/components (see docs/M-FFI-0008-STATUS.md)."

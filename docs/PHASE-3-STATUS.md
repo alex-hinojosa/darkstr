@@ -285,7 +285,7 @@ Patch: `patches/0022-darkstr-docshell-browserid-phase.patch`.
 **Pins 1–3 + soft residuals 0019 + DocShell 0020–0022 + WebGL/Offscreen 0023 + richer chaff 0024 are merged on main (`4c22b29`); Phase 3 main covers `0016`–`0024`.** Packaging is **DONE**. FP coherence P0 (`0025`–`0027`) + soft P1 TZ/WebRTC (`0028`) merged via #53 as `558cd5d`. Remaining soft residual:
 
 1. Worker `hardwareConcurrency` may remain the host value when the C++ binding is non-configurable.
-2. Headed/marionette WebGL context-null → **0029** (this PR) force-enables `webgl.disabled=false` + `webgl.force-enabled` + `gfx.blocklist.all=-1` (status 2=UNKNOWN).
+2. Headed/marionette WebGL context-null → **0029** (this PR) force-enables `webgl.disabled=false` + `webgl.force-enabled` + `gfx.blocklist.all=-1` + **`librewolf.webgl.prompt=false`** (LW doorhanger gate; status 2=UNKNOWN still noted).
 
 ## Proof gates for this PR
 
@@ -430,12 +430,25 @@ Mini helper: [`PHASE-3-FP-0028-MINI-APPLY.sh`](PHASE-3-FP-0028-MINI-APPLY.sh)
 ## Soft residual — live WebGL context enable (0029)
 
 **Date:** 2026-09-21 (CDT)  
-**Tip-up:** 2026-09-21 (CDT) — blocklist.all=-1 + nsIGfxInfo status map (after soft XOR FAIL on `5d6a391`)
+**Tip-up:** 2026-09-21 (CDT) — blocklist.all=-1 + nsIGfxInfo status map (after soft XOR FAIL on `5d6a391`)  
+**Tip-up2:** 2026-09-21 (CDT) — `librewolf.webgl.prompt=false` (after soft XOR FAIL on `0f8b3b3`: prefs unlocked but getContext null with `creationError: "WebGL is currently disabled."` even headed)
 **Goal:** Make `HTMLCanvasElement.getContext('webgl'|'webgl2')` return a real context on Mini LibreWolf under marionette **and** true headed, so Proof can live-check UNMASKED vendor/renderer + apple cap buckets from **0017/0023**. Canvas 2D depth already OK.
 
 ### Root cause
 
-LibreWolf hardens `webgl.disabled=true` (and may soft-block via the driver blocklist). That yields `null` / `error: no webgl` even under Homogeneous/hooks-off — so this is **not** a DepthHooks/Pollution gate bug. Canvas 2D PASSing proves GPU/display/marionette are fine; earlier CreepJS pollution body_skim (fp-matrix-2026-09-21) showed live WebGL Apple M1 — Mini GPU can work. Depth spoof in 0017/0023 only runs **when a context exists**. LW `pref("webgl.disabled", false)` alone is insufficient when blocklist/forbid prefs still kill context.
+**Real gate (verified tip `0f8b3b3`):** the Err string `"WebGL is currently disabled."` is **not** from `StaticPrefs::webgl_disabled()` when prefs show false. LibreWolf-patched `dom/canvas/ClientWebGLContext.cpp`:
+
+```cpp
+if (mCanvasElement && !StaticPrefs::webgl_disabled()) {
+  if (!IsWebGLAllowed(...)) {
+    return Err("WebGL is currently disabled.");
+  }
+}
+```
+
+`IsWebGLAllowed` uses `StaticPrefs::librewolf_webgl_prompt()` (pref name **`librewolf.webgl.prompt`**; C++ getter dots/hyphens → underscores). When that pref is **true**, WebGL is blocked until a per-origin permission doorhanger is Allowed — marionette/automation never clicks Allow → null context. Pref-layer 0029 was incomplete without unlocking this LW permission prompt gate. Secondary: `librewolf.webgl.prompt.hide` (StaticPrefs::librewolf_webgl_prompt_hide).
+
+Prior incomplete reading: LibreWolf hardens `webgl.disabled=true` / driver blocklist. That remains necessary but **not sufficient**. Canvas 2D PASSing proves GPU/display/marionette are fine; earlier CreepJS pollution body_skim showed live WebGL Apple M1 — Mini GPU can work. Depth spoof in 0017/0023 only runs **when a context exists**. Status **2** from nsIGfxInfo remains **UNKNOWN** (not blocked).
 
 ### Corrected facts (do not regress)
 
@@ -451,10 +464,10 @@ LibreWolf hardens `webgl.disabled=true` (and may soft-block via the driver block
 
 | Surface | 0029 behavior |
 |---------|---------------|
-| `DarkstrModeXor.applyModeEffects` | Always `_ensureWebGlContextPrefs()`: `webgl.disabled=false`, `webgl.force-enabled=true`, `webgl.forbid-hardware/software=false` if prefs exist, try `setIntPref("gfx.blocklist.all", -1)` (runtime completeness) |
+| `DarkstrModeXor.applyModeEffects` | Always `_ensureWebGlContextPrefs()`: `webgl.disabled=false`, `webgl.force-enabled=true`, `webgl.forbid-hardware/software=false` if prefs exist, try `setIntPref("gfx.blocklist.all", -1)`, **`librewolf.webgl.prompt=false`** (+ unlock; if pref exists), `librewolf.webgl.prompt.hide=true` (secondary) |
 | Mode scope | **Product-level** — Homogeneous **and** Pollution (Proof needs both) |
-| `darkstr.cfg` / `lw/librewolf.cfg` | Matching `defaultPref` incl. **`gfx.blocklist.all=-1`** (+ Mini helper `unlockPref` block) |
-| Diagnostics | `darkstr.webgl.ensureApplied` / `darkstr.webgl.lastStatus` (~180–400 chars): WEBGL_OPENGL + WEBGL2 **numeric status + failureId**, map 1=OK 2=UNKNOWN 3=BLOCKED_DRIVER … via `Cc['@mozilla.org/gfx/info;1'].getService(Ci.nsIGfxInfo)` |
+| `darkstr.cfg` / `lw/librewolf.cfg` | Matching `defaultPref` incl. **`gfx.blocklist.all=-1`** + **`librewolf.webgl.prompt=false`** (+ Mini helper `unlockPref` block) |
+| Diagnostics | `darkstr.webgl.ensureApplied` / `darkstr.webgl.lastStatus` (~180–400 chars): includes `librewolf.webgl.prompt=<value>`; WEBGL_OPENGL + WEBGL2 **numeric status + failureId**, map 1=OK 2=UNKNOWN 3=BLOCKED_DRIVER … via `Cc['@mozilla.org/gfx/info;1'].getService(Ci.nsIGfxInfo)` |
 | Build | Chrome `browser/components` only; no XUL relink |
 
 Patch: `patches/0029-darkstr-webgl-context-enable.patch`  
@@ -478,8 +491,8 @@ Mini helper: [`PHASE-3-WEBGL-0029-MINI-APPLY.sh`](PHASE-3-WEBGL-0029-MINI-APPLY.
 | Homogeneous / hooks off | `getContext('webgl')` **non-null**; `darkstr.webgl.ensureApplied=true`; stock/RFP WebGL params OK |
 | Pollution + hooks after SubsequentNav | Context non-null; UNMASKED vendor/renderer = persona Apple; MAX_* matches apple cap bucket (0017/0023) |
 | Pollution + hooks; first https (strictFirstDoc) | Depth idle / holdback unchanged; context may still exist (pref is product-level) |
-| Prefs | `webgl.disabled=false`, `webgl.force-enabled=true`, **`gfx.blocklist.all=-1`** (never `+1`) |
-| `darkstr.webgl.lastStatus` | Includes WEBGL_OPENGL + WEBGL2 numeric status + failureId; **status=2 means UNKNOWN** (not blocked) |
+| Prefs | `webgl.disabled=false`, `webgl.force-enabled=true`, **`gfx.blocklist.all=-1`** (never `+1`), **`librewolf.webgl.prompt=false`** |
+| `darkstr.webgl.lastStatus` | Includes `librewolf.webgl.prompt=<value>` + WEBGL_OPENGL + WEBGL2 numeric status + failureId; **status=2 means UNKNOWN** (not blocked) |
 | getContext fail | Capture **error string** if any (not only null) |
 | Marionette still UNKNOWN | Prefer **headed GUI** re-probe before FAIL |
 | WebRTC / TZ / HW=8 / langs | Unchanged from 0025–0028 gates |

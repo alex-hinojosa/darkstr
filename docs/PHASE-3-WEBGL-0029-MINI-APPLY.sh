@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Run on Alexander's Mac mini (SSD). Atlas: never mv under /Volumes/Mesh.
 # Phase 3 soft residual (0029) — enable live WebGL context (LibreWolf hardening undo).
-# Tip-up: gfx.blocklist.all=-1 (ignore blocklisting; +1 forces block-all), forbid-*,
-# enriched darkstr.webgl.lastStatus (nsIGfxInfo status+failureId; 2=UNKNOWN not blocked).
-# Chrome JS only — no XUL relink required.
+# Tip-up: gfx.blocklist.all=-1 + nsIGfxInfo status; tip-up2: librewolf.webgl.prompt=false
+# (LW IsWebGLAllowed doorhanger — real gate behind "WebGL is currently disabled.").
+# Also librewolf.webgl.prompt.hide=true (secondary). Chrome JS only — no XUL relink.
 set -euo pipefail
 source "${HOME}/src/darkstr-gecko/DARKSTR_GECKO_ROOT.env"
 REPO="${1:-${HOME}/src/darkstr-gecko/darkstr}"
@@ -19,13 +19,14 @@ ensure_0029_enriched() {
   grep -Fq 'Soft residual (0029)' "${MODEXOR}" \
     && grep -Fq '_ensureWebGlContextPrefs' "${MODEXOR}" \
     && grep -Fq 'gfx.blocklist.all' "${MODEXOR}" \
-    && grep -Fq '_gfxFeatureStatusSnippet' "${MODEXOR}"
+    && grep -Fq '_gfxFeatureStatusSnippet' "${MODEXOR}" \
+    && grep -Fq 'librewolf.webgl.prompt' "${MODEXOR}"
 }
 
 if ensure_0029_enriched; then
-  echo "0029 enriched markers already present — skip patch apply"
+  echo "0029 enriched+prompt markers already present — skip patch apply"
 elif grep -Fq '_ensureWebGlContextPrefs' "${MODEXOR}" 2>/dev/null; then
-  echo "0029 v1 present without tip-up — surgical upgrade"
+  echo "0029 present without prompt tip-up — surgical upgrade from patch"
   python3 "${UPGRADE_PY}" "${MODEXOR}" "${PATCH}"
 else
   patch -d "${DARKSTR_GECKO_ROOT}" -p1 --forward --batch < "${PATCH}"
@@ -35,6 +36,7 @@ ensure_0029_enriched
 grep -Fq 'Soft residual (0029)' "${MODEXOR}"
 grep -Fq '_ensureWebGlContextPrefs' "${MODEXOR}"
 grep -Fq 'gfx.blocklist.all' "${MODEXOR}"
+grep -Fq 'librewolf.webgl.prompt' "${MODEXOR}"
 
 # Product cfg before gfx init (mirror:once / AtStartup). Never set blocklist.all=+1.
 if [[ -f "${LW_CFG}" ]]; then
@@ -44,34 +46,49 @@ if [[ -f "${LW_CFG}" ]]; then
 // BEGIN darkstr-0029-webgl — Firefox-coherent WebGL (undo LibreWolf null-context hardening)
 // gfx.blocklist.all=-1 ignores feature blocklisting; +1 forces block-all (never set +1).
 // Pref is AtStartup / mirror:once — must land in cfg before gfx init.
+// librewolf.webgl.prompt=false unlocks LW IsWebGLAllowed doorhanger gate
+// (StaticPrefs::librewolf_webgl_prompt; Err "WebGL is currently disabled.").
 unlockPref("webgl.disabled");
 defaultPref("webgl.disabled", false);
 unlockPref("webgl.force-enabled");
 defaultPref("webgl.force-enabled", true);
 unlockPref("gfx.blocklist.all");
 defaultPref("gfx.blocklist.all", -1);
+unlockPref("librewolf.webgl.prompt");
+defaultPref("librewolf.webgl.prompt", false);
+unlockPref("librewolf.webgl.prompt.hide");
+defaultPref("librewolf.webgl.prompt.hide", true);
 // END darkstr-0029-webgl
 CFG
     echo "Appended darkstr-0029-webgl block to lw/librewolf.cfg"
-  elif ! grep -Fq 'gfx.blocklist.all' "${LW_CFG}"; then
+  elif ! grep -Fq 'librewolf.webgl.prompt' "${LW_CFG}"; then
     python3 - "${LW_CFG}" << 'PY'
 import sys
 from pathlib import Path
 p = Path(sys.argv[1])
 t = p.read_text()
 needle = "// END darkstr-0029-webgl"
-insert = (
-    'unlockPref("gfx.blocklist.all");\n'
-    'defaultPref("gfx.blocklist.all", -1);\n'
-    "// END darkstr-0029-webgl"
-)
+insert_parts = []
+if "gfx.blocklist.all" not in t:
+    insert_parts += [
+        'unlockPref("gfx.blocklist.all");',
+        'defaultPref("gfx.blocklist.all", -1);',
+    ]
+insert_parts += [
+    'unlockPref("librewolf.webgl.prompt");',
+    'defaultPref("librewolf.webgl.prompt", false);',
+    'unlockPref("librewolf.webgl.prompt.hide");',
+    'defaultPref("librewolf.webgl.prompt.hide", true);',
+    "// END darkstr-0029-webgl",
+]
+insert = "\n".join(insert_parts)
 if needle not in t:
     raise SystemExit("END marker missing")
 p.write_text(t.replace(needle, insert, 1))
-print("Inserted gfx.blocklist.all=-1 into darkstr-0029-webgl block")
+print("Inserted librewolf.webgl.prompt(+hide) into darkstr-0029-webgl block")
 PY
   else
-    echo "lw/librewolf.cfg already has darkstr-0029-webgl + blocklist — skip"
+    echo "lw/librewolf.cfg already has darkstr-0029-webgl + prompt — skip"
   fi
 fi
 
@@ -94,4 +111,4 @@ DIST_CFG="${OBJ}/dist/LibreWolf.app/Contents/Resources/librewolf.cfg"
 if [[ -f "${LW_CFG}" && -d "$(dirname "${DIST_CFG}")" ]]; then
   cp "${LW_CFG}" "${DIST_CFG}" || true
 fi
-echo "0029 installed (enriched). Proof: getContext non-null; blocklist.all=-1 (never +1); status=2 is UNKNOWN; capture failureId + getContext error; prefer headed if marionette still UNKNOWN; darkstr.webgl.ensureApplied=true."
+echo "0029 installed (enriched+prompt). Proof: librewolf.webgl.prompt=false; getContext non-null Homogeneous+Pollution; blocklist.all=-1 (never +1); status=2 is UNKNOWN; UNMASKED Apple/M2 + caps; no P0/P1 regress; darkstr.webgl.lastStatus includes librewolf.webgl.prompt=."

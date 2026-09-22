@@ -1,20 +1,35 @@
 # darkstr 0029 — soft residual: enable live WebGL context (LibreWolf hardening undo)
 #
 # Proof matrices on Mini LibreWolf (headed + marionette) report getContext('webgl'|
-# 'webgl2') => null / "error: no webgl" even under Homogeneous/hooks-off, while
-# Canvas 2D depth already PASSes. Root cause: LibreWolf ships webgl.disabled=true
-# (and may soft-block via the driver blocklist). GPU/display is fine (2D works;
-# earlier CreepJS pollution body_skim showed live WebGL Apple M1 on Mini). Depth
-# hooks in 0017/0023 only spoof getParameter *when a context exists*.
+# 'webgl2') => null with creationError "WebGL is currently disabled." even under
+# Homogeneous/hooks-off and after webgl.disabled=false + blocklist unlock (tip
+# 0f8b3b3 soft FAIL). Canvas 2D depth already PASSes — GPU/display fine.
 #
-# Corrected facts (tip-up after soft XOR FAIL on tip 5d6a391):
+# Root cause (verified tip 0f8b3b3): that Err string is NOT from
+# StaticPrefs::webgl_disabled() when prefs show false. LibreWolf-patched
+# ClientWebGLContext.cpp:
+#   if (mCanvasElement && !StaticPrefs::webgl_disabled()) {
+#     if (!IsWebGLAllowed(...)) {
+#       return Err("WebGL is currently disabled.");
+#     }
+#   }
+# IsWebGLAllowed uses StaticPrefs::librewolf_webgl_prompt() (pref name
+# librewolf.webgl.prompt; C++ getter dots/hyphens → underscores). When true,
+# WebGL is blocked until a per-origin permission doorhanger is Allowed —
+# marionette/automation never clicks Allow → null context. Pref-layer 0029 was
+# incomplete without unlocking the LW permission prompt gate.
+#
+# Corrected facts (tip-up after soft XOR FAIL on tip 0f8b3b3; keep prior facts):
 #   - nsIGfxInfo status 2 = FEATURE_STATUS_UNKNOWN (not blocked). Blocked starts at
 #     FEATURE_BLOCKED_DRIVER_VERSION=3, FEATURE_BLOCKED_DEVICE=4, …
 #   - gfx.blocklist.all > 0 forces block-all features; < 0 ignores feature
 #     blocklisting. Pref is mirror:once / AtStartup — must be in cfg before gfx
 #     init; runtime set after startup is completeness-only (startup cfg is SoT).
 #   - LibreWolf lw/librewolf.cfg may already have pref("webgl.disabled", false);
-#     that alone is insufficient when blocklist/forbid prefs still kill context.
+#     that alone is insufficient when blocklist/forbid prefs OR
+#     librewolf.webgl.prompt still kill context.
+#   - StaticPrefList.yaml: librewolf.webgl.prompt / librewolf.webgl.prompt.hide
+#     (RelaxedAtomicBool, mirror:always; prompt default true → doorhanger gate).
 #
 # Fix (chrome-only, product-level — both Homogeneous and Pollution):
 #   DarkstrModeXor.applyModeEffects → _ensureWebGlContextPrefs():
@@ -22,10 +37,14 @@
 #     webgl.force-enabled=true
 #     webgl.forbid-hardware=false / webgl.forbid-software=false (if prefs exist)
 #     try Services.prefs.setIntPref("gfx.blocklist.all", -1) (runtime; cfg SoT)
+#     librewolf.webgl.prompt=false (unlock + set; if pref exists)
+#     librewolf.webgl.prompt.hide=true (secondary; if pref exists)
 #   Diagnostics: darkstr.webgl.ensureApplied / darkstr.webgl.lastStatus
 #     (enriched ~180–400 chars: WEBGL_OPENGL + WEBGL2 numeric status + failureId;
-#      map 1=OK 2=UNKNOWN 3=BLOCKED_DRIVER … via nsIGfxInfo)
+#      map 1=OK 2=UNKNOWN 3=BLOCKED_DRIVER … via nsIGfxInfo;
+#      includes librewolf.webgl.prompt=<value>)
 #   darkstr.cfg + lw append: matching defaultPref including gfx.blocklist.all=-1
+#     + librewolf.webgl.prompt=false (+ prompt.hide)
 #
 # Claims: live WebGL context available for Proof XOR (UNMASKED + apple caps via
 # existing 0017/0023 when Pollution+hooks SubsequentNav). Firefox persona only.
@@ -41,11 +60,12 @@
   * privacy.* (does not echo darkstr.* back — avoids re-entrancy). Persona/chaff
   * remain WebExt / later M3 hooks; nativeCompatible is read for parity only here.
 + *
-+ * Soft residual (0029): LibreWolf hardens webgl.disabled=true so getContext('webgl')
-+ * returns null even when Canvas 2D works (headed + marionette). Force-enable WebGL
-+ * prefs + gfx.blocklist.all=-1 (ignore feature blocklisting; +1 forces block-all)
-+ * on every mode apply so Proof can live-check UNMASKED vendor/renderer + apple
-+ * cap buckets from 0017/0023 under Pollution+hooks and Homogeneous. Firefox persona
++ * Soft residual (0029): LibreWolf nulls getContext('webgl') even when Canvas 2D
++ * works. Unlock webgl.disabled + force-enabled + gfx.blocklist.all=-1 AND
++ * librewolf.webgl.prompt=false (LW IsWebGLAllowed doorhanger gate — Err string
++ * "WebGL is currently disabled." is from that path, not webgl.disabled alone).
++ * Product-level on every mode apply so Proof can live-check UNMASKED + apple
++ * caps from 0017/0023 under Pollution+hooks and Homogeneous. Firefox persona
 + * only — does not invent Chrome GPU strings; depth spoof still 0017/0023.
 + * Prefer unlocking path over inventing software GL (Mini GPU can work).
   */
@@ -55,12 +75,15 @@
  const FPP_PREF = "privacy.fingerprintingProtection";
  /** ContentBlockingPrefs.PREF_CB_CATEGORY on Firefox/LibreWolf 155.0.1-1 */
  const CB_CATEGORY_PREF = "browser.contentblocking.category";
-+/** 0029: LibreWolf hardening often sets webgl.disabled=true (null context). */
++/** 0029: LibreWolf null-context gates — webgl.disabled + librewolf.webgl.prompt. */
 +const WEBGL_DISABLED_PREF = "webgl.disabled";
 +const WEBGL_FORCE_ENABLED_PREF = "webgl.force-enabled";
 +const WEBGL_FORBID_HARDWARE_PREF = "webgl.forbid-hardware";
 +const WEBGL_FORBID_SOFTWARE_PREF = "webgl.forbid-software";
 +const GFX_BLOCKLIST_ALL_PREF = "gfx.blocklist.all";
++/** StaticPref name is dotted; C++ StaticPrefs::librewolf_webgl_prompt(). */
++const LIBREWOLF_WEBGL_PROMPT_PREF = "librewolf.webgl.prompt";
++const LIBREWOLF_WEBGL_PROMPT_HIDE_PREF = "librewolf.webgl.prompt.hide";
 +const WEBGL_ENSURE_APPLIED_PREF = "darkstr.webgl.ensureApplied";
 +const WEBGL_LAST_STATUS_PREF = "darkstr.webgl.lastStatus";
  
@@ -82,12 +105,14 @@
    },
 +
 +  /**
-+   * 0029: undo LibreWolf webgl.disabled hardening so getContext('webgl'|'webgl2')
++   * 0029: unlock LibreWolf WebGL null-context gates so getContext('webgl'|'webgl2')
 +   * can return a real context. force-enabled + forbid-* + gfx.blocklist.all=-1
-+   * (ignore feature blocklisting; +1 forces block-all). Startup cfg is SoT for
-+   * blocklist.all (mirror:once / AtStartup); runtime setIntPref is completeness.
-+   * Product-level (not Pollution-gated). Does not spoof vendor/renderer (0017/0023)
-+   * and does not invent software GL if the GPU process is dead.
++   * (ignore feature blocklisting; +1 forces block-all) + librewolf.webgl.prompt=false
++   * (LW IsWebGLAllowed doorhanger; Err "WebGL is currently disabled." is from that
++   * path when prompt=true). Startup cfg is SoT for blocklist.all (mirror:once /
++   * AtStartup); runtime setIntPref is completeness. Product-level (not
++   * Pollution-gated). Does not spoof vendor/renderer (0017/0023) and does not
++   * invent software GL if the GPU process is dead.
 +   * nsIGfxInfo status 2 = FEATURE_STATUS_UNKNOWN (not blocked).
 +   */
 +  _ensureWebGlContextPrefs() {
@@ -108,6 +133,23 @@
 +      try {
 +        Services.prefs.setIntPref(GFX_BLOCKLIST_ALL_PREF, -1);
 +      } catch (_eBl) {}
++      // LW permission prompt gate (StaticPrefs::librewolf_webgl_prompt).
++      try {
++        if (Services.prefs.getPrefType(LIBREWOLF_WEBGL_PROMPT_PREF) != Services.prefs.PREF_INVALID) {
++          try {
++            Services.prefs.unlockPref(LIBREWOLF_WEBGL_PROMPT_PREF);
++          } catch (_eUnlock) {}
++          Services.prefs.setBoolPref(LIBREWOLF_WEBGL_PROMPT_PREF, false);
++        }
++      } catch (_ePrompt) {}
++      try {
++        if (Services.prefs.getPrefType(LIBREWOLF_WEBGL_PROMPT_HIDE_PREF) != Services.prefs.PREF_INVALID) {
++          try {
++            Services.prefs.unlockPref(LIBREWOLF_WEBGL_PROMPT_HIDE_PREF);
++          } catch (_eUnlockH) {}
++          Services.prefs.setBoolPref(LIBREWOLF_WEBGL_PROMPT_HIDE_PREF, true);
++        }
++      } catch (_eHide) {}
 +
 +      const disabled = Services.prefs.getBoolPref(WEBGL_DISABLED_PREF, true);
 +      const forced = Services.prefs.getBoolPref(WEBGL_FORCE_ENABLED_PREF, false);
@@ -115,17 +157,29 @@
 +      try {
 +        blocklistAll = String(Services.prefs.getIntPref(GFX_BLOCKLIST_ALL_PREF, 0));
 +      } catch (_eBl2) {}
++      let lwPrompt = "?";
++      try {
++        if (Services.prefs.getPrefType(LIBREWOLF_WEBGL_PROMPT_PREF) != Services.prefs.PREF_INVALID) {
++          lwPrompt = String(Services.prefs.getBoolPref(LIBREWOLF_WEBGL_PROMPT_PREF, true));
++        } else {
++          lwPrompt = "absent";
++        }
++      } catch (_ePrompt2) {
++        lwPrompt = "err";
++      }
 +
 +      const bits = [
 +        "disabled=" + String(disabled),
 +        "force-enabled=" + String(forced),
 +        "blocklist.all=" + blocklistAll,
-+        "ok=" + String(!disabled),
++        "librewolf.webgl.prompt=" + lwPrompt,
++        "ok=" + String(!disabled && lwPrompt !== "true"),
 +      ];
 +      bits.push(this._gfxFeatureStatusSnippet());
 +
 +      const status = bits.join(",").slice(0, 400);
-+      Services.prefs.setBoolPref(WEBGL_ENSURE_APPLIED_PREF, !disabled);
++      const ensureOk = !disabled && lwPrompt !== "true";
++      Services.prefs.setBoolPref(WEBGL_ENSURE_APPLIED_PREF, ensureOk);
 +      Services.prefs.setStringPref(WEBGL_LAST_STATUS_PREF, status);
 +    } catch (e) {
 +      try {
