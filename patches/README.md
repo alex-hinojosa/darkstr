@@ -262,3 +262,14 @@ Real unified diff [`0028-darkstr-fp-coherence-p1-tz-webrtc.patch`](0028-darkstr-
 - Pollution+native-hooks disables `media.peerconnection.enabled` after saving whether the user had an explicit value; leaving Pollution restores the exact explicit value or clears back to product default.
 - Snapshot-pref parser now carries `timezone` (seed-42: `Europe/Berlin`).
 - Chrome JS only; no XUL relink. Mini helper: [`docs/PHASE-3-FP-0028-MINI-APPLY.sh`](../docs/PHASE-3-FP-0028-MINI-APPLY.sh).
+
+## Phase 3 soft residual — WebGL context enable (0029)
+
+Real unified diff [`0029-darkstr-webgl-context-enable.patch`](0029-darkstr-webgl-context-enable.patch) against post-0028 Firefox/LibreWolf 155.0.1-1:
+
+- `DarkstrModeXor._ensureWebGlContextPrefs` — `webgl.disabled=false` + `webgl.force-enabled=true` on every mode apply (Homogeneous **and** Pollution)
+- Undoes LibreWolf null-context hardening so `getContext('webgl'|'webgl2')` works; depth spoof still **0017/0023**
+- `darkstr.cfg` / lw append defaults; diagnostics `darkstr.webgl.ensureApplied` / `lastStatus`
+- Chrome JS only; no XUL relink. Mini helper: [`docs/PHASE-3-WEBGL-0029-MINI-APPLY.sh`](../docs/PHASE-3-WEBGL-0029-MINI-APPLY.sh)
+- Non-claims: extension lists / shader precision / fail-closed unknown getParameter; no Chrome cosplay; no software-GL invention
+

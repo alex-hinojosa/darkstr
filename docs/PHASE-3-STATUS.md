@@ -282,10 +282,10 @@ Patch: `patches/0022-darkstr-docshell-browserid-phase.patch`.
 
 ## Next
 
-**Pins 1–3 + soft residuals 0019 + DocShell 0020–0022 + WebGL/Offscreen 0023 + richer chaff 0024 are merged on main (`4c22b29`); Phase 3 main covers `0016`–`0024`.** Packaging is **DONE**. Remaining items are documentation-only soft residuals:
+**Pins 1–3 + soft residuals 0019 + DocShell 0020–0022 + WebGL/Offscreen 0023 + richer chaff 0024 are merged on main (`4c22b29`); Phase 3 main covers `0016`–`0024`.** Packaging is **DONE**. FP coherence P0 (`0025`–`0027`) + soft P1 TZ/WebRTC (`0028`) merged via #53 as `558cd5d`. Remaining soft residual:
 
 1. Worker `hardwareConcurrency` may remain the host value when the C++ binding is non-configurable.
-2. Headed-only live WebGL on Marionette remains a soft residual.
+2. Headed/marionette WebGL context-null → **0029** (this PR) force-enables `webgl.disabled=false` + `webgl.force-enabled`.
 
 ## Proof gates for this PR
 
@@ -426,3 +426,48 @@ Mini helper: [`PHASE-3-FP-0028-MINI-APPLY.sh`](PHASE-3-FP-0028-MINI-APPLY.sh)
 - Pollution + hooks after SubsequentNav: window and dedicated-worker timezone = `Europe/Berlin`; `media.peerconnection.enabled=false`; RTCPeerConnection absent/disabled and no srflx candidate.
 - Homogeneous / hooks off: `timezoneOverride=""`; prior `media.peerconnection.enabled` state restored exactly; existing P0 HW/langs/worker gates remain PASS.
 - Headed WebGL stays a separate soft validation item; 0028 makes no new WebGL claim.
+
+## Soft residual — live WebGL context enable (0029)
+
+**Date:** 2026-09-21 (CDT)
+**Goal:** Make `HTMLCanvasElement.getContext('webgl'|'webgl2')` return a real context on Mini LibreWolf under marionette **and** true headed, so Proof can live-check UNMASKED vendor/renderer + apple cap buckets from **0017/0023**. Canvas 2D depth already OK.
+
+### Root cause
+
+LibreWolf hardens `webgl.disabled=true` (and may soft-block via the driver blocklist). That yields `null` / `error: no webgl` even under Homogeneous/hooks-off — so this is **not** a DepthHooks/Pollution gate bug. Canvas 2D PASSing proves GPU/display/marionette are fine; depth spoof in 0017/0023 only runs **when a context exists**.
+
+### Fix
+
+| Surface | 0029 behavior |
+|---------|---------------|
+| `DarkstrModeXor.applyModeEffects` | Always `_ensureWebGlContextPrefs()`: `webgl.disabled=false`, `webgl.force-enabled=true` |
+| Mode scope | **Product-level** — Homogeneous **and** Pollution (Proof needs both) |
+| `darkstr.cfg` / `lw/librewolf.cfg` | Matching `defaultPref` (+ Mini helper `unlockPref` block) |
+| Diagnostics | `darkstr.webgl.ensureApplied` / `darkstr.webgl.lastStatus` |
+| Build | Chrome `browser/components` only; no XUL relink |
+
+Patch: `patches/0029-darkstr-webgl-context-enable.patch`
+Mini helper: [`PHASE-3-WEBGL-0029-MINI-APPLY.sh`](PHASE-3-WEBGL-0029-MINI-APPLY.sh)
+
+### Claims / non-claims
+
+| Claim | Yes? |
+|-------|------|
+| Live WebGL/WebGL2 context non-null (Homogeneous + Pollution) | **Yes** (pref enable) |
+| Pollution+hooks SubsequentNav UNMASKED + apple caps via 0017/0023 | **Yes** (context unblocks existing spoof) |
+| Firefox persona (LibreWolf/Gecko); seed-42 Apple / Apple M2 when hooks on | **Yes** — no Chrome cosplay |
+| Extension list / shader precision / fail-closed unknown `getParameter` | **No** — WebExt richer |
+| Invent software GL if GPU process is dead | **No** |
+| Break P0 HW=8 / Berlin TZ / WebRTC kill / Homogeneous restore | **No** — ModeXor-only webgl prefs |
+
+### Proof XOR expectations (0029)
+
+| Case | Expect |
+|------|--------|
+| Homogeneous / hooks off | `getContext('webgl')` **non-null**; `darkstr.webgl.ensureApplied=true`; stock/RFP WebGL params OK |
+| Pollution + hooks after SubsequentNav | Context non-null; UNMASKED vendor/renderer = persona Apple; MAX_* matches apple cap bucket (0017/0023) |
+| Pollution + hooks; first https (strictFirstDoc) | Depth idle / holdback unchanged; context may still exist (pref is product-level) |
+| WebRTC / TZ / HW=8 / langs | Unchanged from 0025–0028 gates |
+| `privacy.*` from 0029 | **None** (only `webgl.*` + `darkstr.webgl.*`) |
+
+**Executor note:** Mini Shell/local-exec may be unavailable to some cloud executors — operator runs `PHASE-3-WEBGL-0029-MINI-APPLY.sh` on Mini SSD before Proof re-XOR.

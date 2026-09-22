@@ -63,7 +63,13 @@
 #     pref kill with exact prior-state restore.
 #   → See docs/PHASE-3-FP-0028-MINI-APPLY.sh
 #
-# Remaining intent from this stub (NOT in 0016–0028 — later pins):
+#   patches/0029-darkstr-webgl-context-enable.patch
+#     ModeXor force-enables webgl.disabled=false + webgl.force-enabled so
+#     getContext('webgl') is non-null (LibreWolf hardening undo). Product-level
+#     (Homogeneous + Pollution). Spoof still 0017/0023 when context exists.
+#   → See docs/PHASE-3-WEBGL-0029-MINI-APPLY.sh
+#
+# Remaining intent from this stub (NOT in 0016–0029 — later pins):
 #   ServiceWorker / Worklets → not claimed (no honest injection path yet)
 #   Full WebGL ext/precision/fail-closed spoof → WebExt path remains richer
 #   ISOLATED-world sendBeacon / DOM chaff native parity → WebExt remains richer

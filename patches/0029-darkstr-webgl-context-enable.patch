@@ -1,0 +1,97 @@
+# darkstr 0029 — soft residual: enable live WebGL context (LibreWolf hardening undo)
+#
+# Proof matrices on Mini LibreWolf (headed + marionette) report getContext('webgl'|
+# 'webgl2') => null / "error: no webgl" even under Homogeneous/hooks-off, while
+# Canvas 2D depth already PASSes. Root cause: LibreWolf ships webgl.disabled=true
+# (and may blocklist the adapter); GPU/display is fine (2D works). Depth hooks in
+# 0017/0023 only spoof getParameter *when a context exists*.
+#
+# Fix (chrome-only, product-level — both Homogeneous and Pollution):
+#   DarkstrModeXor.applyModeEffects → _ensureWebGlContextPrefs():
+#     webgl.disabled=false
+#     webgl.force-enabled=true   (bypass driver blocklist soft-fail)
+#   Diagnostics: darkstr.webgl.ensureApplied / darkstr.webgl.lastStatus
+#   darkstr.cfg + lw append: matching defaultPref so fresh profiles inherit.
+#
+# Claims: live WebGL context available for Proof XOR (UNMASKED + apple caps via
+# existing 0017/0023 when Pollution+hooks SubsequentNav). Firefox persona only.
+# Non-claims: extension lists / shader precision / fail-closed unknown getParameter
+# (WebExt richer); no Chrome cosplay; no software-GL invention if GPU process dead.
+#
+# Chrome JS only; no XUL relink. Brand: darkstr — not official LibreWolf.
+
+--- a/browser/components/DarkstrModeXor.sys.mjs
++++ b/browser/components/DarkstrModeXor.sys.mjs
+@@ -25,6 +25,12 @@
+  * and CB-category observer callbacks (do not fight user/stock). Writes only
+  * privacy.* (does not echo darkstr.* back — avoids re-entrancy). Persona/chaff
+  * remain WebExt / later M3 hooks; nativeCompatible is read for parity only here.
++ *
++ * Soft residual (0029): LibreWolf hardens webgl.disabled=true so getContext('webgl')
++ * returns null even when Canvas 2D works (headed + marionette). Force-enable WebGL
++ * prefs on every mode apply so Proof can live-check UNMASKED vendor/renderer + apple
++ * cap buckets from 0017/0023 under Pollution+hooks and Homogeneous. Firefox persona
++ * only — does not invent Chrome GPU strings; depth spoof still 0017/0023.
+  */
+ 
+ const MODE_PREF = "darkstr.mode";
+@@ -33,6 +39,11 @@
+ const FPP_PREF = "privacy.fingerprintingProtection";
+ /** ContentBlockingPrefs.PREF_CB_CATEGORY on Firefox/LibreWolf 155.0.1-1 */
+ const CB_CATEGORY_PREF = "browser.contentblocking.category";
++/** 0029: LibreWolf hardening often sets webgl.disabled=true (null context). */
++const WEBGL_DISABLED_PREF = "webgl.disabled";
++const WEBGL_FORCE_ENABLED_PREF = "webgl.force-enabled";
++const WEBGL_ENSURE_APPLIED_PREF = "darkstr.webgl.ensureApplied";
++const WEBGL_LAST_STATUS_PREF = "darkstr.webgl.lastStatus";
+ 
+ export var DarkstrModeXor = {
+   _inited: false,
+@@ -136,6 +147,9 @@
+     }
+     this._applying = true;
+     try {
++      // 0029: enable live WebGL for both Homogeneous and Pollution (Firefox-coherent).
++      this._ensureWebGlContextPrefs();
++
+       let mode = "homogeneous";
+       try {
+         mode = Services.prefs.getStringPref(MODE_PREF, "homogeneous");
+@@ -173,4 +187,37 @@
+       this._applying = false;
+     }
+   },
++
++  /**
++   * 0029: undo LibreWolf webgl.disabled hardening so getContext('webgl'|'webgl2')
++   * can return a real context. force-enabled bypasses the driver blocklist when the
++   * Mini GPU would otherwise soft-block. Product-level (not Pollution-gated) so
++   * Homogeneous Proof matrices also get a context. Does not spoof vendor/renderer
++   * (0017/0023) and does not invent software GL if the GPU process is dead.
++   */
++  _ensureWebGlContextPrefs() {
++    try {
++      Services.prefs.setBoolPref(WEBGL_DISABLED_PREF, false);
++      Services.prefs.setBoolPref(WEBGL_FORCE_ENABLED_PREF, true);
++      const disabled = Services.prefs.getBoolPref(WEBGL_DISABLED_PREF, true);
++      const forced = Services.prefs.getBoolPref(WEBGL_FORCE_ENABLED_PREF, false);
++      const status =
++        "disabled=" +
++        String(disabled) +
++        ",force-enabled=" +
++        String(forced) +
++        ",ok=" +
++        String(!disabled);
++      Services.prefs.setBoolPref(WEBGL_ENSURE_APPLIED_PREF, !disabled);
++      Services.prefs.setStringPref(WEBGL_LAST_STATUS_PREF, status.slice(0, 180));
++    } catch (e) {
++      try {
++        Services.prefs.setBoolPref(WEBGL_ENSURE_APPLIED_PREF, false);
++        const reason =
++          "webgl-ensure: " +
++          (e && e.message ? String(e.message) : String(e)).slice(0, 160);
++        Services.prefs.setStringPref(WEBGL_LAST_STATUS_PREF, reason);
++      } catch (_e2) {}
++    }
++  },
+ };
