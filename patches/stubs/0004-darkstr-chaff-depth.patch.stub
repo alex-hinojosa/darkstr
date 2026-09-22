@@ -58,7 +58,12 @@
 #     langs en-US,en,es after SubsequentNav (languageOverride pulse+clear).
 #   → See docs/PHASE-3-STATUS.md / docs/PHASE-3-FP-0025-MINI-APPLY.sh
 #
-# Remaining intent from this stub (NOT in 0016–0025 — later pins):
+#   patches/0028-darkstr-fp-coherence-p1-tz-webrtc.patch
+#     Native Intl/Date/worker timezone via BC override + Pollution-only WebRTC
+#     pref kill with exact prior-state restore.
+#   → See docs/PHASE-3-FP-0028-MINI-APPLY.sh
+#
+# Remaining intent from this stub (NOT in 0016–0028 — later pins):
 #   ServiceWorker / Worklets → not claimed (no honest injection path yet)
 #   Full WebGL ext/precision/fail-closed spoof → WebExt path remains richer
 #   ISOLATED-world sendBeacon / DOM chaff native parity → WebExt remains richer

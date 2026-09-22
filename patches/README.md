@@ -253,3 +253,12 @@ Real unified diff [`0025-darkstr-fp-coherence-p0.patch`](0025-darkstr-fp-coheren
 - `navigator.languages` full snapshot list after SubsequentNav (override pulse+clear)
 - Apply + rebuild: `browser/components` + `dom/base` + `toolkit/library` then **`make install-dist_bin`** (see `docs/PHASE-3-FP-0025-MINI-APPLY.sh`)
 - Non-claims: ServiceWorker, fonts, screen, CF/TLS, Chrome cosplay
+
+## Phase 3 FP coherence soft P1 (0028)
+
+Real unified diff [`0028-darkstr-fp-coherence-p1-tz-webrtc.patch`](0028-darkstr-fp-coherence-p1-tz-webrtc.patch) against post-0027 Firefox/LibreWolf 155.0.1-1:
+
+- Native `BrowsingContext.timezoneOverride` follows the **armed** persona snapshot, so `Intl.DateTimeFormat().resolvedOptions().timeZone`, `Date`, and worker timezone are coherent. First-document holdback and Homogeneous clear to host behavior.
+- Pollution+native-hooks disables `media.peerconnection.enabled` after saving whether the user had an explicit value; leaving Pollution restores the exact explicit value or clears back to product default.
+- Snapshot-pref parser now carries `timezone` (seed-42: `Europe/Berlin`).
+- Chrome JS only; no XUL relink. Mini helper: [`docs/PHASE-3-FP-0028-MINI-APPLY.sh`](../docs/PHASE-3-FP-0028-MINI-APPLY.sh).
