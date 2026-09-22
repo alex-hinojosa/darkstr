@@ -1,0 +1,150 @@
+# darkstr 0027 — content-process HW force (Fission-safe gates)
+#
+# Root cause (Proof #52 tip 6560394): TryGetHardwareConcurrency is linked and
+# called, but PollutionNativeHooksActive / StrictNextNavArmedMirror read
+# dynamic *string* prefs (darkstr.mode, docShellPhase). Fission sanitizes
+# those out of web content processes, so C++ gates never arm there. UA 140
+# came from JS spoof; hardwareConcurrency WebIDL is non-configurable so JS
+# redefine no-ops (hasInst=false) and host 12 leaks.
+#
+# Fix:
+#   1) Gate on bool mirrors darkstr.pollutionActive + docshell.strictNextNavArmed
+#      (int/bool prefs are not string-sanitized).
+#   2) After gates, never fall closed to host cores (pref int or persona 8).
+#   3) WorkerNavigator::HardwareConcurrency uses the same TryGet.
+#   4) Chrome writes darkstr.pollutionActive in refreshPlan.
+#
+# Brand: darkstr — not official LibreWolf.
+
+diff --git a/dom/base/DarkstrNavigatorHooks.cpp b/dom/base/DarkstrNavigatorHooks.cpp
+--- a/dom/base/DarkstrNavigatorHooks.cpp
++++ b/dom/base/DarkstrNavigatorHooks.cpp
+@@ -15,18 +15,27 @@ namespace mozilla::dom {
+ 
+ namespace {
+ 
+-/** SubsequentNav arm via DocShell phase mirror (0007/0020). Multi-tab limited. */
++/**
++ * SubsequentNav arm. Prefer bool mirror (content-safe under Fission sanitization);
++ * string docShellPhase is a dynamic string and is omitted from web content processes.
++ */
+ bool StrictNextNavArmedMirror() {
++  // Chrome DarkstrNativePersona._syncStrictNextNavArmedDiag writes this bool.
++  if (Preferences::GetBool("darkstr.docshell.strictNextNavArmed", false)) {
++    return true;
++  }
+   if (!Preferences::GetBool("darkstr.strictFirstDoc", true)) {
+     return true;
+   }
++  // Parent / non-sanitized fallback only.
+   nsAutoCString phase;
+   if (NS_FAILED(Preferences::GetCString("darkstr.persona.docShellPhase", phase)) ||
+       phase.IsEmpty()) {
+-    return false;  // unset = first_document parity
++    return false;
+   }
+   return phase.EqualsLiteral("subsequent_nav");
+ }
+ 
+ }  // namespace
+ 
+ bool DarkstrNavigatorHooks::PollutionNativeHooksActive() {
+   if (!Preferences::GetBool("darkstr.nativePersonaHooks", false)) {
+     return false;
+   }
+   if (Preferences::GetBool("darkstr.nativeCompatible", false)) {
+     return false;
+   }
++  // Bool mirror — darkstr.mode is a dynamic string sanitized from content procs.
++  if (Preferences::GetBool("darkstr.pollutionActive", false)) {
++    return true;
++  }
+   nsAutoCString mode;
+   Preferences::GetCString("darkstr.mode", mode);
+   return mode.EqualsLiteral("pollution");
+ }
+@@ -75,7 +84,7 @@ bool DarkstrNavigatorHooks::TryGetHardwareConcurrency(uint64_t& aOut) {
+   if (!PollutionNativeHooksActive() || !StrictNextNavArmedMirror()) {
+     return false;
+   }
+-  // Int mirror (0006). Stale string type / missing user value → GetInt == 0.
++  // Int mirror (0006). Int prefs are not Fission-sanitized like dynamic strings.
+   int32_t hw = Preferences::GetInt("darkstr.persona.hardwareConcurrency", 0);
+   if (hw <= 0) {
+     nsAutoCString hwStr;
+@@ -90,18 +99,11 @@ bool DarkstrNavigatorHooks::TryGetHardwareConcurrency(uint64_t& aOut) {
+       }
+     }
+   }
+-  // When UA mirror is present under the same gate, prefer persona default 8
+-  // over host core count (RFP-off Pollution incoherence — Proof P0).
++  // After gates pass, NEVER fall closed to host core count (Proof P0 / 0027).
++  // Persona default 8 when mirror missing — do not require sanitized UA string.
+   if (hw <= 0) {
+-    nsAutoCString ua;
+-    if (NS_SUCCEEDED(Preferences::GetCString("darkstr.persona.ua", ua)) &&
+-        !ua.IsEmpty()) {
+-      hw = 8;
+-    }
+-  }
+-  if (hw <= 0) {
+-    return false;
++    hw = 8;
+   }
+   aOut = static_cast<uint64_t>(hw);
+   return true;
+ }
+
+diff --git a/dom/workers/WorkerNavigator.cpp b/dom/workers/WorkerNavigator.cpp
+--- a/dom/workers/WorkerNavigator.cpp
++++ b/dom/workers/WorkerNavigator.cpp
+@@ -12,6 +12,7 @@
+ #include "WorkerRunnable.h"
+ #include "WorkerScope.h"
+ #include "mozilla/dom/LockManager.h"
+ #include "mozilla/dom/MediaCapabilities.h"
+ #include "mozilla/dom/Navigator.h"
++#include "DarkstrNavigatorHooks.h"
+ #include "mozilla/dom/Permissions.h"
+ #include "mozilla/dom/Serial.h"
+ #include "mozilla/dom/ServiceWorkerContainer.h"
+@@ -226,6 +227,13 @@ void WorkerNavigator::GetUserAgent(nsString& aUserAgent, ErrorResult& aRv) {
+ }
+ 
+ uint64_t WorkerNavigator::HardwareConcurrency() const {
++  // darkstr 0027: same persona HW as window Navigator (content-process safe gates).
++  uint64_t darkstrHw = 0;
++  if (DarkstrNavigatorHooks::TryGetHardwareConcurrency(darkstrHw)) {
++    return darkstrHw;
++  }
++
+   RuntimeService* rts = RuntimeService::GetService();
+   MOZ_ASSERT(rts);
+ 
+   WorkerPrivate* aWorkerPrivate = GetCurrentThreadWorkerPrivate();
+
+diff --git a/browser/components/DarkstrNativePersona.sys.mjs b/browser/components/DarkstrNativePersona.sys.mjs
+--- a/browser/components/DarkstrNativePersona.sys.mjs
++++ b/browser/components/DarkstrNativePersona.sys.mjs
+@@ -26,6 +26,8 @@
+ const MODE_PREF = "darkstr.mode";
+ const NATIVE_PREF = "darkstr.nativeCompatible";
+ const HOOKS_PREF = "darkstr.nativePersonaHooks";
++/** Content-safe bool mirror of mode===pollution (Fission sanitizes darkstr.mode string). */
++const POLLUTION_ACTIVE_PREF = "darkstr.pollutionActive";
+ const STRICT_PREF = "darkstr.strictFirstDoc";
+ const SNAPSHOT_PREF = "darkstr.persona.snapshot";
+ const SEED_PREF = "darkstr.persona.seed";
+@@ -340,6 +342,12 @@
+       mainInjectDisable,
+     };
+ 
++    // Content-process C++ gates cannot read dynamic string darkstr.mode (Fission
++    // sanitization). Mirror pollution as a bool for DarkstrNavigatorHooks.
++    try {
++      Services.prefs.setBoolPref(POLLUTION_ACTIVE_PREF, !!pollutionActive);
++    } catch (_ePol) {}
++
+     // Mirror UA for C++ DarkstrNsHttpHooks (patches/0005). Clear when idle.
+     try {
+       if (this._plan.applyNativeBase && snapshot?.userAgent) {

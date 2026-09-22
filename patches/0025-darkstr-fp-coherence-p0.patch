@@ -1,0 +1,342 @@
+# darkstr 0025 — P0 fingerprint coherence (Firefox persona, Pollution+hooks)
+# Train: LibreWolf / Firefox 155.0.1-1
+# Brand: darkstr — not official LibreWolf. No Cloudflare/TLS/JA3 / Chrome-cosplay claims.
+# Prerequisite: Phase 3 through 0024 (WorkerHooks + DepthHooks + NativePersona + DocShell SubsequentNav).
+# Apply: patch -d "$DARKSTR_GECKO_ROOT" -p1 < patches/0025-darkstr-fp-coherence-p0.patch
+# Rebuild: ./mach build --allow-subdirectory-build browser/components dom/base
+#          then (C++ change) toolkit/library + install-dist_bin / XUL relink as needed.
+#
+# Proof P0 fixes (fp-matrix-triage-2026-09-21):
+#   1) Window hardwareConcurrency host 12 → persona 8 (RFP-off): instance-first JS spoof,
+#      HW mirror type-coerce, C++ TryGetHardwareConcurrency string/UA-fallback.
+#   2) WorkerHooks idle while Depth installed: _readWorkerPayload no longer uses
+#      snapshotForBrowsingContext(null) for global arm (Depth parity); BC gate stays in
+#      workerPayloadForBrowsingContext; observe docShellPhase for diag refresh.
+#   3) navigator.languages ["en-US"] only → snapshot en-US,en,es: pulse+clear
+#      languageOverride; re-force langs mirror + intl.accept_languages on GetSnapshot.
+#
+# Explicit non-claims: ServiceWorker, fonts, screen, CF/TLS, Chrome spoofing.
+# Homogeneous / hooks-off idle unchanged.
+#
+diff -ruN a/browser/components/DarkstrNativePersona.sys.mjs b/browser/components/DarkstrNativePersona.sys.mjs
+--- a/browser/components/DarkstrNativePersona.sys.mjs
++++ b/browser/components/DarkstrNativePersona.sys.mjs
+@@ -354,6 +354,13 @@
+           PLATFORM_MIRROR_PREF,
+           snapshot.platform || "MacIntel"
+         );
++        // P0: coerce pref type — a stale string value makes setIntPref throw
++        // (caught below) so C++ GetInt stays 0 and window HW leaks host cores.
++        try {
++          if (Services.prefs.prefHasUserValue(HW_MIRROR_PREF)) {
++            Services.prefs.clearUserPref(HW_MIRROR_PREF);
++          }
++        } catch (_eHw) {}
+         Services.prefs.setIntPref(
+           HW_MIRROR_PREF,
+           Number(snapshot.hardwareConcurrency) || 8
+diff -ruN a/browser/components/DarkstrNativePersonaChild.sys.mjs b/browser/components/DarkstrNativePersonaChild.sys.mjs
+--- a/browser/components/DarkstrNativePersonaChild.sys.mjs
++++ b/browser/components/DarkstrNativePersonaChild.sys.mjs
+@@ -8,11 +8,15 @@
+  *
+  * Soft residual: re-query snapshot on pageshow so FFI-filled langs (e.g. +es)
+  * win over a sticky early spoof from DOMWindowCreated.
++ *
++ * P0 FP coherence (0025): instance-first hardwareConcurrency spoof (C++ binding
++ * on Navigator.prototype is often non-configurable when RFP is off — host cores
++ * leak). languages still spoofed; WebIDL [Cached] clear remains Parent/0011–0014.
+  */
+ 
+-function spoof(proto, prop, getter) {
++function spoof(obj, prop, getter) {
+   try {
+-    Object.defineProperty(proto, prop, {
++    Object.defineProperty(obj, prop, {
+       configurable: true,
+       enumerable: true,
+       get: getter,
+@@ -25,19 +29,30 @@
+     return;
+   }
+   const navProto = win.Navigator.prototype;
+-  spoof(navProto, "userAgent", () => snapshot.userAgent);
+-  spoof(navProto, "platform", () => snapshot.platform || "MacIntel");
+-  spoof(navProto, "hardwareConcurrency", () =>
+-    Number(snapshot.hardwareConcurrency) || 8
+-  );
+-  spoof(navProto, "deviceMemory", () => Number(snapshot.deviceMemory) || 8);
++  let nav = null;
++  try {
++    nav = win.navigator;
++  } catch (_e) {}
++  const hw = Number(snapshot.hardwareConcurrency) || 8;
++  const mem = Number(snapshot.deviceMemory) || 8;
+   const langs = Array.isArray(snapshot.languages)
+     ? snapshot.languages.slice()
+     : ["en-US", "en"];
+-  spoof(navProto, "language", () => langs[0] || "en-US");
+-  spoof(navProto, "languages", () => langs.slice());
++  const spoofBoth = (prop, getter) => {
++    // Instance first — own property wins over non-configurable prototype getter.
++    if (nav) {
++      spoof(nav, prop, getter);
++    }
++    spoof(navProto, prop, getter);
++  };
++  spoofBoth("userAgent", () => snapshot.userAgent);
++  spoofBoth("platform", () => snapshot.platform || "MacIntel");
++  spoofBoth("hardwareConcurrency", () => hw);
++  spoofBoth("deviceMemory", () => mem);
++  spoofBoth("language", () => langs[0] || "en-US");
++  spoofBoth("languages", () => langs.slice());
+   try {
+-    spoof(navProto, "userAgentData", () => undefined);
++    spoofBoth("userAgentData", () => undefined);
+   } catch (_e) {}
+ }
+ 
+diff -ruN a/browser/components/DarkstrNativePersonaParent.sys.mjs b/browser/components/DarkstrNativePersonaParent.sys.mjs
+--- a/browser/components/DarkstrNativePersonaParent.sys.mjs
++++ b/browser/components/DarkstrNativePersonaParent.sys.mjs
+@@ -10,17 +10,12 @@
+  * darkstr.persona.languages (force notify) and content 0011 clears the WebIDL
+  * languages cache. nativePersonaHooks stays default-off.
+  *
+- * Soft residual (0013): Proof #35 — honesty PASS but live langs stayed [en-US,en]
+- * with no languagechange → parent prefchange does not reach the measured content
+- * window's observer. Stock path: BrowsingContext.languageOverride DidSet walks
+- * windows and ClearLanguageCache() via BC field IPC. When hooks+pollution apply,
+- * HttpBaseChannel also uses languageOverride for Accept-Language on this BC
+- * (persona CSV coherent). nativePersonaHooks stays default-off.
++ * Soft residual (0013/0014): BC languageOverride primary tag + intl.accept_languages.
+  *
+- * Soft residual (0014): Proof #36 — 0013 CSV languageOverride likely failed
+- * SetRealmLocaleOverride (stock BiDi sets a single locale tag). Parent now sets
+- * primary tag only; refreshPlan drives stock intl.accept_languages (save/restore)
+- * so content observer clears cache + languagechange. Residual OPEN until skim.
++ * P0 FP coherence (0025): After SubsequentNav, primary-only languageOverride was
++ * collapsing live navigator.languages to ["en-US"] (cached first-doc / BC path).
++ * Pulse DidSet clear, then clear override to "" so C++ TryGetLanguages +
++ * intl.accept_languages CSV (en-US,en,es) own the DOM list.
+  */
+ 
+ export class DarkstrNativePersonaParent extends JSWindowActorParent {
+@@ -32,11 +27,19 @@
+       const { DarkstrNativePersona } = ChromeUtils.importESModule(
+         "moz-src:///browser/components/DarkstrNativePersona.sys.mjs"
+       );
+-      // Re-read snapshot + force languages mirror notify even when CSV unchanged
+-      // so pageshow path invalidates content navigator.languages WebIDL cache.
+       const plan = DarkstrNativePersona.refreshPlan();
+-      // 0013/0014: BC languageOverride — primary tag only (SetRealmLocaleOverride).
+       this._syncBrowsingContextLanguageOverride(plan);
++      // Re-assert accept_languages / langs mirror after override pulse so content
++      // observers clear WebIDL [Cached] languages toward the full persona CSV.
++      try {
++        if (plan?.applyNativeBase && plan.snapshot) {
++          const langs = Array.isArray(plan.snapshot.languages)
++            ? plan.snapshot.languages.join(",")
++            : "en-US,en";
++          DarkstrNativePersona._forceLanguagesMirrorNotify?.(langs);
++          DarkstrNativePersona._forceAcceptLanguagesNotify?.(langs);
++        }
++      } catch (_e) {}
+       return DarkstrNativePersona.snapshotForBrowsingContext(
+         this.browsingContext
+       );
+@@ -46,11 +49,9 @@
+   }
+ 
+   /**
+-   * Set top.languageOverride to persona **primary** language tag when
+-   * applyNativeBase; clear to "" when idle. Stock WebDriver BiDi / DidSet calls
+-   * JS::SetRealmLocaleOverride with the whole string — a CSV throws and the
+-   * setter fails (Proof #36: AL never gained es). If unchanged, clear then set
+-   * to force DidSet. On failure write darkstr.persona.lastError (do not swallow).
++   * Pulse languageOverride DidSet (cache clear), then clear to "" when applying
++   * persona so the multi-tag intl.accept_languages / C++ langs mirror win.
++   * Primary-tag sticky override collapsed live languages to ["en-US"] (Proof P0).
+    */
+   _syncBrowsingContextLanguageOverride(plan) {
+     try {
+@@ -58,23 +59,30 @@
+       if (!top) {
+         return;
+       }
+-      let next = "";
+       if (plan?.applyNativeBase && plan.snapshot) {
+         const langs = plan.snapshot.languages;
+-        if (Array.isArray(langs) && langs.length) {
+-          // Primary tag only — not langs.join(",") (0013 CSV broke SetRealmLocaleOverride).
+-          next = String(langs[0] || "").trim();
+-        }
+-      }
+-      // Force DidSet when value unchanged (same-value assignment may no-op).
+-      if (top.languageOverride === next) {
+-        if (next) {
+-          top.languageOverride = "";
+-          top.languageOverride = next;
++        const primary =
++          Array.isArray(langs) && langs.length
++            ? String(langs[0] || "").trim()
++            : "";
++        // Pulse primary → "" to force ClearLanguageCache without leaving a
++        // single-tag override that shrinks navigator.languages.
++        if (primary) {
++          try {
++            if (top.languageOverride !== primary) {
++              top.languageOverride = primary;
++            } else {
++              top.languageOverride = "";
++              top.languageOverride = primary;
++            }
++          } catch (_e) {}
+         }
++        top.languageOverride = "";
+         return;
+       }
+-      top.languageOverride = next;
++      if (top.languageOverride) {
++        top.languageOverride = "";
++      }
+     } catch (e) {
+       try {
+         const reason =
+diff -ruN a/browser/components/DarkstrWorkerHooks.sys.mjs b/browser/components/DarkstrWorkerHooks.sys.mjs
+--- a/browser/components/DarkstrWorkerHooks.sys.mjs
++++ b/browser/components/DarkstrWorkerHooks.sys.mjs
+@@ -23,6 +23,7 @@
+  *   pollution_active = mode=="pollution" && !nativeCompatible
+  *   allow = pollution_active && darkstr.nativePersonaHooks
+  *   per-BC delivery also requires DocShell SubsequentNav arm when strictFirstDoc (0020)
++ *   Global hooksArmed uses snapshot/prefs (Depth parity) — NOT snapshotForBrowsingContext(null)
+  * Homogeneous / Native-Compatible / hooks false → no constructor wrap; payload null.
+  *
+  * Payload: prefer DarkstrNativePersona.snapshot + DarkstrDepthHooks depth seeds
+@@ -35,6 +36,7 @@
+ const HOOKS_PREF = "darkstr.nativePersonaHooks";
+ const SNAPSHOT_PREF = "darkstr.persona.snapshot";
+ const SEED_PREF = "darkstr.persona.seed";
++const DOCSHELL_PHASE_MIRROR_PREF = "darkstr.persona.docShellPhase";
+ const ARMED_PREF = "darkstr.worker.hooksArmed";
+ const LAST_PAYLOAD_PREF = "darkstr.worker.lastPayload";
+ const LAST_ERROR_PREF = "darkstr.worker.lastError";
+@@ -200,7 +202,7 @@
+     }
+     this._inited = true;
+     this._observer = this._observe.bind(this);
+-    for (const p of [MODE_PREF, NATIVE_PREF, HOOKS_PREF, SNAPSHOT_PREF, SEED_PREF]) {
++    for (const p of [MODE_PREF, NATIVE_PREF, HOOKS_PREF, SNAPSHOT_PREF, SEED_PREF, DOCSHELL_PHASE_MIRROR_PREF]) {
+       Services.prefs.addObserver(p, this._observer);
+     }
+     this._registerActor();
+@@ -211,7 +213,7 @@
+     if (!this._inited) {
+       return;
+     }
+-    for (const p of [MODE_PREF, NATIVE_PREF, HOOKS_PREF, SNAPSHOT_PREF, SEED_PREF]) {
++    for (const p of [MODE_PREF, NATIVE_PREF, HOOKS_PREF, SNAPSHOT_PREF, SEED_PREF, DOCSHELL_PHASE_MIRROR_PREF]) {
+       try {
+         Services.prefs.removeObserver(p, this._observer);
+       } catch (_e) {}
+@@ -427,24 +429,29 @@
+   },
+ 
+   _readWorkerPayload() {
+-    // Prefer live modules so worker globals match window persona + depth.
++    // 0020 nextNavOk gate for global arm removed (0025) — SubsequentNav
++    // idle remains in workerPayloadForBrowsingContext only.
++    // Global arm payload (Depth parity): use plan snapshot / prefs, NOT
++    // snapshotForBrowsingContext(null). BC-null + strictFirstDoc always
++    // returned null → hooksArmed stuck false while Depth armed (Proof P0).
++    // SubsequentNav idle is enforced only in workerPayloadForBrowsingContext.
+     let persona = null;
+     let depth = null;
+     try {
+       const { DarkstrNativePersona } = ChromeUtils.importESModule(
+         "moz-src:///browser/components/DarkstrNativePersona.sys.mjs"
+       );
+-      // Prefer BC-aware snapshot (strict-next-nav). Do NOT fall back to raw
+-      // getPlan().snapshot here — that skipped first-doc idle (0020).
+       persona = normalizePersona(
+-        DarkstrNativePersona.snapshotForBrowsingContext?.(null) || null
++        DarkstrNativePersona.getPlan?.()?.snapshot || null
+       );
+     } catch (_e) {}
+     try {
+       const { DarkstrDepthHooks } = ChromeUtils.importESModule(
+         "moz-src:///browser/components/DarkstrDepthHooks.sys.mjs"
+       );
+-      const seeds = DarkstrDepthHooks.depthSeedsForBrowsingContext?.(null);
++      // Prefer Depth's global plan seeds (not BC-gated null).
++      const plan = DarkstrDepthHooks.getPlan?.();
++      const seeds = plan?.armed ? plan.seeds : null;
+       if (seeds && typeof seeds.canvasSeed === "number") {
+         depth = {
+           canvasSeed: seeds.canvasSeed >>> 0,
+@@ -457,27 +464,10 @@
+       }
+     } catch (_e) {}
+ 
+-    // Pref fallbacks only when SubsequentNav arm allows (or strictFirstDoc off).
+-    let nextNavOk = true;
+-    try {
+-      const strictFirst = Services.prefs.getBoolPref(
+-        "darkstr.strictFirstDoc",
+-        true
+-      );
+-      if (strictFirst) {
+-        const phase = Services.prefs.getStringPref(
+-          "darkstr.persona.docShellPhase",
+-          ""
+-        );
+-        nextNavOk = phase === "subsequent_nav";
+-      }
+-    } catch (_e) {
+-      nextNavOk = true;
+-    }
+-    if (!persona && nextNavOk) {
++    if (!persona) {
+       persona = this._readPersonaFromPrefs();
+     }
+-    if (!depth && nextNavOk) {
++    if (!depth) {
+       depth = this._readDepthFromPrefs();
+     }
+     if (!persona) {
+diff -ruN a/dom/base/DarkstrNavigatorHooks.cpp b/dom/base/DarkstrNavigatorHooks.cpp
+--- a/dom/base/DarkstrNavigatorHooks.cpp
++++ b/dom/base/DarkstrNavigatorHooks.cpp
+@@ -75,8 +75,31 @@
+   if (!PollutionNativeHooksActive() || !StrictNextNavArmedMirror()) {
+     return false;
+   }
++  // Int mirror (0006). Stale string type / missing user value → GetInt == 0.
+   int32_t hw = Preferences::GetInt("darkstr.persona.hardwareConcurrency", 0);
+   if (hw <= 0) {
++    nsAutoCString hwStr;
++    if (NS_SUCCEEDED(
++            Preferences::GetCString("darkstr.persona.hardwareConcurrency",
++                                    hwStr)) &&
++        !hwStr.IsEmpty()) {
++      nsresult rv;
++      int32_t parsed = hwStr.ToInteger(&rv);
++      if (NS_SUCCEEDED(rv) && parsed > 0) {
++        hw = parsed;
++      }
++    }
++  }
++  // When UA mirror is present under the same gate, prefer persona default 8
++  // over host core count (RFP-off Pollution incoherence — Proof P0).
++  if (hw <= 0) {
++    nsAutoCString ua;
++    if (NS_SUCCEEDED(Preferences::GetCString("darkstr.persona.ua", ua)) &&
++        !ua.IsEmpty()) {
++      hw = 8;
++    }
++  }
++  if (hw <= 0) {
+     return false;
+   }
+   aOut = static_cast<uint64_t>(hw);

@@ -313,6 +313,14 @@ patch_markers_present() {
         && grep -Fq "0024 honest subset" "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrChaffScheduler.sys.mjs" \
         && grep -Fq "duppel_chaff::ChaffSchedulerPlan" "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrChaffScheduler.sys.mjs"
       ;;
+    0025-darkstr-fp-coherence-p0.patch)
+      grep -Fq "Global arm payload" "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrWorkerHooks.sys.mjs" \
+        && grep -Fq "DOCSHELL_PHASE_MIRROR_PREF" "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrWorkerHooks.sys.mjs" \
+        && grep -Fq "instance-first hardwareConcurrency" "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrNativePersonaChild.sys.mjs" \
+        && grep -Fq "Pulse primary" "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrNativePersonaParent.sys.mjs" \
+        && grep -Fq "stale string value" "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrNativePersona.sys.mjs" \
+        && grep -Fq "persona default 8" "${DARKSTR_GECKO_ROOT}/dom/base/DarkstrNavigatorHooks.cpp"
+      ;;
     *)
       return 1
       ;;
@@ -357,7 +365,7 @@ for stub in "${STUBS}"/000*.patch.stub; do
 done
 if [[ "${stub_count}" -gt 0 ]]; then
   echo "Note: ${stub_count} .patch.stub file(s) present — sketches only, not applied."
-  echo "Remaining stubs are sketches; real patches: 0002 XOR, 0003 chrome persona, 0005 C++ nsHttp, 0006/0007 C++ nav/docshell, 0008-0015 FFI/nav, 0016 chaff timer, 0017 depth canvas/WebGL/Audio, 0018 worker globals + 0019 soft residuals + 0020 DocShell SubsequentNav when present (0004 stub leftovers cleared for DocShell; scheduler->0016; depth->0017; workers->0018; soft->0019; docshell-next->0020; webgl-caps/OffscreenCanvas->0023; richer-chaff-beacons->0024)."
+  echo "Remaining stubs are sketches; real patches: 0002 XOR, 0003 chrome persona, 0005 C++ nsHttp, 0006/0007 C++ nav/docshell, 0008-0015 FFI/nav, 0016 chaff timer, 0017 depth canvas/WebGL/Audio, 0018 worker globals + 0019 soft residuals + 0020 DocShell SubsequentNav when present (0004 stub leftovers cleared for DocShell; scheduler->0016; depth->0017; workers->0018; soft->0019; docshell-next->0020; webgl-caps/OffscreenCanvas->0023; richer-chaff-beacons->0024; fp-coherence-p0->0025)."
 fi
 
 echo "Done. Cfg path always; real unified diffs under patches/000*.patch applied when present."

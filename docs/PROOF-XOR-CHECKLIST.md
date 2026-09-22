@@ -43,6 +43,7 @@ When the PR touches chaff scheduler, canvas/Audio/WebGL/worker depth, or strict-
 - [ ] DocShell SubsequentNav `0020`–`0022`: natural Pollution+hooks+`strictFirstDoc` → blank unarmed → **first https** idle (`first_document`/armed=false/UA155) → **second https** armed (`subsequent_nav`/persona UA); no pref surgery; Homogeneous idle; no `privacy.*`
 - [x] Depth `0023` (WebGL cap buckets + OffscreenCanvas): Proof XOR PASS; merged PR #49; idle by default; SubsequentNav holdback and honest non-claims preserved
 - [x] Chaff `0024` (richer beacon bodies): Proof XOR PASS; merged PR #50 as `4c22b29`; idle by default; GA/GA4/Meta parity; no CF/TLS/JA3 or `privacy.*` writes
+- [ ] FP coherence `0025` (P0): Pollution+hooks after SubsequentNav → window HW=8; `worker.hooksArmed=true` + install; langs include `es`; Homogeneous idle; no CF/TLS/Chrome-cosplay claims
 - [ ] After Mini subdirectory `mach build`: `make install-dist_bin` + LibreWolf.app `moz-src` present (pin 1 lesson)
 - [ ] Native-Compatible site list UI changes (if any) called out for Product Manager; prefer docs-only
 - [ ] Track D Servo/Ladybird remains docs-only — no eng ship dependency

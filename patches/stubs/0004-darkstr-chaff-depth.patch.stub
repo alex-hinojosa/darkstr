@@ -53,7 +53,12 @@
 #   → Gates unchanged (pollution_active + nativePersonaHooks, default-off)
 #   → See docs/PHASE-3-STATUS.md / docs/PHASE-3-CHAFF-0024-MINI-APPLY.sh
 #
-# Remaining intent from this stub (NOT in 0016–0024 — later pins):
+#   patches/0025-darkstr-fp-coherence-p0.patch
+#     WorkerHooks global arm Depth parity; window HW persona 8 (RFP-off);
+#     langs en-US,en,es after SubsequentNav (languageOverride pulse+clear).
+#   → See docs/PHASE-3-STATUS.md / docs/PHASE-3-FP-0025-MINI-APPLY.sh
+#
+# Remaining intent from this stub (NOT in 0016–0025 — later pins):
 #   ServiceWorker / Worklets → not claimed (no honest injection path yet)
 #   Full WebGL ext/precision/fail-closed spoof → WebExt path remains richer
 #   ISOLATED-world sendBeacon / DOM chaff native parity → WebExt remains richer
