@@ -402,3 +402,27 @@ cd ~/src/darkstr-gecko/darkstr   # pull this PR tip
 | Same | `navigator.languages` includes `es` (full snapshot list) |
 | Homogeneous / hooks off | Worker+Depth idle; HW letterbox via RFP OK; no persona langs |
 | `privacy.*` from these modules | **None** |
+
+## Soft P1 Firefox-persona coherence (0028)
+
+**Date:** 2026-09-21 (CDT)
+**Goal:** Close seed-42 timezone incoherence and the optional WebRTC IP leak without Chrome cosplay or hidden permanent pref changes.
+
+| Surface | 0028 behavior |
+|---------|---------------|
+| Intl / Date timezone | `BrowsingContext.timezoneOverride` = armed snapshot timezone (`Europe/Berlin` for seed-42); Gecko updates current realm plus dedicated/shared workers |
+| Strict first document | Host timezone remains until SubsequentNav snapshot arms |
+| Homogeneous / hooks off | Timezone override cleared to host/RFP behavior |
+| WebRTC | `media.peerconnection.enabled=false` only while native Pollution applies |
+| WebRTC restore | Exact pre-Pollution user-pref state restored (explicit bool vs cleared/default) |
+| Build | Chrome `browser/components` only; no XUL relink |
+
+Patch: `patches/0028-darkstr-fp-coherence-p1-tz-webrtc.patch`
+Mini helper: [`PHASE-3-FP-0028-MINI-APPLY.sh`](PHASE-3-FP-0028-MINI-APPLY.sh)
+
+### Proof XOR expectations for 0028
+
+- First HTTPS holdback: live timezone stays host (`America/Chicago` on Mini); WebRTC is disabled globally under Pollution.
+- Pollution + hooks after SubsequentNav: window and dedicated-worker timezone = `Europe/Berlin`; `media.peerconnection.enabled=false`; RTCPeerConnection absent/disabled and no srflx candidate.
+- Homogeneous / hooks off: `timezoneOverride=""`; prior `media.peerconnection.enabled` state restored exactly; existing P0 HW/langs/worker gates remain PASS.
+- Headed WebGL stays a separate soft validation item; 0028 makes no new WebGL claim.

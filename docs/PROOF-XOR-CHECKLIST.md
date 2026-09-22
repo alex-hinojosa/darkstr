@@ -113,3 +113,11 @@ Automated mirror: `duppel_coherence::xor_matrix` + `cargo test -p duppel-coheren
 
 - [x] Phase 3 **0023** WebGL cap buckets + OffscreenCanvas window parity — Proof XOR PASS; merged PR #49
 - [x] Phase 3 **0024** richer chrome chaff beacon bodies — Proof XOR PASS; merged PR #50 as `4c22b29`
+
+## 0028 soft P1 — timezone + WebRTC
+
+- [ ] First HTTPS under strict-first keeps host timezone (holdback)
+- [ ] SubsequentNav window + dedicated worker resolve seed-42 `Europe/Berlin`
+- [ ] Pollution+hooks has `media.peerconnection.enabled=false` / no srflx candidate
+- [ ] Homogeneous clears timezone override and restores exact prior WebRTC pref state
+- [ ] Existing P0 gates remain PASS (window+worker HW=8, langs include es, Worker armed+installed)

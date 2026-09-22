@@ -1,0 +1,169 @@
+# darkstr 0028 — soft P1 Firefox-persona coherence: Intl timezone + WebRTC kill
+#
+# Seed-42 claims Europe/Berlin, but live Intl exposed host America/Chicago.
+# Firefox 155 already has BrowsingContext.timezoneOverride; its DidSet updates
+# current realms plus dedicated/shared workers. Apply only when the strict
+# SubsequentNav snapshot is armed; clear for first-document/Homogeneous.
+#
+# Optional WebRTC pref-kill: under native Pollution save exact prior
+# media.peerconnection.enabled user-pref state, set false, and restore exact
+# state (explicit bool vs cleared/default) when hooks go idle.
+#
+# Chrome JS only; no XUL relink. Brand: darkstr — not official LibreWolf.
+diff --git a/browser/components/DarkstrNativePersona.sys.mjs b/browser/components/DarkstrNativePersona.sys.mjs
+--- a/browser/components/DarkstrNativePersona.sys.mjs
++++ b/browser/components/DarkstrNativePersona.sys.mjs
+@@ -42,6 +42,12 @@
+ /** Stock content observer path (nsGlobalWindowInner) — save/restore around hooks. */
+ const ACCEPT_LANGS_PREF = "intl.accept_languages";
+ const SAVED_ACCEPT_LANGS_PREF = "darkstr.persona.savedAcceptLanguages";
++/** 0028: Pollution-only WebRTC pref kill with exact user-pref restore. */
++const PEERCONNECTION_PREF = "media.peerconnection.enabled";
++const SAVED_PEERCONNECTION_PREF =
++  "darkstr.persona.savedPeerConnectionEnabled";
++const SAVED_PEERCONNECTION_HAD_USER_PREF =
++  "darkstr.persona.savedPeerConnectionHadUserValue";
+ /** Soft failure reason for Proof (e.g. languageOverride SetRealmLocaleOverride). */
+ const PERSONA_LAST_ERROR_PREF = "darkstr.persona.lastError";
+ 
+@@ -347,6 +353,15 @@
+     try {
+       Services.prefs.setBoolPref(POLLUTION_ACTIVE_PREF, !!pollutionActive);
+     } catch (_ePol) {}
++
++    // 0028: optional WebRTC IP pref-kill only while native Pollution applies.
++    // Save whether the user had an explicit value so Homogeneous restores
++    // exactly (set prior bool vs clear back to product default).
++    if (this._plan.applyNativeBase) {
++      this._applyWebRtcKillForPollution();
++    } else {
++      this._restoreWebRtcIfSaved();
++    }
+ 
+     // Mirror UA for C++ DarkstrNsHttpHooks (patches/0005). Clear when idle.
+     try {
+@@ -401,8 +416,56 @@
+     } catch (_e) {}
+ 
+     return this._plan;
++  },
++
++
++  /** 0028: save current media.peerconnection.enabled state, then kill WebRTC. */
++  _applyWebRtcKillForPollution() {
++    try {
++      if (!Services.prefs.prefHasUserValue(SAVED_PEERCONNECTION_HAD_USER_PREF)) {
++        const hadUserValue = Services.prefs.prefHasUserValue(
++          PEERCONNECTION_PREF
++        );
++        const enabled = Services.prefs.getBoolPref(PEERCONNECTION_PREF, true);
++        Services.prefs.setBoolPref(
++          SAVED_PEERCONNECTION_HAD_USER_PREF,
++          hadUserValue
++        );
++        Services.prefs.setBoolPref(SAVED_PEERCONNECTION_PREF, enabled);
++      }
++      Services.prefs.setBoolPref(PEERCONNECTION_PREF, false);
++    } catch (_e) {}
+   },
+ 
++  /** 0028: restore exact pre-Pollution WebRTC user-pref state. */
++  _restoreWebRtcIfSaved() {
++    try {
++      if (!Services.prefs.prefHasUserValue(SAVED_PEERCONNECTION_HAD_USER_PREF)) {
++        return;
++      }
++      const hadUserValue = Services.prefs.getBoolPref(
++        SAVED_PEERCONNECTION_HAD_USER_PREF,
++        false
++      );
++      const enabled = Services.prefs.getBoolPref(
++        SAVED_PEERCONNECTION_PREF,
++        true
++      );
++      if (hadUserValue) {
++        Services.prefs.setBoolPref(PEERCONNECTION_PREF, enabled);
++      } else if (Services.prefs.prefHasUserValue(PEERCONNECTION_PREF)) {
++        Services.prefs.clearUserPref(PEERCONNECTION_PREF);
++      }
++      for (const p of [
++        SAVED_PEERCONNECTION_PREF,
++        SAVED_PEERCONNECTION_HAD_USER_PREF,
++      ]) {
++        if (Services.prefs.prefHasUserValue(p)) {
++          Services.prefs.clearUserPref(p);
++        }
++      }
++    } catch (_e) {}
++  },
+ 
+   /**
+    * Write darkstr.persona.languages and always emit a prefchange when the CSV
+@@ -538,6 +601,7 @@
+             languages: Array.isArray(parsed.languages)
+               ? parsed.languages
+               : ["en-US", "en"],
++            ...(parsed.timezone ? { timezone: String(parsed.timezone) } : {}),
+           };
+         }
+       }
+diff --git a/browser/components/DarkstrNativePersonaParent.sys.mjs b/browser/components/DarkstrNativePersonaParent.sys.mjs
+--- a/browser/components/DarkstrNativePersonaParent.sys.mjs
++++ b/browser/components/DarkstrNativePersonaParent.sys.mjs
+@@ -16,6 +16,10 @@
+  * collapsing live navigator.languages to ["en-US"] (cached first-doc / BC path).
+  * Pulse DidSet clear, then clear override to "" so C++ TryGetLanguages +
+  * intl.accept_languages CSV (en-US,en,es) own the DOM list.
++ *
++ * P1 coherence (0028): browsingContext.timezoneOverride follows the armed
++ * persona snapshot (updates Intl/Date and dedicated/shared workers natively).
++ * First-document holdback and Homogeneous clear it back to host behavior.
+  */
+ 
+ export class DarkstrNativePersonaParent extends JSWindowActorParent {
+@@ -40,15 +44,44 @@
+           DarkstrNativePersona._forceAcceptLanguagesNotify?.(langs);
+         }
+       } catch (_e) {}
+-      return DarkstrNativePersona.snapshotForBrowsingContext(
++      const snapshot = DarkstrNativePersona.snapshotForBrowsingContext(
+         this.browsingContext
+       );
++      this._syncBrowsingContextTimezoneOverride(snapshot);
++      return snapshot;
+     } catch (_e) {
+       return null;
+     }
+   }
+ 
+   /**
++   * 0028: set native realm/worker timezone only when the BC snapshot is armed.
++   * BrowsingContext::DidSet applies JS::SetRealmTimezoneOverride and updates
++   * dedicated/shared workers. Null snapshot preserves strict first-doc holdback.
++   */
++  _syncBrowsingContextTimezoneOverride(snapshot) {
++    try {
++      const top = this.browsingContext?.top;
++      if (!top) {
++        return;
++      }
++      const timezone = snapshot?.timezone
++        ? String(snapshot.timezone).trim()
++        : "";
++      if (top.timezoneOverride !== timezone) {
++        top.timezoneOverride = timezone;
++      }
++    } catch (e) {
++      try {
++        const reason =
++          "timezoneOverride: " +
++          (e && e.message ? String(e.message) : String(e)).slice(0, 180);
++        Services.prefs.setStringPref("darkstr.persona.lastError", reason);
++      } catch (_e2) {}
++    }
++  }
++
++  /**
+    * Pulse languageOverride DidSet (cache clear), then clear to "" when applying
+    * persona so the multi-tag intl.accept_languages / C++ langs mirror win.
+    * Primary-tag sticky override collapsed live languages to ["en-US"] (Proof P0).
