@@ -29,7 +29,9 @@ Goldens: [`../fixtures/seed-goldens.json`](../fixtures/seed-goldens.json).
 - `npm test` → `tests/seed-coherence-goldens.test.mjs`
 - Pollution FPP kill remains applicator / ModeXor SoT — **do not** `defaultPref(privacy.fingerprintingProtection, false)` in `darkstr.cfg` (breaks Homogeneous stock FPP).
 
-## Phase 4 — sticky per-eTLD+1 seed (0030)
+## Phase 4 — sticky per-eTLD+1 seed (0030) — **MERGED** / Proof XOR **PASS**
+
+**Status:** PR [#60](https://github.com/alex-hinojosa/darkstr/pull/60) merged (`b5e4db7`); Proof PASS on LibreWolf 156 tip `95089c0`. Evidence: `~/src/darkstr-gecko/proof-xor/pr60-etld-0030-PASS.md`.
 
 Under Pollution+`darkstr.nativePersonaHooks`, chrome `DarkstrNativePersona` maps
 **eTLD+1 → u32 seed** for the browser session (`Services.eTLD` / base domain from
