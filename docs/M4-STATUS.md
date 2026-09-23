@@ -121,7 +121,7 @@ duppel_persona::PersonaSnapshot::depth_canvas_seed / depth_audio_seed / depth_we
 
 ## Next after merge
 
-**Phase 3 eng gate CLOSED** (2026-09-22): main tip `7fa573d` covers native pins `0016`–`0029` (packaging + FP P0/P1 + live WebGL). Exit checklist lives in [`PHASE-3-STATUS.md`](PHASE-3-STATUS.md). Remaining M4 → Phase 3 items below are historical strikethroughs.
+**Phase 3 eng gate CLOSED** (2026-09-22): main tip `7fa573d` covers native pins `0016`–`0029` (packaging + FP P0/P1 + live WebGL). Exit checklist lives in [`PHASE-3-STATUS.md`](PHASE-3-STATUS.md). **Phase 4** train pin: LibreWolf **156.0.1-1** — [`PHASE-4-STATUS.md`](PHASE-4-STATUS.md). Remaining M4 → Phase 3 items below are historical strikethroughs.
 
 
 1. ~~Private-fork: thin chaff timer glue calling `ChaffSchedulerPlan` (train-pinned `.patch`).~~ → **Phase 3 pin 1:** `patches/0016-darkstr-chaff-native-scheduler.patch` — merged PR #43 / `d5fb026`; Mini XOR **PASS** after `install-dist_bin` (`docs/PHASE-3-STATUS.md`).

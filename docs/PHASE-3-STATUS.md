@@ -46,7 +46,7 @@ Use this to declare Phase 3 **exit** (docs/product), not to reopen eng unless a 
 ### After exit — natural next trains
 
 1. WebExt-parity depth (extensions / shader precision) **or** document permanent non-claim
-2. Next Firefox/LibreWolf train pin (155+ → next)
+2. Next Firefox/LibreWolf train pin → **Phase 4:** LibreWolf **156.0.1-1** ([`PHASE-4-STATUS.md`](PHASE-4-STATUS.md))
 3. Operator packaging / release notes only
 
 ## Goal (historical pin 3 write-up)
