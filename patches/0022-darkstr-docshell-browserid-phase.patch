@@ -1,5 +1,5 @@
 # darkstr 0022 — BrowserId counter + read-only chrome phase (Proof XOR fix on b68286f)
-# Train: Firefox FIREFOX_155_0_1_RELEASE / LibreWolf 155.0.1-1
+# Train: Firefox FIREFOX_156_0_1_RELEASE / LibreWolf 156.0.1-1 (ported from 155)
 # Brand: darkstr — not official LibreWolf. No Cloudflare/TLS/JA3 claims.
 # Prerequisite: 0020 + 0021 (http(s)-only FirstDocument) already on tree.
 # Apply: patch -d "$DARKSTR_GECKO_ROOT" -p1 --forward --batch < patches/0022-darkstr-docshell-browserid-phase.patch
@@ -341,10 +341,11 @@ diff -ruN a/docshell/base/DarkstrDocShellHooks.h b/docshell/base/DarkstrDocShell
 diff -ruN a/docshell/base/nsDocShell.cpp b/docshell/base/nsDocShell.cpp
 --- a/docshell/base/nsDocShell.cpp
 +++ b/docshell/base/nsDocShell.cpp
-@@ -1,10 +1,13 @@
- placeholder
--  // darkstr M3-CPP-DOCSHELL: C++ first/subsequent SoT on top-level document
--  // LoadURI (TYPE_DOCUMENT analogue — DocShell navigations are documents).
+@@ -723,11 +723,15 @@
+ nsresult nsDocShell::LoadURI(nsDocShellLoadState* aLoadState,
+                              bool aSetNavigating,
+                              bool aContinueHandlingSubframeHistory) {
+-  // darkstr M3-CPP-NAV: honest DocShell stub (chrome counter remains SoT).
 -  // 0020: only http(s) count toward strict-first-doc (ignore about:blank/newtab).
 +  // darkstr M3-CPP-DOCSHELL / 0020–0022: http(s)-only FirstDocument count,
 +  // keyed by BrowserId (stable across Fission / cross-group nav).
