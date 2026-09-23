@@ -4,6 +4,8 @@
 **Owner:** Builder  
 **Audience:** Meridian / Proof / Product Manager skim  
 **Brand:** darkstr — not official LibreWolf. Pollution browser, not Cloudflare bypass.  
+**Status:** **Train cutover READY.** Proof XOR **PASS** 2026-09-23 (exit checklist seed-42). Mini SoT app is 156.0.1-1.
+
 **Prior train:** Phase 3 eng gate CLOSED on **155.0.1-1** (main tip through `0029` / PR #54; exit checklist in [`PHASE-3-STATUS.md`](PHASE-3-STATUS.md)).
 
 ## Goal
@@ -28,9 +30,9 @@ Re-pin the darkstr native Firefox-persona surface (`patches/0002`–`0029` + app
 - [x] Dry-run / sequential apply of `patches/0002`–`0029` on 156; log fails (matrix below)
 - [x] Port / refresh broken hunks (DocShell / Navigator / ModeXor / NativePersona / Ffi) — **in-place surgical refresh of 0009/0022/0027/0028/0029** (no blanket 0030+)
 - [ ] Mini subdirectory builds + install-dist_bin as needed (**no full `mach build` yet** — disk ~43 Gi)
-- [ ] Proof: Phase 3 exit checklist on 156 seed-42 Pollution+hooks
+- [x] Proof: Phase 3 exit checklist on 156 seed-42 — **PASS** (`proof-xor/pr-phase4-156-20260923-111540.md`)
 - [ ] Optional: fresh `mach package` DMG when disk allows
-- [ ] Cutover docs: PHASE-3 remains historical; this file is SoT for 156
+- [x] Cutover docs: PHASE-3 remains historical; this file is SoT for 156 (this PR)
 
 ## Mini seat notes (2026-09-23 CDT)
 
@@ -141,3 +143,25 @@ FAIL set is green on 156 dry-run+apply. Next: Mini subdirectory `mach build` + `
 2. ~~Refresh 0027 → 0028 → 0029 → 0009 against landed 156 tree.~~ **done**  
 3. ~~Re-run fail-set dry-run; expect 5/5 PASS.~~ **done** (27/27 OK|SKIP effective)  
 4. Subdirectory `mach build` + `install-dist_bin` + Proof Phase 3 exit on 156 (parent/Proof — not this PR).
+
+
+## Proof XOR — PASS (2026-09-23 CDT)
+
+**App:** `…/librewolf-156.0.1-1/obj-aarch64-apple-darwin25.6.0/dist/LibreWolf.app`  
+**Evidence:** `~/src/darkstr-gecko/proof-xor/pr-phase4-156-20260923-111540.md` (+ `.json` / `pr-phase4-156-PASS.*`)  
+**Main tip at build:** `e0da545` (#58 fail-ports)
+
+### Green
+- First HTTPS holdback (`first_document` / stock 156 UA / host HW); SubsequentNav armed
+- P0: window+worker HW=8; UA Firefox/140 MacIntel; worker langs∋es; WorkerHooks armed+installed
+- P1: TZ Europe/Berlin window+worker; RTCPeerConnection undefined under Pollution; Homogeneous restores host TZ + WebRTC
+- WebGL non-null both modes; Pollution UNMASKED Apple / Apple M2 + apple MAX_*; `librewolf.webgl.prompt===false`
+- Homogeneous depth/worker idle
+
+### Soft residuals (not FAIL)
+- `libduppel_ffi.dylib` missing on this 156 dist (155 still has it) — Proof used pasted Rust seed-42 snapshot
+- Marionette/CSP could not read window `navigator.languages` on SubsequentNav (empty probe); worker langs independently `en-US,en,es`; first-nav window langs included `es`
+
+### Cutover
+- Mini `DARKSTR_GECKO_ROOT` → **156.0.1-1**; `DARKSTR_GECKO_ROOT_155` keeps 155 for reference/FFI until copied
+- Optional next: copy/build `libduppel_ffi` into 156 dist/bin; fresh `mach package` DMG when disk allows (~21 Gi free after build)
