@@ -28,3 +28,22 @@ Goldens: [`../fixtures/seed-goldens.json`](../fixtures/seed-goldens.json).
 - `cargo test -p duppel-coherence seed_goldens`
 - `npm test` → `tests/seed-coherence-goldens.test.mjs`
 - Pollution FPP kill remains applicator / ModeXor SoT — **do not** `defaultPref(privacy.fingerprintingProtection, false)` in `darkstr.cfg` (breaks Homogeneous stock FPP).
+
+## Phase 4 — sticky per-eTLD+1 seed (0030)
+
+Under Pollution+`darkstr.nativePersonaHooks`, chrome `DarkstrNativePersona` maps
+**eTLD+1 → u32 seed** for the browser session (`Services.eTLD` / base domain from
+the top browsing-context URI). Same site (incl. two tabs) shares one seed;
+different sites get different seeds; the seed never remaps mid-site.
+
+| Pref | Role |
+|------|------|
+| `darkstr.persona.rotatePerSite` | Default **true**. Master switch for per-site remap. |
+| `darkstr.persona.snapshot` non-empty | **Lock** — no remap; pasted Rust golden as today. |
+| `darkstr.persona.rotatePerSite=false` | **Lock** — global `darkstr.persona.seed` / snapshot path (Proof seed-42). |
+| `darkstr.persona.lastEtld` / `effectiveSeed` | Diagnostics for Proof XOR. |
+
+Homogeneous / hooks off: idle (no rotation effects). Correlated snapshot still
+comes from Rust FFI when present, else the JS mulberry seed path; TZ/HW/UA/langs
+mirrors follow the effective seed for the current site.
+

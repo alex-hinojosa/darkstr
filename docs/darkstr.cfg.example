@@ -22,6 +22,10 @@ defaultPref("darkstr.chaosLevel", "balanced");
 // expects stock FPP/RFP. Pollution FPP=false is ModeXor (0002) / Rust applicator SoT.
 // Seed coherence: prefer darkstr.persona.snapshot from Rust print_persona_snapshot;
 // see docs/SEED-COHERENCE.md (chrome seed fallback is not Proof-SoT).
+// Soft residual (0030): sticky per-eTLD+1 seed under Pollution+hooks.
+// defaultPref true. Proof golden: paste snapshot OR set rotatePerSite=false
+// (seed=42 path unchanged). Homogeneous/hooks-off: idle — no rotation.
+defaultPref("darkstr.persona.rotatePerSite", true);
 
 // Soft residual (0029): LibreWolf hardens webgl.disabled=true → null WebGL context
 // even when Canvas 2D works. Product defaults restore Firefox-coherent WebGL so

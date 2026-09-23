@@ -165,3 +165,22 @@ FAIL set is green on 156 dry-run+apply. Next: Mini subdirectory `mach build` + `
 ### Cutover
 - Mini `DARKSTR_GECKO_ROOT` → **156.0.1-1**; `DARKSTR_GECKO_ROOT_155` keeps 155 for reference/FFI until copied
 - Optional next: copy/build `libduppel_ffi` into 156 dist/bin; fresh `mach package` DMG when disk allows (~21 Gi free after build)
+
+## Soft residual — eTLD seed rotate (0030)
+
+**Branch:** `builder/phase4-etld-seed-rotate`  
+**Patch:** [`patches/0030-darkstr-persona-etld-seed-rotate.patch`](../patches/0030-darkstr-persona-etld-seed-rotate.patch)  
+**Mini helper:** [`PHASE-4-ETLD-0030-MINI-APPLY.sh`](PHASE-4-ETLD-0030-MINI-APPLY.sh)
+
+Sticky Pollution persona seed **per eTLD+1** (chrome JS). Pref
+`darkstr.persona.rotatePerSite` default true; **locked** (no remap) when snapshot
+pref is non-empty **or** `rotatePerSite=false` (Proof seed-42 / golden paste).
+See [`SEED-COHERENCE.md`](SEED-COHERENCE.md).
+
+Suggested Proof XOR gates (parent pings Proof):
+
+1. Pollution+hooks, rotatePerSite=true, empty snapshot: site A vs site B → different `darkstr.persona.effectiveSeed` (+ different UA/HW from seed path).
+2. Two tabs / BCs of same eTLD+1 → same `effectiveSeed` / same persona fields.
+3. `darkstr.persona.seed=42` + `rotatePerSite=false` (or non-empty snapshot) → fixed golden; no per-site remap.
+4. Homogeneous or hooks=false → idle (no lastEtld/effectiveSeed churn from rotation).
+
