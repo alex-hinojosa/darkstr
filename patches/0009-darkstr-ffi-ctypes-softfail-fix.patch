@@ -1,9 +1,12 @@
-# darkstr 0009 — M-FFI Approach B ctypes soft-fail fix (LibreWolf / Firefox 155.0.1-1)
+# darkstr 0009 — M-FFI Approach B ctypes soft-fail fix (LibreWolf / Firefox 156.0.1-1)
 # Brand: darkstr — not official LibreWolf.
 # PathUtils-less load; timed retry (no permanent lockout); persist FFI snapshot;
 # darkstr.ffi.lastError for headed debug. nativePersonaHooks stays default-off.
---- a/browser/components/DarkstrFfi.sys.mjs	2026-09-15 21:40:52
-+++ b/browser/components/DarkstrFfi.sys.mjs	2026-09-15 21:40:52
+# Train: FIREFOX_156_0_1_RELEASE / LibreWolf 156.0.1-1 (ported from 155; EOF hunk fixed).
+
+diff --git a/browser/components/DarkstrFfi.sys.mjs b/browser/components/DarkstrFfi.sys.mjs
+--- a/browser/components/DarkstrFfi.sys.mjs
++++ b/browser/components/DarkstrFfi.sys.mjs
 @@ -3,45 +3,70 @@
   * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
  
@@ -11,9 +14,10 @@
 - * darkstr M-FFI-0008 — privileged chrome loader for duppel-ffi C ABI (Approach B).
 + * darkstr M-FFI-0008/0009 — privileged chrome loader for duppel-ffi C ABI (Approach B).
   *
-  * Train: LibreWolf / Firefox 155.0.1-1. Brand: darkstr — not official LibreWolf.
+- * Train: LibreWolf / Firefox 155.0.1-1. Brand: darkstr — not official LibreWolf.
 - * Loads libduppel_ffi.{dylib,so,dll} from the application directory (dist/bin)
 - * via js-ctypes and calls darkstr_ffi_persona_snapshot_json.
++ * Train: LibreWolf / Firefox 156.0.1-1. Brand: darkstr — not official LibreWolf.
 + * Loads libduppel_ffi.{dylib,so,dll} from CurProcD / GreD / XREExeF parent via
 + * js-ctypes and calls darkstr_ffi_persona_snapshot_json.
   *
@@ -183,16 +187,11 @@
    const ptr = gSnapshot(seed >>> 0, osC);
    if (ptr.isNull()) {
      return null;
-@@ -156,4 +186,4 @@
-   personaSnapshotFromSeed,
-   abiVersion,
-   lastLoadError,
--};
-\ No newline at end of file
-+};
---- a/browser/components/DarkstrNativePersona.sys.mjs	2026-09-15 21:40:52
-+++ b/browser/components/DarkstrNativePersona.sys.mjs	2026-09-15 21:40:52
-@@ -381,9 +381,29 @@
+
+diff --git a/browser/components/DarkstrNativePersona.sys.mjs b/browser/components/DarkstrNativePersona.sys.mjs
+--- a/browser/components/DarkstrNativePersona.sys.mjs
++++ b/browser/components/DarkstrNativePersona.sys.mjs
+@@ -634,9 +634,29 @@
        );
        const snap = DarkstrFfi.personaSnapshotFromSeed(seed, detectHostOs());
        if (snap && typeof snap.userAgent === "string") {

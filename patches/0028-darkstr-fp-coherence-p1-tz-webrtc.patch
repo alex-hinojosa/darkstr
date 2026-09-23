@@ -10,6 +10,7 @@
 # state (explicit bool vs cleared/default) when hooks go idle.
 #
 # Chrome JS only; no XUL relink. Brand: darkstr — not official LibreWolf.
+# Train: Firefox FIREFOX_156_0_1_RELEASE / LibreWolf 156.0.1-1 (ported; applies after 0027)
 diff --git a/browser/components/DarkstrNativePersona.sys.mjs b/browser/components/DarkstrNativePersona.sys.mjs
 --- a/browser/components/DarkstrNativePersona.sys.mjs
 +++ b/browser/components/DarkstrNativePersona.sys.mjs

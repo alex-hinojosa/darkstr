@@ -52,26 +52,30 @@
 # (WebExt richer); no Chrome cosplay; no software-GL invention if GPU process dead.
 #
 # Chrome JS only; no XUL relink. Brand: darkstr — not official LibreWolf.
+# Train: Firefox FIREFOX_156_0_1_RELEASE / LibreWolf 156.0.1-1 (ported from 155)
 
+diff --git a/browser/components/DarkstrModeXor.sys.mjs b/browser/components/DarkstrModeXor.sys.mjs
 --- a/browser/components/DarkstrModeXor.sys.mjs
 +++ b/browser/components/DarkstrModeXor.sys.mjs
-@@ -25,6 +25,14 @@
+@@ -5,7 +5,7 @@
+ /**
+  * darkstr M2 — live chrome pref observer for XOR mode→RFP side-effects.
+  *
+- * Train pin: Firefox / LibreWolf 155.0.1-1 (FIREFOX_155_0_1_RELEASE).
++ * Train pin: Firefox / LibreWolf 156.0.1-1 (FIREFOX_156_0_1_RELEASE).
+  * Brand: darkstr — not official LibreWolf. Pollution browser, not Cloudflare bypass.
+  *
+  * Semantics mirror the public control plane:
+@@ -25,6 +25,8 @@
   * and CB-category observer callbacks (do not fight user/stock). Writes only
   * privacy.* (does not echo darkstr.* back — avoids re-entrancy). Persona/chaff
   * remain WebExt / later M3 hooks; nativeCompatible is read for parity only here.
 + *
-+ * Soft residual (0029): LibreWolf nulls getContext('webgl') even when Canvas 2D
-+ * works. Unlock webgl.disabled + force-enabled + gfx.blocklist.all=-1 AND
-+ * librewolf.webgl.prompt=false (LW IsWebGLAllowed doorhanger gate — Err string
-+ * "WebGL is currently disabled." is from that path, not webgl.disabled alone).
-+ * Product-level on every mode apply so Proof can live-check UNMASKED + apple
-+ * caps from 0017/0023 under Pollution+hooks and Homogeneous. Firefox persona
-+ * only — does not invent Chrome GPU strings; depth spoof still 0017/0023.
-+ * Prefer unlocking path over inventing software GL (Mini GPU can work).
++ * Soft residual (0029): LibreWolf nulls getContext('webgl') even when Canvas 2D works. Unlock webgl.disabled + force-enabled + gfx.blocklist.all=-1 AND librewolf.webgl.prompt=false (LW IsWebGLAllowed doorhanger gate — Err string "WebGL is currently disabled." is from that path, not webgl.disabled alone). Product-level on every mode apply so Proof can live-check UNMASKED + apple caps from 0017/0023 under Pollution+hooks and Homogeneous. Firefox persona only — does not invent Chrome GPU strings; depth spoof still 0017/0023. Prefer unlocking path over inventing software GL (Mini GPU can work).
   */
  
  const MODE_PREF = "darkstr.mode";
-@@ -33,6 +41,14 @@
+@@ -33,6 +35,17 @@
  const FPP_PREF = "privacy.fingerprintingProtection";
  /** ContentBlockingPrefs.PREF_CB_CATEGORY on Firefox/LibreWolf 155.0.1-1 */
  const CB_CATEGORY_PREF = "browser.contentblocking.category";
@@ -89,7 +93,7 @@
  
  export var DarkstrModeXor = {
    _inited: false,
-@@ -136,6 +152,9 @@
+@@ -136,6 +149,9 @@
      }
      this._applying = true;
      try {
@@ -99,22 +103,11 @@
        let mode = "homogeneous";
        try {
          mode = Services.prefs.getStringPref(MODE_PREF, "homogeneous");
-@@ -173,4 +192,120 @@
+@@ -173,4 +189,140 @@
        this._applying = false;
      }
    },
 +
-+  /**
-+   * 0029: unlock LibreWolf WebGL null-context gates so getContext('webgl'|'webgl2')
-+   * can return a real context. force-enabled + forbid-* + gfx.blocklist.all=-1
-+   * (ignore feature blocklisting; +1 forces block-all) + librewolf.webgl.prompt=false
-+   * (LW IsWebGLAllowed doorhanger; Err "WebGL is currently disabled." is from that
-+   * path when prompt=true). Startup cfg is SoT for blocklist.all (mirror:once /
-+   * AtStartup); runtime setIntPref is completeness. Product-level (not
-+   * Pollution-gated). Does not spoof vendor/renderer (0017/0023) and does not
-+   * invent software GL if the GPU process is dead.
-+   * nsIGfxInfo status 2 = FEATURE_STATUS_UNKNOWN (not blocked).
-+   */
 +  _ensureWebGlContextPrefs() {
 +    try {
 +      Services.prefs.setBoolPref(WEBGL_DISABLED_PREF, false);

@@ -26,7 +26,7 @@ Re-pin the darkstr native Firefox-persona surface (`patches/0002`–`0029` + app
 - [x] `make fetch` + `make dir` → `librewolf-156.0.1-1` present (155 tree retained)
 - [x] Point `DARKSTR_GECKO_ROOT.env` at 156 for port work (`DARKSTR_GECKO_ROOT_155` keeps 155; do not delete 155)
 - [x] Dry-run / sequential apply of `patches/0002`–`0029` on 156; log fails (matrix below)
-- [ ] Port / refresh broken hunks (DocShell / Navigator / ModeXor / NativePersona / Ffi) as `0030+` or train-refresh notes
+- [x] Port / refresh broken hunks (DocShell / Navigator / ModeXor / NativePersona / Ffi) — **in-place surgical refresh of 0009/0022/0027/0028/0029** (no blanket 0030+)
 - [ ] Mini subdirectory builds + install-dist_bin as needed (**no full `mach build` yet** — disk ~43 Gi)
 - [ ] Proof: Phase 3 exit checklist on 156 seed-42 Pollution+hooks
 - [ ] Optional: fresh `mach package` DMG when disk allows
@@ -103,17 +103,41 @@ Effective content coverage if SKIP counts as OK-content: **22 / 27**. Hard port 
 4. NativePersona P1 tz + WebRTC (**0028** refresh).
 5. DarkstrFfi 0009 soft-fail (**0009** refresh or EOF-only fix + re-apply).
 
+## Fail-port refresh (2026-09-23 CDT) — branch `builder/phase4-156-fail-ports`
+
+Method: rewrite only the five FAIL patch bodies against the post-OK 156 tree (after sequential apply of 0002–0008 / 0010–0018 / 0020 / 0023–0026). Per-patch `patch -p1 --dry-run --forward --batch` then apply. 155 tree (`$DARKSTR_GECKO_ROOT_155`) **not** modified. Firefox-persona behavior matched to Phase 3 (155) intent.
+
+| Patch | Port result | Notes |
+|-------|-------------|-------|
+| 0022-darkstr-docshell-browserid-phase | **PASS** | Fixed corrupt `nsDocShell.cpp` hunk (`placeholder` / wrong `@@`) → real LoadURI ~L723 `M3-CPP-NAV` context; `Id()` → `BrowserId()`; chrome `_resetNavPhaseMirror` + hooks rename landed |
+| 0027-darkstr-fp-hw-cpp-content-gates | **PASS** | Regenerated vs post-0020 `DarkstrNavigatorHooks.cpp` + WorkerNavigator + `darkstr.pollutionActive` mirror |
+| 0028-darkstr-fp-coherence-p1-tz-webrtc | **PASS** | Applied clean after 0027 context (tz override + WebRTC kill); train note for 156 |
+| 0029-darkstr-webgl-context-enable | **PASS** | Regenerated vs landed ModeXor; `_ensureWebGlContextPrefs` + LW `webgl.prompt` unlock |
+| 0009-darkstr-ffi-ctypes-softfail-fix | **PASS** | Regenerated; EOF/newline hunk fixed; `defineESModuleGetters` + retry + FFI snapshot persist |
+
+### Counts after fail-port
+
+| Bucket | Count | IDs |
+|--------|------:|-----|
+| OK (applied on 156) | **25** | prior 20 + **0009, 0022, 0027, 0028, 0029** |
+| SKIP (already / folded) | **2** | 0019, 0021 |
+| FAIL | **0** | — |
+| Total | **27** | (no 0004) |
+
+Effective content coverage: **27 / 27** OK|SKIP.
+
 ## Explicit non-claims (unchanged)
+
 
 ServiceWorker/Worklets, fonts, screen/DPR, CF/TLS/JA3, Chrome cosplay, full WebGL extension-list / shader-precision (WebExt richer). Homogeneous WebGL may stay Mozilla/Mozilla (RFP).
 
 ## Suggested next eng pin
 
-**Per-fail port (not a blanket 0030 train-refresh of 0002–0029).** Twenty patches applied clean on 156; only five need surgical refresh. Prefer `0030`–`0034` (or in-place hunk fixes + regenerate) aimed at the FAIL queue above, then Mini subdir rebuilds — still **no** full `mach build` until the FAIL set is green on dry-run.
+FAIL set is green on 156 dry-run+apply. Next: Mini subdirectory `mach build` + `install-dist_bin` as needed (**still no full `mach build` / package** until disk allows), then Proof Phase 3 exit checklist on 156 seed-42 Pollution+hooks.
 
 ## Next
 
-1. Land DocShell BrowserId port (0022) on 156.  
-2. Refresh 0027 → 0029 → 0028 → 0009 against landed 156 tree.  
-3. Re-run sequential dry-run; expect 27/27 OK|SKIP.  
-4. Only then: subdirectory `mach build` + `install-dist_bin` + Proof Phase 3 exit on 156.
+1. ~~Land DocShell BrowserId port (0022) on 156.~~ **done**  
+2. ~~Refresh 0027 → 0028 → 0029 → 0009 against landed 156 tree.~~ **done**  
+3. ~~Re-run fail-set dry-run; expect 5/5 PASS.~~ **done** (27/27 OK|SKIP effective)  
+4. Subdirectory `mach build` + `install-dist_bin` + Proof Phase 3 exit on 156 (parent/Proof — not this PR).
