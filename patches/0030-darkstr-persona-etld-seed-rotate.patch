@@ -1,0 +1,695 @@
+# darkstr 0030 — Pollution sticky persona seed per eTLD+1 (chrome JS)
+#
+# Product (locked): same registrable domain (eTLD+1) → same persona seed for the
+# browser session (tabs of the same site MUST share); different sites → different
+# seeds; never remap mid-site / mid-navigation. Homogeneous / hooks off: idle.
+#
+# Prefs:
+#   darkstr.persona.rotatePerSite  (bool, default true under Pollution+hooks)
+#   Lock / Proof golden (no per-site remap) when EITHER:
+#     - darkstr.persona.snapshot is non-empty (pasted Rust golden), OR
+#     - darkstr.persona.rotatePerSite === false
+#   With lock: seed/snapshot behave as today (seed=42 + snapshot fixed path).
+#   Diagnostics (Proof XOR): darkstr.persona.lastEtld, darkstr.persona.effectiveSeed
+#
+# Implementation:
+#   DarkstrNativePersona maps eTLD+1 → u32 via Services.eTLD.getBaseDomain(top URI);
+#   sticky in-memory Map for the chrome session; deterministic mix(baseSeed, etld)
+#   so two BCs of the same site share without races. Snapshot still from Rust FFI
+#   (0008) when present else JS mulberry; FFI must NOT persist SNAPSHOT_PREF under
+#   rotate (would lock). Parent GetSnapshot re-asserts mirrors for the BC site.
+#
+# Claims: two https sites → different effective seeds; same eTLD+1 → shared seed;
+#   Proof seed=42 + rotatePerSite=false (or snapshot paste) → golden unchanged.
+# Non-claims: permanent disk cache of the map (session Map only); cross-process
+#   C++ mirror prefs are last-writer (chrome actor + per-channel UA are SoT).
+#
+# Chrome JS only; no XUL relink. Brand: darkstr — not official LibreWolf.
+# Train: Firefox FIREFOX_156_0_1_RELEASE / LibreWolf 156.0.1-1
+#
+diff --git a/browser/components/DarkstrNativePersona.sys.mjs b/browser/components/DarkstrNativePersona.sys.mjs
+--- a/browser/components/DarkstrNativePersona.sys.mjs
++++ b/browser/components/DarkstrNativePersona.sys.mjs
+@@ -20,6 +20,16 @@
+  *   5) DocShell-ish first vs subsequent nav via tab top-level load counting
+  *
+  * Idle when Homogeneous / nativeCompatible / hooks false / empty snapshot.
++ *
++ * Soft residual (0030): Pollution+hooks sticky persona seed per eTLD+1.
++ *   - Same registrable domain → same seed for the browser session (tabs share).
++ *   - Different eTLD+1 → different seeds; never remap mid-site / mid-nav.
++ *   - Pref darkstr.persona.rotatePerSite (default true). Locked (no remap) when
++ *     darkstr.persona.snapshot is non-empty OR rotatePerSite=false (Proof golden
++ *     seed=42 / pasted snapshot path unchanged).
++ *   - Homogeneous / hooks off: idle — no rotation side-effects.
++ *   - Snapshot still FFI (0008) if present else JS mulberry seed path; mirrors
++ *     (UA/HW/langs/TZ) stay coherent per effective seed.
+  */
+ 
+ const MODE_PREF = "darkstr.mode";
+@@ -30,6 +40,15 @@
+ const STRICT_PREF = "darkstr.strictFirstDoc";
+ const SNAPSHOT_PREF = "darkstr.persona.snapshot";
+ const SEED_PREF = "darkstr.persona.seed";
++/**
++ * 0030: sticky per-eTLD+1 seed rotation under Pollution+hooks.
++ * Default true. Locked (use global seed/snapshot as today) when snapshot pref
++ * is non-empty OR this pref is false — Proof golden / paste path.
++ */
++const ROTATE_PER_SITE_PREF = "darkstr.persona.rotatePerSite";
++/** Diagnostics for Proof XOR — last resolved eTLD+1 + effective u32 seed. */
++const LAST_ETLD_PREF = "darkstr.persona.lastEtld";
++const EFFECTIVE_SEED_PREF = "darkstr.persona.effectiveSeed";
+ /** Mirror for C++ nsHttp hooks (0005) — plain UA string, no JSON. */
+ const UA_MIRROR_PREF = "darkstr.persona.ua";
+ /** Mirrors for C++ Navigator / DocShell stub (0006). */
+@@ -132,6 +151,12 @@
+   /** @type {WeakMap<object, {topLoads: number}>} */
+   _browserNav: null,
+   _progressListener: null,
++  /** @type {Map<string, number>|null} eTLD+1 → sticky u32 seed (session). */
++  _etldSeedMap: null,
++  /** @type {Map<string, object>|null} eTLD+1 → snapshot cache (session). */
++  _etldSnapshotCache: null,
++  /** Session base seed when rotate active and SEED_PREF unset. */
++  _sessionBaseSeed: 0,
+ 
+   init() {
+     if (this._inited) {
+@@ -139,10 +164,21 @@
+     }
+     this._inited = true;
+     this._bcTopLoads = new Map();
++    this._etldSeedMap = new Map();
++    this._etldSnapshotCache = new Map();
++    this._sessionBaseSeed = 0;
+     this._resetNavPhaseMirror("init");
+ 
+     this._prefObserver = this._observePref.bind(this);
+-    for (const p of [MODE_PREF, NATIVE_PREF, HOOKS_PREF, STRICT_PREF, SNAPSHOT_PREF, SEED_PREF]) {
++    for (const p of [
++      MODE_PREF,
++      NATIVE_PREF,
++      HOOKS_PREF,
++      STRICT_PREF,
++      SNAPSHOT_PREF,
++      SEED_PREF,
++      ROTATE_PER_SITE_PREF,
++    ]) {
+       Services.prefs.addObserver(p, this._prefObserver);
+     }
+ 
+@@ -161,11 +197,26 @@
+     try {
+       Services.obs.removeObserver(this._httpObserver, "http-on-modify-request");
+     } catch (_e) {}
+-    for (const p of [MODE_PREF, NATIVE_PREF, HOOKS_PREF, STRICT_PREF, SNAPSHOT_PREF, SEED_PREF]) {
++    for (const p of [
++      MODE_PREF,
++      NATIVE_PREF,
++      HOOKS_PREF,
++      STRICT_PREF,
++      SNAPSHOT_PREF,
++      SEED_PREF,
++      ROTATE_PER_SITE_PREF,
++    ]) {
+       try {
+         Services.prefs.removeObserver(p, this._prefObserver);
+       } catch (_e) {}
+     }
++    if (this._etldSeedMap) {
++      this._etldSeedMap.clear();
++    }
++    if (this._etldSnapshotCache) {
++      this._etldSnapshotCache.clear();
++    }
++    this._sessionBaseSeed = 0;
+     this._removeProgressListener();
+     if (this._actorRegistered) {
+       try {
+@@ -290,12 +341,261 @@
+       const n = (this._bcTopLoads.get(key) || 0) + 1;
+       this._bcTopLoads.set(key, n);
+       this._syncPhaseMirrorFromCount(n);
++      // 0030: sticky site persona — update C++ mirrors for this eTLD+1 once
++      // counted (SubsequentNav / chrome actor still gate apply separately).
++      try {
++        if (this._rotationActive()) {
++          const siteSnap = this.resolveSnapshotForUri(uri);
++          if (siteSnap) {
++            this._applyPersonaMirrors(siteSnap);
++          }
++        }
++      } catch (_eRot) {}
+       return n;
++    } catch (_e) {
++      return null;
++    }
++  },
++
++  /**
++   * 0030: Proof / operator lock — no per-site remap.
++   * Locked when snapshot pref non-empty OR rotatePerSite=false.
++   */
++  _rotationLocked() {
++    try {
++      const raw = Services.prefs.getStringPref(SNAPSHOT_PREF, "");
++      if (raw && String(raw).trim()) {
++        return true;
++      }
++    } catch (_e) {}
++    try {
++      if (!Services.prefs.getBoolPref(ROTATE_PER_SITE_PREF, true)) {
++        return true;
++      }
++    } catch (_e) {
++      // Missing pref → default rotate on → not locked by this branch.
++    }
++    return false;
++  },
++
++  /**
++   * Rotation runs only under Pollution+hooks when not locked.
++   * Homogeneous / hooks off → idle (caller still gates applyNative).
++   */
++  _rotationWanted() {
++    try {
++      return Services.prefs.getBoolPref(ROTATE_PER_SITE_PREF, true);
++    } catch (_e) {
++      return true;
++    }
++  },
++
++  _rotationActive(plan) {
++    const p = plan || this._plan;
++    if (!p?.pollutionActive || !p?.nativeHooks) {
++      return false;
++    }
++    if (this._rotationLocked()) {
++      return false;
++    }
++    return this._rotationWanted();
++  },
++
++  /**
++   * Registrable domain (eTLD+1) from a URI. Falls back to host on IP / failure.
++   * @returns {string|null}
++   */
++  _etldPlus1FromUri(uri) {
++    try {
++      if (!uri) {
++        return null;
++      }
++      const scheme = String(uri.scheme || "").toLowerCase();
++      if (scheme !== "http" && scheme !== "https") {
++        return null;
++      }
++      let host = "";
++      try {
++        host = uri.asciiHost || uri.host || "";
++      } catch (_e) {
++        host = "";
++      }
++      if (!host) {
++        return null;
++      }
++      try {
++        return Services.eTLD.getBaseDomain(uri);
++      } catch (_e) {
++        try {
++          return Services.eTLD.getBaseDomainFromHost(host);
++        } catch (_e2) {
++          return String(host).toLowerCase();
++        }
++      }
++    } catch (_e) {
++      return null;
++    }
++  },
++
++  _etldPlus1FromBrowsingContext(bc) {
++    try {
++      const top = bc?.top || bc;
++      const cur = top?.currentURI || top?.currentWindowGlobal?.documentURI;
++      return this._etldPlus1FromUri(cur);
++    } catch (_e) {
++      return null;
++    }
++  },
++
++  /** Base u32 seed: SEED_PREF if set, else stable session random. */
++  _baseSeedU32() {
++    let seed = 0;
++    try {
++      seed = Services.prefs.getIntPref(SEED_PREF, 0) >>> 0;
++    } catch (_e) {
++      seed = 0;
++    }
++    if (seed) {
++      return seed >>> 0;
++    }
++    if (!this._sessionBaseSeed) {
++      // Non-zero session root — sticky for this chrome lifetime only.
++      let r = 0;
++      try {
++        r = (Date.now() ^ (Math.floor(Math.random() * 0xffffffff) >>> 0)) >>> 0;
++      } catch (_e) {
++        r = (Date.now() >>> 0) || 1;
++      }
++      this._sessionBaseSeed = r || 1;
++    }
++    return this._sessionBaseSeed >>> 0;
++  },
++
++  /**
++   * Deterministic mix of base seed + eTLD+1 → sticky u32 (never 0).
++   * Map caches first assignment; pure hash keeps same-site tabs coherent.
++   */
++  _mixSeed(baseSeed, etld) {
++    let h = (baseSeed >>> 0) ^ 0x9e3779b9;
++    const s = String(etld || "");
++    for (let i = 0; i < s.length; i++) {
++      h = Math.imul(h ^ s.charCodeAt(i), 0x01000193) >>> 0;
++    }
++    h = (h ^ (h >>> 16)) >>> 0;
++    return h || 1;
++  },
++
++  _seedForEtld(etld) {
++    if (!etld) {
++      return this._baseSeedU32();
++    }
++    if (!this._etldSeedMap) {
++      this._etldSeedMap = new Map();
++    }
++    if (this._etldSeedMap.has(etld)) {
++      return this._etldSeedMap.get(etld) >>> 0;
++    }
++    const seed = this._mixSeed(this._baseSeedU32(), etld);
++    this._etldSeedMap.set(etld, seed);
++    return seed;
++  },
++
++  _writeEffectiveDiag(etld, seed) {
++    try {
++      if (etld) {
++        Services.prefs.setStringPref(LAST_ETLD_PREF, String(etld));
++      }
++      Services.prefs.setIntPref(EFFECTIVE_SEED_PREF, seed >>> 0);
++    } catch (_e) {}
++  },
++
++  /**
++   * Build snapshot from seed. When persist=false (per-site rotate), never write
++   * SNAPSHOT_PREF — a pasted/global snapshot must stay the Proof lock signal.
++   */
++  _snapshotFromSeed(seed, persist) {
++    const s = seed >>> 0;
++    if (!s) {
++      return null;
++    }
++    const ffiSnap = this._readSnapshotFromFfi(s, !!persist);
++    if (ffiSnap) {
++      return ffiSnap;
++    }
++    return this._generateFromSeed(s);
++  },
++
++  /**
++   * Resolve persona snapshot for a top-level site URI / BC.
++   * Locked path → global plan.snapshot; rotate → sticky per eTLD+1.
++   */
++  resolveSnapshotForUri(uri) {
++    const plan = this.getPlan();
++    if (!plan?.pollutionActive || !plan?.nativeHooks) {
++      return null;
++    }
++    if (!this._rotationActive(plan)) {
++      return plan.snapshot || null;
++    }
++    const etld = this._etldPlus1FromUri(uri);
++    if (!etld) {
++      return null;
++    }
++    if (!this._etldSnapshotCache) {
++      this._etldSnapshotCache = new Map();
++    }
++    if (this._etldSnapshotCache.has(etld)) {
++      const cached = this._etldSnapshotCache.get(etld);
++      this._writeEffectiveDiag(etld, this._seedForEtld(etld));
++      return cached;
++    }
++    const seed = this._seedForEtld(etld);
++    const snap = this._snapshotFromSeed(seed, false);
++    if (snap) {
++      this._etldSnapshotCache.set(etld, snap);
++      this._writeEffectiveDiag(etld, seed);
++    }
++    return snap;
++  },
++
++  resolveSnapshotForBrowsingContext(bc) {
++    try {
++      const top = bc?.top || bc;
++      const uri = top?.currentURI || top?.currentWindowGlobal?.documentURI;
++      return this.resolveSnapshotForUri(uri);
+     } catch (_e) {
+       return null;
+     }
+   },
+ 
++  /** Apply UA/platform/HW/langs mirrors from a concrete snapshot (C++ + accept). */
++  _applyPersonaMirrors(snapshot) {
++    try {
++      if (!snapshot?.userAgent) {
++        return;
++      }
++      Services.prefs.setStringPref(UA_MIRROR_PREF, snapshot.userAgent);
++      Services.prefs.setStringPref(
++        PLATFORM_MIRROR_PREF,
++        snapshot.platform || "MacIntel"
++      );
++      try {
++        if (Services.prefs.prefHasUserValue(HW_MIRROR_PREF)) {
++          Services.prefs.clearUserPref(HW_MIRROR_PREF);
++        }
++      } catch (_eHw) {}
++      Services.prefs.setIntPref(
++        HW_MIRROR_PREF,
++        Number(snapshot.hardwareConcurrency) || 8
++      );
++      const langs = Array.isArray(snapshot.languages)
++        ? snapshot.languages.join(",")
++        : "en-US,en";
++      this._forceLanguagesMirrorNotify(langs);
++      this._applyAcceptLanguagesForPersona(langs);
++    } catch (_e) {}
++  },
++
+   /**
+    * Resolve NativePersonaPlan-equivalent gates.
+    * @returns {{
+@@ -334,16 +634,44 @@
+     } catch (_e) {}
+ 
+     const pollutionActive = mode === "pollution" && !nativeCompatible;
+-    const snapshot = pollutionActive ? this._readSnapshot() : null;
+     const mainInjectDisable = nativeHooks && pollutionActive;
++    // 0030: when rotatePerSite and not locked, applyNative without a global
++    // snapshot — per-site snapshots resolve on demand from sticky eTLD seeds.
++    const rotateWanted =
++      pollutionActive &&
++      nativeHooks &&
++      !this._rotationLocked() &&
++      this._rotationWanted();
++    // Drop sticky maps when rotation is off/locked so Proof golden cannot see
++    // a stale per-site seed from a prior Pollution rotate session.
++    if (!rotateWanted) {
++      if (this._etldSeedMap?.size) {
++        this._etldSeedMap.clear();
++      }
++      if (this._etldSnapshotCache?.size) {
++        this._etldSnapshotCache.clear();
++      }
++    }
++    let snapshot = null;
++    if (pollutionActive && !rotateWanted) {
++      snapshot = this._readSnapshot();
++    } else if (pollutionActive && rotateWanted) {
++      // Keep any pre-existing session cache; do not force a global snapshot.
++      snapshot = null;
++    }
++    const applyNativeBase =
++      pollutionActive &&
++      nativeHooks &&
++      (rotateWanted || !!snapshot);
+ 
+     this._plan = {
+       pollutionActive,
+       nativeHooks,
+       strictFirstDoc,
+-      // applyNative requires hooks + snapshot; nav phase checked per-request
+-      applyNativeBase: pollutionActive && nativeHooks && !!snapshot,
++      // applyNative requires hooks + (snapshot | rotate); nav phase per-request
++      applyNativeBase,
+       snapshot,
++      rotatePerSite: !!rotateWanted,
+       mainInjectDisable,
+     };
+ 
+@@ -363,54 +691,43 @@
+     }
+ 
+     // Mirror UA for C++ DarkstrNsHttpHooks (patches/0005). Clear when idle.
++    // 0030 rotate: per-site mirrors land from top-level nav / GetSnapshot — do
++    // not clear here while applyNativeBase (would race multi-tab sites).
+     try {
+       if (this._plan.applyNativeBase && snapshot?.userAgent) {
+         Services.prefs.setStringPref(UA_MIRROR_PREF, snapshot.userAgent);
+-      } else if (Services.prefs.prefHasUserValue(UA_MIRROR_PREF)) {
++      } else if (
++        !this._plan.applyNativeBase &&
++        Services.prefs.prefHasUserValue(UA_MIRROR_PREF)
++      ) {
+         Services.prefs.clearUserPref(UA_MIRROR_PREF);
+       }
+     } catch (_e) {}
+ 
+-
+     // Mirrors for C++ DarkstrNavigatorHooks / DarkstrDocShellHooks (patches/0006).
+     try {
+       if (this._plan.applyNativeBase && snapshot?.userAgent) {
+-        Services.prefs.setStringPref(
+-          PLATFORM_MIRROR_PREF,
+-          snapshot.platform || "MacIntel"
+-        );
+-        // P0: coerce pref type — a stale string value makes setIntPref throw
+-        // (caught below) so C++ GetInt stays 0 and window HW leaks host cores.
+-        try {
+-          if (Services.prefs.prefHasUserValue(HW_MIRROR_PREF)) {
+-            Services.prefs.clearUserPref(HW_MIRROR_PREF);
+-          }
+-        } catch (_eHw) {}
+-        Services.prefs.setIntPref(
+-          HW_MIRROR_PREF,
+-          Number(snapshot.hardwareConcurrency) || 8
+-        );
+-        const langs = Array.isArray(snapshot.languages)
+-          ? snapshot.languages.join(",")
+-          : "en-US,en";
+-        // Force prefchange when value unchanged so content 0011 clears WebIDL
+-        // navigator.languages cache (same-value setStringPref does not notify).
+-        this._forceLanguagesMirrorNotify(langs);
+-        // 0014: stock intl.accept_languages content observer clears WebIDL langs
+-        // + fires languagechange (SetRealmLocaleOverride CSV path failed in 0013).
+-        this._applyAcceptLanguagesForPersona(langs);
+-      } else {
++        this._applyPersonaMirrors(snapshot);
++      } else if (!this._plan.applyNativeBase) {
+         for (const p of [
+           PLATFORM_MIRROR_PREF,
+           HW_MIRROR_PREF,
+           LANGS_MIRROR_PREF,
+           DOCSHELL_PHASE_MIRROR_PREF,
++          LAST_ETLD_PREF,
++          EFFECTIVE_SEED_PREF,
+         ]) {
+           if (Services.prefs.prefHasUserValue(p)) {
+             Services.prefs.clearUserPref(p);
+           }
+         }
+         this._restoreAcceptLanguagesIfSaved();
++        if (this._etldSeedMap) {
++          this._etldSeedMap.clear();
++        }
++        if (this._etldSnapshotCache) {
++          this._etldSnapshotCache.clear();
++        }
+       }
+     } catch (_e) {}
+ 
+@@ -627,7 +944,7 @@
+    * Approach B: ctypes → libduppel_ffi in CurProcD/GreD (darkstr_ffi_* ABI).
+    * Soft-fail when dylib missing so JS seed fallback remains.
+    */
+-  _readSnapshotFromFfi(seed) {
++  _readSnapshotFromFfi(seed, persist = true) {
+     try {
+       const { DarkstrFfi } = ChromeUtils.importESModule(
+         "moz-src:///browser/components/DarkstrFfi.sys.mjs"
+@@ -635,19 +952,23 @@
+       const snap = DarkstrFfi.personaSnapshotFromSeed(seed, detectHostOs());
+       if (snap && typeof snap.userAgent === "string") {
+         // Persist so about:config / Proof can see FFI SoT (not mulberry).
+-        try {
+-          Services.prefs.setStringPref(
+-            SNAPSHOT_PREF,
+-            JSON.stringify({
+-              userAgent: snap.userAgent,
+-              platform: snap.platform,
+-              hardwareConcurrency: snap.hardwareConcurrency,
+-              deviceMemory: snap.deviceMemory,
+-              languages: snap.languages,
+-              ...(snap.timezone ? { timezone: snap.timezone } : {}),
+-            })
+-          );
+-        } catch (_e) {}
++        // 0030: skip persist under per-site rotate — writing SNAPSHOT_PREF would
++        // lock rotation (_rotationLocked) for the rest of the session.
++        if (persist) {
++          try {
++            Services.prefs.setStringPref(
++              SNAPSHOT_PREF,
++              JSON.stringify({
++                userAgent: snap.userAgent,
++                platform: snap.platform,
++                hardwareConcurrency: snap.hardwareConcurrency,
++                deviceMemory: snap.deviceMemory,
++                languages: snap.languages,
++                ...(snap.timezone ? { timezone: snap.timezone } : {}),
++              })
++            );
++          } catch (_e) {}
++        }
+         return snap;
+       }
+       try {
+@@ -740,9 +1061,20 @@
+ 
+   shouldApplyForChannel(channel) {
+     const plan = this.getPlan();
+-    if (!plan.applyNativeBase || !plan.snapshot) {
++    if (!plan.applyNativeBase) {
+       return false;
+     }
++    let snap = plan.snapshot;
++    if (this._rotationActive(plan)) {
++      try {
++        snap = this.resolveSnapshotForUri(channel.URI || channel.originalURI);
++      } catch (_e) {
++        snap = null;
++      }
++    }
++    if (!snap) {
++      return false;
++    }
+     // Read-only phase resolve — diag prefs written only by count paths.
+     return this.strictNextNavArmed(this.navPhaseForChannel(channel));
+   },
+@@ -750,9 +1082,16 @@
+   /** Snapshot for JSWindowActor child (null when idle / first-doc). READ-ONLY. */
+   snapshotForBrowsingContext(bc) {
+     const plan = this.getPlan();
+-    if (!plan.applyNativeBase || !plan.snapshot) {
++    if (!plan.applyNativeBase) {
+       return null;
+     }
++    let snap = plan.snapshot;
++    if (this._rotationActive(plan)) {
++      snap = this.resolveSnapshotForBrowsingContext(bc);
++    }
++    if (!snap) {
++      return null;
++    }
+     try {
+       if (plan.strictFirstDoc) {
+         const cppPhase = Services.prefs.getStringPref(
+@@ -760,7 +1099,7 @@
+           ""
+         );
+         if (cppPhase === "subsequent_nav") {
+-          return plan.snapshot;
++          return snap;
+         }
+         if (cppPhase === "first_document" || cppPhase === "") {
+           // Fallback Map when C++ mirror unset / race (BrowserId key).
+@@ -769,14 +1108,14 @@
+             const key = top.browserId || top.id;
+             const n = this._bcTopLoads.get(key) || 0;
+             if (n > 1) {
+-              return plan.snapshot;
++              return snap;
+             }
+           }
+           return null;
+         }
+       }
+     } catch (_e) {}
+-    return plan.snapshot;
++    return snap;
+   },
+ 
+   _onModifyRequest(subject, topic) {
+@@ -816,7 +1155,18 @@
+     if (!this.shouldApplyForChannel(channel)) {
+       return;
+     }
+-    const ua = plan.snapshot.userAgent;
++    let snap = plan.snapshot;
++    if (this._rotationActive(plan)) {
++      try {
++        snap = this.resolveSnapshotForUri(channel.URI || channel.originalURI);
++      } catch (_e) {
++        snap = null;
++      }
++    }
++    const ua = snap?.userAgent;
++    if (!ua) {
++      return;
++    }
+     try {
+       channel.setRequestHeader("User-Agent", ua, false);
+     } catch (_e) {}
+diff --git a/browser/components/DarkstrNativePersonaParent.sys.mjs b/browser/components/DarkstrNativePersonaParent.sys.mjs
+--- a/browser/components/DarkstrNativePersonaParent.sys.mjs
++++ b/browser/components/DarkstrNativePersonaParent.sys.mjs
+@@ -20,6 +20,10 @@
+  * P1 coherence (0028): browsingContext.timezoneOverride follows the armed
+  * persona snapshot (updates Intl/Date and dedicated/shared workers natively).
+  * First-document holdback and Homogeneous clear it back to host behavior.
++ *
++ * Soft residual (0030): per-eTLD+1 sticky seed — GetSnapshot resolves the
++ * site-local snapshot (same map as HTTP UA). When rotate is active, re-assert
++ * mirrors for this BC's eTLD so TZ/HW/langs stay coherent with the seed.
+  */
+ 
+ export class DarkstrNativePersonaParent extends JSWindowActorParent {
+@@ -32,21 +36,31 @@
+         "moz-src:///browser/components/DarkstrNativePersona.sys.mjs"
+       );
+       const plan = DarkstrNativePersona.refreshPlan();
+-      this._syncBrowsingContextLanguageOverride(plan);
++      const snapshot = DarkstrNativePersona.snapshotForBrowsingContext(
++        this.browsingContext
++      );
++      // 0030: when rotating, plan.snapshot is null — use BC site snapshot for
++      // language pulse / accept_languages / C++ mirrors.
++      const mirrorSnap = snapshot || plan?.snapshot || null;
++      this._syncBrowsingContextLanguageOverride({
++        ...plan,
++        snapshot: mirrorSnap,
++        applyNativeBase: plan?.applyNativeBase && !!mirrorSnap,
++      });
+       // Re-assert accept_languages / langs mirror after override pulse so content
+       // observers clear WebIDL [Cached] languages toward the full persona CSV.
+       try {
+-        if (plan?.applyNativeBase && plan.snapshot) {
+-          const langs = Array.isArray(plan.snapshot.languages)
+-            ? plan.snapshot.languages.join(",")
++        if (plan?.applyNativeBase && mirrorSnap) {
++          const langs = Array.isArray(mirrorSnap.languages)
++            ? mirrorSnap.languages.join(",")
+             : "en-US,en";
+           DarkstrNativePersona._forceLanguagesMirrorNotify?.(langs);
+           DarkstrNativePersona._forceAcceptLanguagesNotify?.(langs);
++          if (plan.rotatePerSite) {
++            DarkstrNativePersona._applyPersonaMirrors?.(mirrorSnap);
++          }
+         }
+       } catch (_e) {}
+-      const snapshot = DarkstrNativePersona.snapshotForBrowsingContext(
+-        this.browsingContext
+-      );
+       this._syncBrowsingContextTimezoneOverride(snapshot);
+       return snapshot;
+     } catch (_e) {
