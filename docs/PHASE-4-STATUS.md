@@ -349,3 +349,9 @@ math change.
 
 Soft residual from #61/#62 closed: `lastSeeds` mirrors eTLD install seeds under rotate.
 
+
+---
+
+## Next eng backlog (Phase 5)
+
+Phase 4 depth closed (0034 MERGED / Proof PASS). Next pin: **0035 cookie firewall** — see [`PHASE-5-STATUS.md`](PHASE-5-STATUS.md).

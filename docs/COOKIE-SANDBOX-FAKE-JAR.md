@@ -1,39 +1,37 @@
-# Cookie sandbox / firewall (backlog)
+# Cookie sandbox / firewall
 
 **Brand:** darkstr — not official LibreWolf.  
-**Status:** unvalidated future idea. Not Phase 2. Soft product note only.
+**Status:** **0035 MVP in-flight** (Phase 5). Prior art: backlog one-pager (PR #34, 2026-09-16).
 
 ## Idea
 
 Treat cookies like traffic behind a **firewall**:
 
-1. **Sandbox jar** — accepted cookies land in an isolated store (not the user’s primary identity jar), partitioned by site / party where possible.
-2. **Filter** — a policy engine on the path in (`Set-Cookie`) and out (`Cookie` request header, `document.cookie`, Cookie Store) that **allow / deny / rewrite** (including synthetic values).
+1. **Sandbox jar** — accepted cookies land in an isolated store (not the user’s primary identity jar), partitioned by eTLD+1.
+2. **Filter** — one policy on the path in (`Set-Cookie`) and out (`Cookie` request header, `document.cookie`, Cookie Store) that **allow / deny / rewrite** (including synthetic values).
 
-Same mental model as a network firewall: default-deny or default-isolate, with explicit allow rules for first-party sessions you actually want.
+Same mental model as a network firewall: default-off until armed; allowlist for first-party sessions you actually want.
 
-## Firewall filter (strawman)
+## 0035 MVP (shipped as patch)
 
-| Direction | Hook | Actions |
-|-----------|------|---------|
-| Inbound | `Set-Cookie` / Cookie Store write | accept → sandbox jar; drop; rewrite name/value/flags; tag party (1P / 3P) |
-| Outbound | `Cookie` request header | attach real; attach synthetic; strip; allowlist host/path only |
-| Script | `document.cookie` / CookieStore | read/write through the same policy so HTTP and JS stay consistent |
+| Layer | Behavior when **armed** + non-allowlisted |
+|-------|-------------------------------------------|
+| Network `Set-Cookie` | Ingest into parent sandbox jar; strip response header (best-effort) |
+| Network `Cookie` | Replace with sandbox serialization |
+| `document.cookie` / Cookie Store | Same jar via JSWindowActor IPC + child mirror |
 
-Example rules (not shipped):
+**Arm:** `darkstr.mode=pollution` && `!nativeCompatible` && `nativePersonaHooks` && `darkstr.cookieFirewall.enabled` (default **false**).
 
-- `3P → deny outbound` (tracker cookies never leave the sandbox).
-- `1P allowlist (banks, accounts) → real jar`.
-- `unknown 1P → sandbox only; script sees synthetic round-trip`.
-- `Rewrite-Value → random/stable-per-session token` when the site only checks “did storage stick?”
+**Modes:**
 
-## What “works” means
+- `synthetic` (default) — values rewritten to seed-tied tokens (0030 eTLD+1 seed; golden lock → global seed).
+- `isolate` — sandbox stores values as-is; still kept out of primary jar.
 
-| Layer | Behavior |
-|-------|----------|
-| Network `Set-Cookie` | Accepted into **sandbox jar** (or dropped) per filter — not silently mixed into the primary profile jar. |
-| Network `Cookie` | Filter decides real / synthetic / empty before the request leaves. |
-| `document.cookie` / Cookie Store | Same filter — no split-brain between script and network. |
+**Allowlist:** `darkstr.cookieFirewall.allowlist` CSV of eTLD+1 → real jar passthrough.
+
+**Shared policy:** `DarkstrCookieFirewall.sys.mjs` is SoT — HTTP observers and script IPC share one `Map`. No HTTP/JS split-brain.
+
+See [`PHASE-5-STATUS.md`](PHASE-5-STATUS.md) for Proof gates and residuals.
 
 ## Why it might help
 
@@ -41,27 +39,16 @@ Example rules (not shipped):
 - Firewall language is easier for Settings/PM than “fake jar.”
 - Builds on stock Gecko partitioning (CHIPS, tracking protection) instead of replacing it blindly.
 
-## Hard parts (why it might not)
+## Hard parts (residuals)
 
 1. **First-party login** — allowlist must be right or auth breaks.
-2. **Consistency** — HTTP, `document.cookie`, CookieStore, service workers must share one policy.
-3. **Detectability** — synthetic values that ignore `Set-Cookie` semantics are an FP signal.
-4. **CHIPS / Storage Access API** — stock Firefox already partitions; a second filter that disagrees is worse than none.
-5. **Honesty copy** — Settings must say isolate/filter, not “we don’t use cookies” if we accept into a sandbox.
+2. **CookieService race** — chrome header strip may lose a race; C++ dual-jar follow-up if needed.
+3. **Detectability** — synthetic values that ignore `Set-Cookie` semantics are an FP signal (honesty: not anti-detect).
+4. **CHIPS / Storage Access API** — stock Firefox already partitions; disagreeing filters are worse than none.
+5. **Honesty copy** — Settings must say isolate/filter, not “we don’t use cookies.”
 
-## Modes (not shipped)
+## Out of scope for 0035
 
-- **Isolate only** — sandbox + deny outbound for 3P; no synthetic bytes.
-- **Firewall + synthetic** — filter rewrites/feeds random data where policy says so.
-- **Hybrid allowlist** — real jar for named first parties; everyone else sandboxed/filtered.
-
-## Out of scope for now
-
-- Implementation, prefs, or default-on behavior.
-- Claiming this closes any current Phase 2 soft residual.
-
-## Next when prioritized
-
-1. PM: mode names + honesty strings (“cookie firewall” / isolate vs allowlist).
-2. Spike on train-pinned Gecko: filter on `Set-Cookie` + outbound `Cookie` + `document.cookie`.
-3. Proof: allowlisted login works; tracker outbound stays empty/synthetic; no HTTP/JS split-brain.
+- Native-Compatible privacy-pane UI (PM)
+- Approach A FFI / full dual-jar C++ CookieService
+- Claiming Cloudflare / anti-detect bypass

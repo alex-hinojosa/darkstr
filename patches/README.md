@@ -302,3 +302,5 @@ Real unified diff [`0034-darkstr-depth-lastseeds-etld-diag.patch`](0034-darkstr-
 - Chrome JS only; Mini helper: [`docs/PHASE-4-LASTSEEDS-0034-MINI-APPLY.sh`](../docs/PHASE-4-LASTSEEDS-0034-MINI-APPLY.sh).
 - Non-claims: does not change farbling math; diagnostic prefs only (`darkstr.depth.*`).
 
+
+| [`0035-darkstr-cookie-firewall.patch`](0035-darkstr-cookie-firewall.patch) | **Real** Phase 5 pin — cookie firewall MVP (shared HTTP+JS policy, default-off) |
