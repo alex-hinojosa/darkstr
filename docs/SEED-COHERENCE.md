@@ -49,14 +49,15 @@ Homogeneous / hooks off: idle (no rotation effects). Correlated snapshot still
 comes from Rust FFI when present, else the JS mulberry seed path; TZ/HW/UA/langs
 mirrors follow the effective seed for the current site.
 
-## Phase 4 — audio silence-safe farbling (0031) — **IN FLIGHT**
+## Phase 4 — audio silence-safe farbling (0031) — **MERGED** / Proof XOR **PASS**
 
 Depth `audioSeed` (from persona snapshot / mulberry fallback, and after 0030 the
 **eTLD+1-effective** snapshot via `resolveSnapshotForBrowsingContext` / `resolveSnapshotForUri`) drives a
 Brave-style multiplicative fudge on AudioBuffer + AnalyserNode readouts. Exact
 silence stays silence (`0 * fudge == 0`); no mid-site random noise. Proof may
 lock golden seed-42 via snapshot or `rotatePerSite=false` as with 0030.
-## Phase 4 — WebGL extension list + shader precision (0032) — **IN FLIGHT**
+
+## Phase 4 — WebGL extension list + shader precision (0032) — **MERGED** / Proof XOR **PASS**
 
 Depth `canvasSeed` (persona snapshot / mulberry fallback; after 0030 the
 **eTLD+1-effective** snapshot) drives:

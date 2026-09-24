@@ -131,7 +131,7 @@ Effective content coverage: **27 / 27** OK|SKIP.
 ## Explicit non-claims (unchanged)
 
 
-ServiceWorker/Worklets, fonts, screen/DPR, CF/TLS/JA3, Chrome cosplay, speech / WebGPU. Homogeneous WebGL may stay Mozilla/Mozilla (RFP). WebGL extension-list / shader-precision: see soft residual **0032** (in flight).
+ServiceWorker/Worklets, fonts, screen/DPR, CF/TLS/JA3, Chrome cosplay, speech / WebGPU. Homogeneous WebGL may stay Mozilla/Mozilla (RFP). WebGL extension-list / shader-precision: soft residual **0032** **MERGED** / Proof PASS (see below).
 
 ## Suggested next eng pin
 
@@ -216,19 +216,18 @@ nm -gU $DYLIB | grep darkstr_ffi_
 
 Brand: darkstr — not official LibreWolf. No Proof ping from this residual close.
 
-## Soft residual — window `navigator.languages` empty on SubsequentNav (0033) — **ENG FIX** ([PR #64](https://github.com/alex-hinojosa/darkstr/pull/64))
+## Soft residual — window `navigator.languages` empty on SubsequentNav (0033) — **MERGED** / Proof XOR **PASS**
 
 | Item | Status |
 |------|--------|
-| Symptom | Proof XOR PASS soft note: Marionette window `langs_page=[]` on Pollution SubsequentNav; worker langs `en-US,en,es`; first-nav window langs included `es`. |
-| Root cause | **Product** (not harness-only): Child `darkstrLangsGetter` via `Cu.exportFunction` returned a **chrome Array**. Page principal then throws `Permission denied to access property "length"` when reading `navigator.languages` (reproduced 2026-09-24 CDT; inline script `data-darkstr-ran=1` + `pageErr`). Prefs already held full CSV (`darkstr.persona.languages` / `intl.accept_languages` = `en-US,en,es`). Worker OK because WorkerHooks injects a page-source JSON literal. |
-| PR | [#64](https://github.com/alex-hinojosa/darkstr/pull/64) **OPEN** (tip `5dc9aa2`) — do not merge from this residual |
-| Fix | Pin **0033**: `Cu.cloneInto(langsCopy.slice(), pageWindow)` in `DarkstrNativePersonaChild.sys.mjs` (DepthHooks lesson). |
+| PR | [#64](https://github.com/alex-hinojosa/darkstr/pull/64) **MERGED** as `b05128a` |
+| Tip at Proof | `f1fe5ed71533ce8f35c9d0e2938ef8aed9336e3d` (LibreWolf **156.0.1-1**) |
+| Symptom | Marionette window `langs_page=[]` on Pollution SubsequentNav; worker langs OK (`en-US,en,es`). |
+| Root cause | Child `darkstrLangsGetter` via `Cu.exportFunction` returned a **chrome Array**; page principal hit `Permission denied` on `.length`. |
+| Fix | Pin **0033**: `Cu.cloneInto(langsCopy.slice(), pageWindow)` in `DarkstrNativePersonaChild.sys.mjs`. |
 | Patch | [`patches/0033-darkstr-nav-languages-cloneinto.patch`](../patches/0033-darkstr-nav-languages-cloneinto.patch) |
 | Mini helper | [`PHASE-4-LANGS-0033-MINI-APPLY.sh`](PHASE-4-LANGS-0033-MINI-APPLY.sh) |
-| Rebuild | `browser/components` subdirectory + `install-dist_bin` only — **no** full `mach package` / DMG (disk ~14–16 Gi). |
-| Open PRs | Do **not** merge/rewrite #61 (0031) or #62 (0032); 0033 touches only NativePersonaChild + docs/apply markers. |
-| Proof | Parent ACK when ready — **do not ping Proof** from this residual. |
+| Evidence | `~/AgentDocs/proof/pr64-0033-langs-xor-20260924-130726/` + `~/src/darkstr-gecko/proof-xor/pr64-langs-0033-20260924-130726.json` |
 
 ### Mini verify (2026-09-24 ~12:58 CDT)
 
@@ -244,14 +243,15 @@ Brand: darkstr — not official LibreWolf. No Proof ping from this residual clos
 - Marionette **direct** sandbox read of `navigator.languages.length` may still Xray-deny after the spoof lands; page-principal / attr / in-page probes are SoT for product correctness.
 - Gate `poll_langs_es` already OR'd worker langs; after 0033, window langs should also include `es` under headed Pollution and page-principal probes.
 
-## Soft residual — audio silence-safe farbling (0031) — **IN FLIGHT**
+## Soft residual — audio silence-safe farbling (0031) — **MERGED** / Proof XOR **PASS**
 
 | Item | Status |
 |------|--------|
-| PR | [#61](https://github.com/alex-hinojosa/darkstr/pull/61) — **do not merge until Proof XOR** |
+| PR | [#61](https://github.com/alex-hinojosa/darkstr/pull/61) **MERGED** as `f585362` |
+| Tip at Proof | `3b08dca1e8a43455d131b36d3415747e7de2a65e` (LibreWolf **156.0.1-1**) |
 | Patch | [`patches/0031-darkstr-audio-silence-farbling.patch`](../patches/0031-darkstr-audio-silence-farbling.patch) |
 | Mini helper | [`PHASE-4-AUDIO-0031-MINI-APPLY.sh`](PHASE-4-AUDIO-0031-MINI-APPLY.sh) |
-| Tree | LibreWolf **156.0.1-1** (chrome JS; browser/components only) |
+| Evidence | `~/AgentDocs/proof/pr61-0031-audio-silence-rexor-20260924-130400/` + `~/src/darkstr-gecko/proof-xor/pr61-audio-0031-PASS.md` |
 
 Deepens existing page-compartment OfflineAudioContext / `AudioBuffer.getChannelData` (0017/0019)
 with **Brave-style silence-safe** multiplicative fudge
@@ -261,31 +261,31 @@ time-domain keeps 128) plus `copyFromChannel` and `AnalyserNode`
 (persona / eTLD+1 effective via 0030). Double-read stable via WeakMap
 `noisedBuffers` + `contentKey` (mutate-once). Homogeneous / hooks off: idle.
 
-**Proof FAIL fix (2026-09-24):** `DarkstrDepthHooks.depthSeedsForBrowsingContext`
-now derives `audioSeed`/`canvasSeed` from eTLD-effective `_seedForEtld` when
+**Proof FAIL fix (landed):** `DarkstrDepthHooks.depthSeedsForBrowsingContext`
+derives `audioSeed`/`canvasSeed` from eTLD-effective `_seedForEtld` when
 `rotatePerSite` is on (was stuck on global `plan.seeds`). Golden lock unchanged.
 
-### Proof XOR gates (required before merge)
+### Proof XOR gates (PASS)
 
-1. Pollution+hooks: same seed → stable audio fingerprint across double-read
-2. Different eTLD+1 (rotate on) → different audio digests
-3. Silence / zero buffer → no measurable farbling tell (or within Brave-like bound)
-4. Golden lock seed-42 → prior exit checklist audio still coherent
-5. Homogeneous / hooks-off → idle
+1. Pollution+hooks: same seed → stable audio fingerprint across double-read — **PASS**
+2. Different eTLD+1 (rotate on) → different audio digests — **PASS**
+3. Silence / zero buffer → no measurable farbling tell — **PASS**
+4. Golden lock seed-42 → prior exit checklist audio still coherent — **PASS**
+5. Homogeneous / hooks-off → idle — **PASS**
 
-### Out of scope (next pins)
+### Soft residual (not FAIL)
 
-WebGL extension lists / shader precision; fonts / speech / WebGPU; product README.
+`darkstr.depth.lastSeeds` may lag vs live install seeds while digests diverge — diagnostic only.
 
-## Soft residual — WebGL extension list + shader precision (0032) — **IN FLIGHT**
+## Soft residual — WebGL extension list + shader precision (0032) — **MERGED** / Proof XOR **PASS**
 
 | Item | Status |
 |------|--------|
-| PR | [#62](https://github.com/alex-hinojosa/darkstr/pull/62) — **do not merge until Proof XOR** |
+| PR | [#62](https://github.com/alex-hinojosa/darkstr/pull/62) **MERGED** as `d3b2754` |
+| Tip at Proof | `010fa0611acccec632981c307b1f065daa0b8c05` (LibreWolf **156.0.1-1**) |
 | Patch | [`patches/0032-darkstr-webgl-ext-precision.patch`](../patches/0032-darkstr-webgl-ext-precision.patch) |
 | Mini helper | [`PHASE-4-WEBGL-0032-MINI-APPLY.sh`](PHASE-4-WEBGL-0032-MINI-APPLY.sh) |
-| Tree | LibreWolf **156.0.1-1** (chrome JS; browser/components only) |
-| Base | Branched from `main` (0030 merged). **Independent of 0031 / PR #61** — WebGL hunks apply with or without 0031; do not merge #61 from this work. |
+| Evidence | `~/AgentDocs/proof/pr62-0032-webgl-rexor-20260924-130525/` + `~/src/darkstr-gecko/proof-xor/pr62-webgl-0032-20260924-130525.json` |
 
 Deepens existing page-compartment WebGL (0017/0023 UNMASKED + cap buckets; 0029
 headed unlock) with seed-tied **`getSupportedExtensions` / `getExtension`**
@@ -294,18 +294,18 @@ optional keep/drop via `canvasSeed`; list via **`Cu.cloneInto` into pageWindow**
 internally coherent Firefox-desktop profiles, seed-picked). Double-read stable
 via WeakMap. No Chrome-only extension names. Homogeneous / hooks off: idle.
 
-**Proof FAIL fix (2026-09-24):** (1) `getSupportedExtensions` → `Cu.cloneInto(cached, pageWindow)`;
+**Proof FAIL fix (landed):** (1) `getSupportedExtensions` → `Cu.cloneInto(cached, pageWindow)`;
 (2) `depthSeedsForBrowsingContext` derives `canvasSeed`/`audioSeed` from
 eTLD-effective `_seedForEtld` when `rotatePerSite` is on (shared with 0031).
 
-### Proof XOR gates (required before merge)
+### Proof XOR gates (PASS)
 
-1. Pollution+hooks: same seed → stable extension list + precision digests; double-read stable
-2. Different eTLD+1 (rotate on) → diverge
-3. Golden lock seed-42 → coherent Firefox-like WebGL (Apple M2 / prior checklist OK)
-4. Homogeneous / hooks-off → idle
-5. No Chrome cosplay in extension names
+1. Pollution+hooks: same seed → stable extension list + precision digests; double-read stable — **PASS**
+2. Different eTLD+1 (rotate on) → diverge — **PASS**
+3. Golden lock seed-42 → coherent Firefox-like WebGL (Apple M2) — **PASS**
+4. Homogeneous / hooks-off → idle — **PASS**
+5. No Chrome cosplay in extension names — **PASS**
 
-### Out of scope
+### Soft residual (not FAIL)
 
-fonts / speech / WebGPU; merging #61; product README.
+`lastSeeds`/canvasSeed diagnostic may lag vs live digests — diagnostic only. Out of scope: fonts / speech / WebGPU; product README.
