@@ -280,6 +280,7 @@ Surgical in-place refresh of **0009 / 0022 / 0027 / 0028 / 0029** so they apply 
 
 | [`0030-darkstr-persona-etld-seed-rotate.patch`](0030-darkstr-persona-etld-seed-rotate.patch) | **Real** Phase 4 — sticky per-eTLD+1 persona seed (`rotatePerSite`; Proof lock via snapshot\|rotate=false) |
 | [`0031-darkstr-audio-silence-farbling.patch`](0031-darkstr-audio-silence-farbling.patch) | **Real** Phase 4 — Brave-style silence-safe AnalyserNode/getChannelData farbling |
+| [`0032-darkstr-webgl-ext-precision.patch`](0032-darkstr-webgl-ext-precision.patch) | **Real** Phase 4 — WebGL extension list + shader precision coherence |
 ## Phase 4 soft residual — window languages cloneInto (0033)
 
 Real unified diff [`0033-darkstr-nav-languages-cloneinto.patch`](0033-darkstr-nav-languages-cloneinto.patch) against LibreWolf **156.0.1-1** post-0030:

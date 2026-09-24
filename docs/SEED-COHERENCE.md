@@ -56,3 +56,18 @@ Depth `audioSeed` (from persona snapshot / mulberry fallback, and after 0030 the
 Brave-style multiplicative fudge on AudioBuffer + AnalyserNode readouts. Exact
 silence stays silence (`0 * fudge == 0`); no mid-site random noise. Proof may
 lock golden seed-42 via snapshot or `rotatePerSite=false` as with 0030.
+## Phase 4 — WebGL extension list + shader precision (0032) — **IN FLIGHT**
+
+Depth `canvasSeed` (persona snapshot / mulberry fallback; after 0030 the
+**eTLD+1-effective** snapshot) drives:
+
+- `getSupportedExtensions` / `getExtension` — Firefox-plausible baseline
+  intersected with native (plus stubs for `WEBGL_debug_renderer_info` /
+  `EXT_texture_filter_anisotropic`); optional extensions keep/drop by
+  deterministic seed hash (Brave-like, not random noise).
+- `getShaderPrecisionFormat` — seed picks one of two coherent Firefox-desktop
+  precision profiles (no impossible mantissa/range).
+
+Same seed → stable digests (WeakMap double-read). Different eTLD+1 → diverge.
+Golden lock via snapshot or `rotatePerSite=false` as with 0030. Independent of
+0031 audio farbling (different DepthHooksChild region).

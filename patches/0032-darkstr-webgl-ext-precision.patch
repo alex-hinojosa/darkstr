@@ -1,0 +1,387 @@
+# darkstr 0032 — WebGL extension list + shader precision coherence
+#
+# Product (locked): Pollution+depth hooks keep seed-tied WebGL surface coherent
+#   with existing UNMASKED vendor/renderer + persona GPU cap buckets (0017/0023)
+#   and headed WebGL unlock (0029). Soft residual: spoof getSupportedExtensions /
+#   getExtension (Firefox-plausible set; no Chrome-only names) and
+#   getShaderPrecisionFormat (internally coherent tiers). Seed-tied via depth
+#   canvasSeed (persona / eTLD+1 effective via 0030). Brave-like deterministic
+#   optional-extension keep/drop + precision profile pick; double-read stable
+#   via WeakMap. getSupportedExtensions returns Cu.cloneInto(list, pageWindow)
+#   (chrome Array via exportFunction is page-opaque). Also wires
+#   DarkstrDepthHooks.depthSeedsForBrowsingContext through _seedForEtld when
+#   rotatePerSite is on (shared with 0031; --forward idempotent). Homogeneous /
+#   hooks off: idle.
+#
+# Apply (after 0023; independent of 0031 — may land before or after #61):
+#   patch -d "$DARKSTR_GECKO_ROOT" -p1 < patches/0032-darkstr-webgl-ext-precision.patch
+#   or docs/PHASE-4-WEBGL-0032-MINI-APPLY.sh
+# Note: 0031 (audio) touches a different region of DepthHooksChild; 0032 WebGL
+#   hunks apply cleanly with or without 0031 present. Apply-script ordering
+#   lists 0032 after 0031 alphabetically (003*.patch); no semantic dependency.
+#
+# Rebuild: ./mach build --allow-subdirectory-build browser/components then
+#   make install-dist_bin + moz-src symlinks (chrome JS only; no XUL relink).
+#
+# Proof XOR (do not merge until PASS):
+#   - Pollution+hooks: same seed → stable extension list + precision digests;
+#     double-read stable
+#   - Different eTLD+1 (rotate on) → diverge
+#   - Golden lock seed-42 → coherent Firefox-like WebGL (Apple M2 checklist OK)
+#   - Homogeneous / hooks-off idle
+#   - No Chrome cosplay in extension names
+#
+# Marker: Soft residual (0032)
+
+--- a/browser/components/DarkstrDepthHooksChild.sys.mjs
++++ b/browser/components/DarkstrDepthHooksChild.sys.mjs
+@@ -19,9 +19,11 @@
+  *   SPOOFED — UNMASKED vendor/renderer; persona-family MAX_* / viewport / line /
+  *             point / anisotropy buckets; OffscreenCanvas convertToBlob +
+  *             OffscreenCanvasRenderingContext2D.getImageData noise (when present).
+- *   NOT SPOOFED here — getSupportedExtensions / getExtension advertise lists,
+- *             getShaderPrecisionFormat tiers, fail-closed null for unknown
+- *             getParameter (unknown params passthrough to native).
++ *   Soft residual (0032): getSupportedExtensions / getExtension (Firefox-plausible,
++ *             seed-tied via canvasSeed; list via Cu.cloneInto into pageWindow) +
++ *             getShaderPrecisionFormat coherent tiers.
++ *   NOT SPOOFED here — fail-closed null for unknown getParameter
++ *             (unknown params passthrough to native).
+  */
+ 
+ const installedByWindow = new WeakMap();
+@@ -330,11 +331,118 @@
+       replacements
+     );
+ 
+-    // WebGL: UNMASKED vendor/renderer + persona GPU cap buckets + readPixels noise.
+-    // Honest subset vs Phase 1 webgl.js — see file header (extensions / precision
+-    // / fail-closed unknown params remain WebExt-richer; unknown getParameter
+-    // values passthrough native here).
++    // WebGL: UNMASKED vendor/renderer + persona GPU cap buckets + readPixels noise
++    // + Soft residual (0032) getSupportedExtensions/getExtension + getShaderPrecisionFormat.
++    // Firefox/LibreWolf/Gecko persona only — no Chrome-only extension names.
++    // Extension advertise list + precision tiers are seed-tied (canvasSeed / eTLD-effective).
+     const activeGlCaps = getCapBucket(gpu.renderer);
++    // Firefox-plausible WebGL1 baseline (Phase 1 webgl.js parity). WebGL2 intersection
++    // drops core-promoted names automatically. Never invent Chrome-only extensions.
++    const BASELINE_WEBGL_EXTENSIONS = [
++      "ANGLE_instanced_arrays",
++      "EXT_blend_minmax",
++      "EXT_color_buffer_half_float",
++      "EXT_float_blend",
++      "EXT_frag_depth",
++      "EXT_shader_texture_lod",
++      "EXT_texture_filter_anisotropic",
++      "OES_element_index_uint",
++      "OES_standard_derivatives",
++      "OES_texture_float",
++      "OES_texture_float_linear",
++      "OES_texture_half_float",
++      "OES_texture_half_float_linear",
++      "OES_vertex_array_object",
++      "WEBGL_color_buffer_float",
++      "WEBGL_compressed_texture_s3tc",
++      "WEBGL_debug_renderer_info",
++      "WEBGL_depth_texture",
++      "WEBGL_draw_buffers",
++      "WEBGL_lose_context",
++    ];
++    const STUBBED_EXTENSIONS = new Set([
++      "WEBGL_debug_renderer_info",
++      "EXT_texture_filter_anisotropic",
++    ]);
++    // Always keep when native/stub allows — coherent Apple/Firefox surface.
++    const CORE_EXTENSIONS = new Set([
++      "WEBGL_debug_renderer_info",
++      "EXT_texture_filter_anisotropic",
++      "WEBGL_lose_context",
++      "OES_vertex_array_object",
++      "OES_element_index_uint",
++      "OES_standard_derivatives",
++      "WEBGL_depth_texture",
++      "WEBGL_draw_buffers",
++      "EXT_float_blend",
++      "WEBGL_color_buffer_float",
++      "ANGLE_instanced_arrays",
++    ]);
++    // Seed-optional: Brave-like deterministic keep/drop for cross-eTLD divergence.
++    const OPTIONAL_EXTENSIONS = new Set([
++      "EXT_blend_minmax",
++      "EXT_color_buffer_half_float",
++      "EXT_frag_depth",
++      "EXT_shader_texture_lod",
++      "OES_texture_float",
++      "OES_texture_float_linear",
++      "OES_texture_half_float",
++      "OES_texture_half_float_linear",
++      "WEBGL_compressed_texture_s3tc",
++    ]);
++    function seedKeepsExtension(name, seed) {
++      let h = seed >>> 0;
++      for (let i = 0; i < name.length; i++) {
++        h = Math.imul(h ^ name.charCodeAt(i), 0x01000193);
++      }
++      h = (h ^ (h >>> 16)) >>> 0;
++      // Bias toward keep (~75%) so golden surfaces stay richly coherent.
++      return (h % 4) !== 0;
++    }
++    function advertisedExtensions(nativeList, seed) {
++      const native = new Set(nativeList || []);
++      const out = [];
++      for (const ext of BASELINE_WEBGL_EXTENSIONS) {
++        const allowed =
++          STUBBED_EXTENSIONS.has(ext) || native.has(ext);
++        if (!allowed) {
++          continue;
++        }
++        if (CORE_EXTENSIONS.has(ext) || !OPTIONAL_EXTENSIONS.has(ext)) {
++          out.push(ext);
++          continue;
++        }
++        if (seedKeepsExtension(ext, seed)) {
++          out.push(ext);
++        }
++      }
++      return out;
++    }
++    // Firefox-desktop coherent precision profiles (Apple M1/M2 class). Seed picks
++    // one profile — both are internally coherent (no impossible mantissa/range).
++    const PRECISION_PROFILES = [
++      {
++        // Common Firefox Mac / Metal path: highp floats across tiers.
++        0x8df0: { rangeMin: 127, rangeMax: 127, precision: 23 },
++        0x8df1: { rangeMin: 127, rangeMax: 127, precision: 23 },
++        0x8df2: { rangeMin: 127, rangeMax: 127, precision: 23 },
++        0x8df3: { rangeMin: 7, rangeMax: 7, precision: 0 },
++        0x8df4: { rangeMin: 15, rangeMax: 14, precision: 0 },
++        0x8df5: { rangeMin: 31, rangeMax: 30, precision: 0 },
++      },
++      {
++        // Also-plausible desktop ES-ish ints; floats remain highp.
++        0x8df0: { rangeMin: 127, rangeMax: 127, precision: 23 },
++        0x8df1: { rangeMin: 127, rangeMax: 127, precision: 23 },
++        0x8df2: { rangeMin: 127, rangeMax: 127, precision: 23 },
++        0x8df3: { rangeMin: 8, rangeMax: 8, precision: 0 },
++        0x8df4: { rangeMin: 16, rangeMax: 16, precision: 0 },
++        0x8df5: { rangeMin: 24, rangeMax: 24, precision: 0 },
++      },
++    ];
++    const precisionProfile =
++      PRECISION_PROFILES[(canvasSeed >>> 0) % PRECISION_PROFILES.length];
++    const extListByContext = new WeakMap();
+     function patchWebGL(proto, label) {
+       if (!proto) {
+         return;
+@@ -407,6 +515,142 @@
+           replacements
+         );
+       }
++      // Soft residual (0032): seed-tied extension list + shader precision.
++      const origGetSupported = Object.getOwnPropertyDescriptor(
++        proto,
++        "getSupportedExtensions"
++      )?.value;
++      const origGetExtension = Object.getOwnPropertyDescriptor(
++        proto,
++        "getExtension"
++      )?.value;
++      const origGetShaderPrecision = Object.getOwnPropertyDescriptor(
++        proto,
++        "getShaderPrecisionFormat"
++      )?.value;
++      if (origGetSupported) {
++        replaceMethod(
++          pageWindow,
++          proto,
++          "getSupportedExtensions",
++          function () {
++            let cached = extListByContext.get(this);
++            if (!cached) {
++              const nativeList = Reflect.apply(origGetSupported, this, []) || [];
++              cached = advertisedExtensions(
++                nativeList,
++                canvasSeed >>> 0
++              );
++              extListByContext.set(this, cached);
++            }
++            // Page-compartment Array (0032): exportFunction + chrome Array denies
++            // .length / index to page principal. cloneInto matches langs 0033 lesson.
++            try {
++              return Cu.cloneInto(cached, pageWindow);
++            } catch (_e) {
++              try {
++                return pageWindow.Array.from(Cu.cloneInto(cached, pageWindow));
++              } catch (_e2) {
++                return cached.slice();
++              }
++            }
++          },
++          replacements
++        );
++      }
++      if (origGetExtension) {
++        replaceMethod(
++          pageWindow,
++          proto,
++          "getExtension",
++          function (name) {
++            const want = String(name || "");
++            let advertised = extListByContext.get(this);
++            if (!advertised) {
++              const nativeList = origGetSupported
++                ? Reflect.apply(origGetSupported, this, []) || []
++                : [];
++              advertised = advertisedExtensions(nativeList, canvasSeed >>> 0);
++              extListByContext.set(this, advertised);
++            }
++            if (!advertised.includes(want)) {
++              return null;
++            }
++            if (want === "WEBGL_debug_renderer_info") {
++              return Cu.cloneInto(
++                {
++                  UNMASKED_VENDOR_WEBGL: 0x9245,
++                  UNMASKED_RENDERER_WEBGL: 0x9246,
++                },
++                pageWindow
++              );
++            }
++            if (want === "EXT_texture_filter_anisotropic") {
++              // Prefer native object when present; else coherent stub (MAX=16).
++              if (origGetSupported) {
++                const nativeSet = new Set(
++                  Reflect.apply(origGetSupported, this, []) || []
++                );
++                if (nativeSet.has(want)) {
++                  return Reflect.apply(origGetExtension, this, [want]);
++                }
++              }
++              return Cu.cloneInto(
++                {
++                  TEXTURE_MAX_ANISOTROPY_EXT: 0x84fe,
++                  MAX_TEXTURE_MAX_ANISOTROPY_EXT: 0x84ff,
++                },
++                pageWindow
++              );
++            }
++            return Reflect.apply(origGetExtension, this, [want]);
++          },
++          replacements
++        );
++      }
++      if (origGetShaderPrecision) {
++        replaceMethod(
++          pageWindow,
++          proto,
++          "getShaderPrecisionFormat",
++          function (shaderType, precisionType) {
++            const real = Reflect.apply(origGetShaderPrecision, this, [
++              shaderType,
++              precisionType,
++            ]);
++            if (!real) {
++              return real;
++            }
++            const tier =
++              precisionProfile[precisionType] || precisionProfile[0x8df2];
++            try {
++              const waived = Cu.waiveXrays(real);
++              Object.defineProperty(waived, "rangeMin", {
++                value: tier.rangeMin,
++                writable: false,
++                enumerable: true,
++                configurable: true,
++              });
++              Object.defineProperty(waived, "rangeMax", {
++                value: tier.rangeMax,
++                writable: false,
++                enumerable: true,
++                configurable: true,
++              });
++              Object.defineProperty(waived, "precision", {
++                value: tier.precision,
++                writable: false,
++                enumerable: true,
++                configurable: true,
++              });
++            } catch (_e) {
++              // If the platform freezes the object, return native (still coherent).
++            }
++            return real;
++          },
++          replacements
++        );
++      }
+       if (!origGetParameter && !origReadPixels) {
+         throw new Error(`${label} native methods unavailable`);
+       }
+--- a/browser/components/DarkstrDepthHooks.sys.mjs
++++ b/browser/components/DarkstrDepthHooks.sys.mjs
+@@ -20,7 +20,10 @@
+  * Homogeneous / Native-Compatible / hooks false → no content hooks; seeds null.
+  *
+  * Seeds: prefer darkstr.persona.snapshot JSON (canvasSeed/audioSeed/gpu);
+- * fallback derive from darkstr.persona.seed (mulberry32). Does not write privacy.*.
++ * fallback derive from darkstr.persona.seed (mulberry32). Under 0030 rotatePerSite,
++ * depthSeedsForBrowsingContext re-derives from eTLD-effective seed (_seedForEtld);
++ * golden lock (snapshot / rotatePerSite=false) keeps global plan.seeds.
++ * Does not write privacy.*.
+  *
+  * Workers = Phase 3 pin 3 — NOT in this module.
+  */
+@@ -284,6 +287,10 @@
+       return null;
+     }
+     // SubsequentNav arm: reuse NativePersona first-doc gate when available.
++    // When 0030 rotatePerSite is active, derive canvasSeed/audioSeed/gpu from the
++    // eTLD-effective persona seed (_seedForEtld) — same SoT as sticky rotation.
++    // Golden lock (snapshot pref non-empty OR rotatePerSite=false) keeps global
++    // plan.seeds from _readDepthSeeds (Proof seed-42 coherent).
+     try {
+       const { DarkstrNativePersona } = ChromeUtils.importESModule(
+         "moz-src:///browser/components/DarkstrNativePersona.sys.mjs"
+@@ -292,6 +299,43 @@
+         const snap = DarkstrNativePersona.snapshotForBrowsingContext(bc);
+         if (!snap) {
+           return null;
++        }
++        // Prefer depth fields already on the resolved snapshot (pasted/FFI).
++        const snapCanvas = readU32Field(snap, "canvasSeed", "canvas_seed");
++        const snapAudio = readU32Field(snap, "audioSeed", "audio_seed");
++        const snapGpu = normalizeGpu(snap.gpu);
++        if (snapCanvas !== null && snapAudio !== null && snapGpu) {
++          return {
++            canvasSeed: snapCanvas >>> 0,
++            audioSeed: snapAudio >>> 0,
++            gpu: { vendor: snapGpu.vendor, renderer: snapGpu.renderer },
++          };
++        }
++        const npPlan = DarkstrNativePersona.getPlan
++          ? DarkstrNativePersona.getPlan()
++          : null;
++        if (
++          DarkstrNativePersona._rotationActive &&
++          DarkstrNativePersona._rotationActive(npPlan)
++        ) {
++          let etld = null;
++          if (DarkstrNativePersona._etldPlus1FromBrowsingContext) {
++            etld = DarkstrNativePersona._etldPlus1FromBrowsingContext(bc);
++          }
++          if (etld && DarkstrNativePersona._seedForEtld) {
++            const seed = DarkstrNativePersona._seedForEtld(etld) >>> 0;
++            const derived = this._generateDepthFromSeed(seed);
++            if (derived) {
++              return {
++                canvasSeed: derived.canvasSeed >>> 0,
++                audioSeed: derived.audioSeed >>> 0,
++                gpu: {
++                  vendor: derived.gpu.vendor,
++                  renderer: derived.gpu.renderer,
++                },
++              };
++            }
++          }
+         }
+       }
+     } catch (_e) {
