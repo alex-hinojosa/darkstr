@@ -1,7 +1,7 @@
 # M-FFI-0008 status — live Gecko FFI link (Approach B)
 
 **Brand:** darkstr — not official LibreWolf.  
-**Train:** LibreWolf / Firefox **155.0.1-1**.  
+**Train:** LibreWolf / Firefox **155.0.1-1** (historical); live Mini root is **156.0.1-1** — same Approach B script under `$DARKSTR_GECKO_ROOT/third_party/darkstr/`.  
 **Patch:** [`../patches/0008-darkstr-gecko-ffi-link.patch`](../patches/0008-darkstr-gecko-ffi-link.patch)
 
 ## Approach
@@ -66,6 +66,9 @@ Also: `docs/M-FFI-0008-MINI-VERIFY.sh` when present.
 - [ ] STATUS honesty: Approach B only; no PM copy; hooks default-off
 
 ## Soft residuals / blockers
+
+**156 cutover (2026-09-24):** dylib was missing on 156 dist because apply-script does not auto-run cargo; restored with `docs/PHASE-4-FFI-MINI-INSTALL.sh` / `build-and-install-ffi.sh`. See `PHASE-4-STATUS.md`.
+
 
 1. **Blocker for live Mini proof from authoring executor:** Shell `machineId` / local-exec to Mini (`e1a9473e-…`) was not available (commands ran on the Linux box only). Builder must re-run verify on Mini.
 2. Soft: Approach A still future work if gkrust lock update is desired.

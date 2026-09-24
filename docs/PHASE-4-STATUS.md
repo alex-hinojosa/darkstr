@@ -159,12 +159,12 @@ FAIL set is green on 156 dry-run+apply. Next: Mini subdirectory `mach build` + `
 - Homogeneous depth/worker idle
 
 ### Soft residuals (not FAIL)
-- `libduppel_ffi.dylib` missing on this 156 dist (155 still has it) — Proof used pasted Rust seed-42 snapshot
+- ~~`libduppel_ffi.dylib` missing on this 156 dist~~ — **closed 2026-09-24**: rebuilt via Approach B `third_party/darkstr/build-and-install-ffi.sh` into 156 `dist/bin` (+ app MacOS/Resources mirror). See section below.
 - Marionette/CSP could not read window `navigator.languages` on SubsequentNav (empty probe); worker langs independently `en-US,en,es`; first-nav window langs included `es`
 
 ### Cutover
-- Mini `DARKSTR_GECKO_ROOT` → **156.0.1-1**; `DARKSTR_GECKO_ROOT_155` keeps 155 for reference/FFI until copied
-- Optional next: copy/build `libduppel_ffi` into 156 dist/bin; fresh `mach package` DMG when disk allows (~21 Gi free after build)
+- Mini `DARKSTR_GECKO_ROOT` → **156.0.1-1**; `DARKSTR_GECKO_ROOT_155` keeps 155 for reference
+- Optional next: fresh `mach package` DMG when disk allows (>25 Gi free preferred; Mini ~16 Gi free after FFI rebuild — do not reclaim Gecko 156 objdir)
 
 ## Soft residual — eTLD seed rotate (0030) — **MERGED** / Proof XOR **PASS**
 
@@ -192,3 +192,26 @@ See [`SEED-COHERENCE.md`](SEED-COHERENCE.md).
 
 - `_etldSeedMap` / diag prefs may include extension-list hosts under Pollution (expected sticky); harness compared seeds via chrome `_etldSeedMap` / `_seedForEtld` as u32.
 
+## Soft residual — 156 `libduppel_ffi` restore — **CLOSED** (local Mini; docs PR)
+
+| Item | Status |
+|------|--------|
+| Cause | Patch **0008** vendored `third_party/darkstr` on 156; apply-script only `chmod`s `build-and-install-ffi.sh` — **does not** cargo-build the cdylib. 155 had a prior Mini run; 156 cutover skipped it. |
+| Fix | Project-standard Approach B rebuild (not copy-from-155): `PATH="$HOME/.cargo/bin:$PATH"` + `build-and-install-ffi.sh --prefix "$objdir/dist/bin"` |
+| Dist path | `…/librewolf-156.0.1-1/obj-aarch64-apple-darwin25.6.0/dist/bin/libduppel_ffi.dylib` |
+| Also mirrored | `LibreWolf.app/Contents/MacOS/` and `…/Resources/` (parity with 155) |
+| Symbols | `darkstr_ffi_abi_version`, `darkstr_ffi_persona_snapshot_json`, `darkstr_ffi_string_free` (`nm -gU`) |
+| Mini helper | [`PHASE-4-FFI-MINI-INSTALL.sh`](PHASE-4-FFI-MINI-INSTALL.sh) |
+| DMG | **Skipped** (disk ~16 Gi free; keep 156 objdir) |
+
+### Verify (no full package)
+
+```bash
+source ~/src/darkstr-gecko/DARKSTR_GECKO_ROOT.env
+DYLIB="$DARKSTR_GECKO_ROOT"/obj-*/dist/bin/libduppel_ffi.dylib
+ls -la $DYLIB
+otool -L $DYLIB | head
+nm -gU $DYLIB | grep darkstr_ffi_
+```
+
+Brand: darkstr — not official LibreWolf. No Proof ping from this residual close.
