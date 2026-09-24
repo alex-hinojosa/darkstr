@@ -1,6 +1,6 @@
 # Phase 4 status — LibreWolf / Firefox **156.0.1-1** train
 
-**Date:** 2026-09-23 (CDT)  
+**Date:** 2026-09-24 (CDT)  
 **Owner:** Builder  
 **Audience:** Meridian / Proof / Product Manager skim  
 **Brand:** darkstr — not official LibreWolf. Pollution browser, not Cloudflare bypass.  
@@ -275,7 +275,7 @@ derives `audioSeed`/`canvasSeed` from eTLD-effective `_seedForEtld` when
 
 ### Soft residual (not FAIL)
 
-`darkstr.depth.lastSeeds` may lag vs live install seeds while digests diverge — diagnostic only.
+`darkstr.depth.lastSeeds` lag vs digests — **addressed by in-flight 0034** (soft diag).
 
 ## Soft residual — WebGL extension list + shader precision (0032) — **MERGED** / Proof XOR **PASS**
 
@@ -308,4 +308,33 @@ eTLD-effective `_seedForEtld` when `rotatePerSite` is on (shared with 0031).
 
 ### Soft residual (not FAIL)
 
-`lastSeeds`/canvasSeed diagnostic may lag vs live digests — diagnostic only. Out of scope: fonts / speech / WebGPU; product README.
+`lastSeeds`/canvasSeed diagnostic lag — **addressed by in-flight 0034**. Out of scope: fonts / speech / WebGPU; product README.
+
+## Soft residual — depth lastSeeds eTLD diag (0034) — **IN FLIGHT** (do not merge; parent ACK)
+
+| Item | Status |
+|------|--------|
+| PR | [#65](https://github.com/alex-hinojosa/darkstr/pull/65) **OPEN** (do not merge; parent ACK) |
+| Tip target | LibreWolf **156.0.1-1** post-0031/0032/0033 |
+| Patch | [`patches/0034-darkstr-depth-lastseeds-etld-diag.patch`](../patches/0034-darkstr-depth-lastseeds-etld-diag.patch) |
+| Mini helper | [`PHASE-4-LASTSEEDS-0034-MINI-APPLY.sh`](PHASE-4-LASTSEEDS-0034-MINI-APPLY.sh) |
+
+**Problem (Proof soft after #61/#62 re-XOR):** digests diverged correctly per eTLD
+when `rotatePerSite` on, but `darkstr.depth.lastSeeds` stayed stuck on global
+`refreshPlan` / `_setArmed` seeds.
+
+**Fix:** `_writeLastSeeds` in `DarkstrDepthHooks`; every non-null return from
+`depthSeedsForBrowsingContext` (snap depth fields / eTLD `_seedForEtld`+
+`_generateDepthFromSeed` / global fallback) writes `darkstr.depth.lastSeeds`.
+Golden lock path still records global/plan seeds. Chrome JS only; no farbling
+math change.
+
+### Verify (soft)
+
+1. Pollution+hooks+`rotatePerSite`: navigate two different eTLD+1 →
+   `darkstr.depth.lastSeeds` `canvasSeed`/`audioSeed` differ (match digests)
+2. Golden lock seed-42 → `lastSeeds` stays global/plan
+3. Homogeneous / hooks-off → idle
+
+**Do not ping Proof from this pin** — parent will ACK.
+

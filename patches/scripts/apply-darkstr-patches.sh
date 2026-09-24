@@ -369,6 +369,10 @@ patch_markers_present() {
       grep -Fq "Soft residual (0033)" "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrNativePersonaChild.sys.mjs" \
         && grep -Fq "Cu.cloneInto(langsCopy.slice()" "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrNativePersonaChild.sys.mjs"
       ;;
+    0034-darkstr-depth-lastseeds-etld-diag.patch)
+      grep -Fq "Soft residual (0034)" "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrDepthHooks.sys.mjs" \
+        && grep -Fq "_writeLastSeeds" "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrDepthHooks.sys.mjs"
+      ;;
     *)
       return 1
       ;;
@@ -413,7 +417,7 @@ for stub in "${STUBS}"/000*.patch.stub; do
 done
 if [[ "${stub_count}" -gt 0 ]]; then
   echo "Note: ${stub_count} .patch.stub file(s) present — sketches only, not applied."
-  echo "Remaining stubs are sketches; real patches: 0002 XOR, 0003 chrome persona, 0005 C++ nsHttp, 0006/0007 C++ nav/docshell, 0008-0015 FFI/nav, 0016 chaff timer, 0017 depth canvas/WebGL/Audio, 0018 worker globals + 0019 soft residuals + 0020 DocShell SubsequentNav when present (0004 stub leftovers cleared for DocShell; scheduler->0016; depth->0017; workers->0018; soft->0019; docshell-next->0020; webgl-caps/OffscreenCanvas->0023; richer-chaff-beacons->0024; fp-coherence-p0->0025–0027; fp-coherence-p1-tz-webrtc->0028; webgl-context-enable->0029; etld-seed-rotate->0030; audio-silence-farbling->0031; webgl-ext-precision->0032; nav-languages-cloneinto->0033)."
+  echo "Remaining stubs are sketches; real patches: 0002 XOR, 0003 chrome persona, 0005 C++ nsHttp, 0006/0007 C++ nav/docshell, 0008-0015 FFI/nav, 0016 chaff timer, 0017 depth canvas/WebGL/Audio, 0018 worker globals + 0019 soft residuals + 0020 DocShell SubsequentNav when present (0004 stub leftovers cleared for DocShell; scheduler->0016; depth->0017; workers->0018; soft->0019; docshell-next->0020; webgl-caps/OffscreenCanvas->0023; richer-chaff-beacons->0024; fp-coherence-p0->0025–0027; fp-coherence-p1-tz-webrtc->0028; webgl-context-enable->0029; etld-seed-rotate->0030; audio-silence-farbling->0031; webgl-ext-precision->0032; nav-languages-cloneinto->0033; depth-lastseeds-etld-diag->0034)."
 fi
 
 echo "Done. Cfg path always; real unified diffs under patches/000*.patch applied when present."
@@ -442,4 +446,5 @@ echo "Phase 4 eTLD seed rotate: patches/0030-darkstr-persona-etld-seed-rotate.pa
 echo "Phase 4 audio silence-safe farbling: patches/0031-darkstr-audio-silence-farbling.patch (Brave-style fudge + AnalyserNode/copyFromChannel; silence-safe). Rebuild: browser/components only; no XUL relink (see docs/PHASE-4-AUDIO-0031-MINI-APPLY.sh)."
 echo "Phase 4 WebGL ext+precision: patches/0032-darkstr-webgl-ext-precision.patch (getSupportedExtensions/getExtension + getShaderPrecisionFormat; Firefox-plausible; seed-tied canvasSeed). Independent of 0031. Rebuild: browser/components only; no XUL relink (see docs/PHASE-4-WEBGL-0032-MINI-APPLY.sh)."
 echo "Phase 4 langs cloneInto: patches/0033-darkstr-nav-languages-cloneinto.patch (page-compartment navigator.languages after SubsequentNav). Rebuild: browser/components only; no XUL relink (see docs/PHASE-4-LANGS-0033-MINI-APPLY.sh)."
+echo "Phase 4 lastSeeds eTLD diag: patches/0034-darkstr-depth-lastseeds-etld-diag.patch (lastSeeds mirrors install seeds when rotatePerSite). Rebuild: browser/components only; no XUL relink (see docs/PHASE-4-LASTSEEDS-0034-MINI-APPLY.sh)."
 echo "M-FFI-0008 gecko FFI link: patches/0008-darkstr-gecko-ffi-link.patch (Approach B cdylib). Build FFI: third_party/darkstr/build-and-install-ffi.sh --prefix \"\${DARKSTR_GECKO_OBJDIR:-obj-*}/dist/bin\". Rebuild chrome: ./mach build browser/components (see docs/M-FFI-0008-STATUS.md)."
