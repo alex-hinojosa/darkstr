@@ -22,6 +22,11 @@
 #
 # Marker: Soft residual (0031)
 
+# Also wires DarkstrDepthHooks.depthSeedsForBrowsingContext to derive
+# audioSeed/canvasSeed from eTLD-effective persona seed (_seedForEtld) when
+# rotatePerSite is on; golden lock (snapshot / rotatePerSite=false) keeps
+# global plan.seeds. Shared with 0032 — apply --forward is idempotent.
+
 --- a/browser/components/DarkstrDepthHooksChild.sys.mjs
 +++ b/browser/components/DarkstrDepthHooksChild.sys.mjs
 @@ -5,7 +5,9 @@
@@ -290,3 +295,72 @@
  
      installedByWindow.set(rawWindow, { replacements });
      return "installed";
+--- a/browser/components/DarkstrDepthHooks.sys.mjs
++++ b/browser/components/DarkstrDepthHooks.sys.mjs
+@@ -20,7 +20,10 @@
+  * Homogeneous / Native-Compatible / hooks false → no content hooks; seeds null.
+  *
+  * Seeds: prefer darkstr.persona.snapshot JSON (canvasSeed/audioSeed/gpu);
+- * fallback derive from darkstr.persona.seed (mulberry32). Does not write privacy.*.
++ * fallback derive from darkstr.persona.seed (mulberry32). Under 0030 rotatePerSite,
++ * depthSeedsForBrowsingContext re-derives from eTLD-effective seed (_seedForEtld);
++ * golden lock (snapshot / rotatePerSite=false) keeps global plan.seeds.
++ * Does not write privacy.*.
+  *
+  * Workers = Phase 3 pin 3 — NOT in this module.
+  */
+@@ -284,6 +287,10 @@
+       return null;
+     }
+     // SubsequentNav arm: reuse NativePersona first-doc gate when available.
++    // When 0030 rotatePerSite is active, derive canvasSeed/audioSeed/gpu from the
++    // eTLD-effective persona seed (_seedForEtld) — same SoT as sticky rotation.
++    // Golden lock (snapshot pref non-empty OR rotatePerSite=false) keeps global
++    // plan.seeds from _readDepthSeeds (Proof seed-42 coherent).
+     try {
+       const { DarkstrNativePersona } = ChromeUtils.importESModule(
+         "moz-src:///browser/components/DarkstrNativePersona.sys.mjs"
+@@ -292,6 +299,43 @@
+         const snap = DarkstrNativePersona.snapshotForBrowsingContext(bc);
+         if (!snap) {
+           return null;
++        }
++        // Prefer depth fields already on the resolved snapshot (pasted/FFI).
++        const snapCanvas = readU32Field(snap, "canvasSeed", "canvas_seed");
++        const snapAudio = readU32Field(snap, "audioSeed", "audio_seed");
++        const snapGpu = normalizeGpu(snap.gpu);
++        if (snapCanvas !== null && snapAudio !== null && snapGpu) {
++          return {
++            canvasSeed: snapCanvas >>> 0,
++            audioSeed: snapAudio >>> 0,
++            gpu: { vendor: snapGpu.vendor, renderer: snapGpu.renderer },
++          };
++        }
++        const npPlan = DarkstrNativePersona.getPlan
++          ? DarkstrNativePersona.getPlan()
++          : null;
++        if (
++          DarkstrNativePersona._rotationActive &&
++          DarkstrNativePersona._rotationActive(npPlan)
++        ) {
++          let etld = null;
++          if (DarkstrNativePersona._etldPlus1FromBrowsingContext) {
++            etld = DarkstrNativePersona._etldPlus1FromBrowsingContext(bc);
++          }
++          if (etld && DarkstrNativePersona._seedForEtld) {
++            const seed = DarkstrNativePersona._seedForEtld(etld) >>> 0;
++            const derived = this._generateDepthFromSeed(seed);
++            if (derived) {
++              return {
++                canvasSeed: derived.canvasSeed >>> 0,
++                audioSeed: derived.audioSeed >>> 0,
++                gpu: {
++                  vendor: derived.gpu.vendor,
++                  renderer: derived.gpu.renderer,
++                },
++              };
++            }
++          }
+         }
+       }
+     } catch (_e) {

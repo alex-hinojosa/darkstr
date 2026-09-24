@@ -261,6 +261,10 @@ time-domain keeps 128) plus `copyFromChannel` and `AnalyserNode`
 (persona / eTLD+1 effective via 0030). Double-read stable via WeakMap
 `noisedBuffers` + `contentKey` (mutate-once). Homogeneous / hooks off: idle.
 
+**Proof FAIL fix (2026-09-24):** `DarkstrDepthHooks.depthSeedsForBrowsingContext`
+now derives `audioSeed`/`canvasSeed` from eTLD-effective `_seedForEtld` when
+`rotatePerSite` is on (was stuck on global `plan.seeds`). Golden lock unchanged.
+
 ### Proof XOR gates (required before merge)
 
 1. Pollution+hooks: same seed → stable audio fingerprint across double-read
