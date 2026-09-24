@@ -353,6 +353,10 @@ patch_markers_present() {
         && grep -Fq "darkstr.persona.rotatePerSite" "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrNativePersona.sys.mjs" \
         && grep -Fq "Soft residual (0030)" "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrNativePersonaParent.sys.mjs"
       ;;
+    0033-darkstr-nav-languages-cloneinto.patch)
+      grep -Fq "Soft residual (0033)" "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrNativePersonaChild.sys.mjs" \
+        && grep -Fq "Cu.cloneInto(langsCopy.slice()" "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrNativePersonaChild.sys.mjs"
+      ;;
     *)
       return 1
       ;;
@@ -397,7 +401,7 @@ for stub in "${STUBS}"/000*.patch.stub; do
 done
 if [[ "${stub_count}" -gt 0 ]]; then
   echo "Note: ${stub_count} .patch.stub file(s) present — sketches only, not applied."
-  echo "Remaining stubs are sketches; real patches: 0002 XOR, 0003 chrome persona, 0005 C++ nsHttp, 0006/0007 C++ nav/docshell, 0008-0015 FFI/nav, 0016 chaff timer, 0017 depth canvas/WebGL/Audio, 0018 worker globals + 0019 soft residuals + 0020 DocShell SubsequentNav when present (0004 stub leftovers cleared for DocShell; scheduler->0016; depth->0017; workers->0018; soft->0019; docshell-next->0020; webgl-caps/OffscreenCanvas->0023; richer-chaff-beacons->0024; fp-coherence-p0->0025–0027; fp-coherence-p1-tz-webrtc->0028; webgl-context-enable->0029; etld-seed-rotate->0030)."
+  echo "Remaining stubs are sketches; real patches: 0002 XOR, 0003 chrome persona, 0005 C++ nsHttp, 0006/0007 C++ nav/docshell, 0008-0015 FFI/nav, 0016 chaff timer, 0017 depth canvas/WebGL/Audio, 0018 worker globals + 0019 soft residuals + 0020 DocShell SubsequentNav when present (0004 stub leftovers cleared for DocShell; scheduler->0016; depth->0017; workers->0018; soft->0019; docshell-next->0020; webgl-caps/OffscreenCanvas->0023; richer-chaff-beacons->0024; fp-coherence-p0->0025–0027; fp-coherence-p1-tz-webrtc->0028; webgl-context-enable->0029; etld-seed-rotate->0030; nav-languages-cloneinto->0033)."
 fi
 
 echo "Done. Cfg path always; real unified diffs under patches/000*.patch applied when present."
@@ -423,4 +427,5 @@ echo "Phase 3 richer chaff beacons: patches/0024-darkstr-chaff-richer-beacon-bod
 echo "Phase 3 FP coherence P1: patches/0028-darkstr-fp-coherence-p1-tz-webrtc.patch (native BC timezone + Pollution WebRTC kill/restore). Rebuild: browser/components only; no XUL relink (see docs/PHASE-3-FP-0028-MINI-APPLY.sh)."
 echo "Phase 3 WebGL context enable: patches/0029-darkstr-webgl-context-enable.patch (ModeXor webgl.disabled=false + force-enabled + gfx.blocklist.all=-1 + librewolf.webgl.prompt=false; nsIGfxInfo lastStatus). Rebuild: browser/components only; no XUL relink (see docs/PHASE-3-WEBGL-0029-MINI-APPLY.sh)."
 echo "Phase 4 eTLD seed rotate: patches/0030-darkstr-persona-etld-seed-rotate.patch (sticky per-eTLD+1 seed; rotatePerSite; Proof lock via snapshot|rotatePerSite=false). Rebuild: browser/components only; no XUL relink (see docs/PHASE-4-ETLD-0030-MINI-APPLY.sh)."
+echo "Phase 4 langs cloneInto: patches/0033-darkstr-nav-languages-cloneinto.patch (page-compartment navigator.languages after SubsequentNav). Rebuild: browser/components only; no XUL relink (see docs/PHASE-4-LANGS-0033-MINI-APPLY.sh)."
 echo "M-FFI-0008 gecko FFI link: patches/0008-darkstr-gecko-ffi-link.patch (Approach B cdylib). Build FFI: third_party/darkstr/build-and-install-ffi.sh --prefix \"\${DARKSTR_GECKO_OBJDIR:-obj-*}/dist/bin\". Rebuild chrome: ./mach build browser/components (see docs/M-FFI-0008-STATUS.md)."

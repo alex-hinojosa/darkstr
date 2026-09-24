@@ -1,0 +1,38 @@
+--- a/browser/components/DarkstrNativePersonaChild.sys.mjs
++++ b/browser/components/DarkstrNativePersonaChild.sys.mjs
+@@ -12,6 +12,11 @@
+  * P0 FP coherence (0025): instance-first hardwareConcurrency.
+  * 0026: waiveXrays + exportFunction (DepthHooks lesson) — chrome defineProperty on
+  * Xray Navigator does not stick for HW when RFP is off; page-compartment getters do.
++ *
++ * Soft residual (0033): languages getter must Cu.cloneInto the array into the page
++ * compartment. exportFunction returning a chrome Array makes page (and Marionette)
++ * hits on .length throw "Permission denied" after SubsequentNav — worker langs OK
++ * because WorkerHooks injects a page-source JSON literal. DepthHooks cloneInto lesson.
+  */
+ 
+ function contentWindowFor(rawWindow) {
+@@ -82,10 +87,21 @@
+   spoofBoth("hardwareConcurrency", hw);
+   spoofBoth("deviceMemory", mem);
+   spoofBoth("language", langs[0] || "en-US");
+-  // Fresh array each get so page mutation cannot poison the spoof.
++  // Fresh page-compartment array each get (cloneInto). Chrome Array return from
++  // exportFunction Xray-denies .length to page principal after SubsequentNav (0033).
+   try {
+     const langsGetter = Cu.exportFunction(function darkstrLangsGetter() {
+-      return langsCopy.slice();
++      try {
++        return Cu.cloneInto(langsCopy.slice(), pageWindow);
++      } catch (_e) {
++        // Fallback: build via page Array so content never sees a chrome Array.
++        try {
++          const A = pageWindow.Array;
++          return A.from(Cu.cloneInto(langsCopy, pageWindow));
++        } catch (_e2) {
++          return langsCopy.slice();
++        }
++      }
+     }, pageWindow);
+     if (nav) {
+       Object.defineProperty(nav, "languages", {

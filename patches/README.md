@@ -279,3 +279,12 @@ Real unified diff [`0029-darkstr-webgl-context-enable.patch`](0029-darkstr-webgl
 Surgical in-place refresh of **0009 / 0022 / 0027 / 0028 / 0029** so they apply clean on LibreWolf **156.0.1-1** after the OK set from the Phase 4 dry-run matrix (`docs/PHASE-4-STATUS.md`). Not a blanket regenerate of 0002–0029. Apply order for the fail set: **0022 → 0027 → 0028 → 0029 → 0009**.
 
 | [`0030-darkstr-persona-etld-seed-rotate.patch`](0030-darkstr-persona-etld-seed-rotate.patch) | **Real** Phase 4 — sticky per-eTLD+1 persona seed (`rotatePerSite`; Proof lock via snapshot\|rotate=false) |
+
+## Phase 4 soft residual — window languages cloneInto (0033)
+
+Real unified diff [`0033-darkstr-nav-languages-cloneinto.patch`](0033-darkstr-nav-languages-cloneinto.patch) against LibreWolf **156.0.1-1** post-0030:
+
+- Root cause: after SubsequentNav, Child `darkstrLangsGetter` (`Cu.exportFunction`) returned a **chrome Array**; page principal (and Marionette) then hit `Permission denied to access property "length"` on `navigator.languages`. Worker langs OK (WorkerHooks injects page-source JSON literal). Prefs `darkstr.persona.languages` / `intl.accept_languages` already held full snapshot CSV (`en-US,en,es`).
+- Fix: `Cu.cloneInto(langsCopy.slice(), pageWindow)` (DepthHooks lesson) so page sees a content-compartment array.
+- Chrome JS only; no XUL relink. Mini helper: [`docs/PHASE-4-LANGS-0033-MINI-APPLY.sh`](../docs/PHASE-4-LANGS-0033-MINI-APPLY.sh).
+- Non-claims: Accept-Language HTTP rewrite beyond existing 0014 path; harness may still prefer attr/in-page bridges under Marionette Xray.
