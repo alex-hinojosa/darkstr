@@ -243,3 +243,33 @@ Brand: darkstr — not official LibreWolf. No Proof ping from this residual clos
 
 - Marionette **direct** sandbox read of `navigator.languages.length` may still Xray-deny after the spoof lands; page-principal / attr / in-page probes are SoT for product correctness.
 - Gate `poll_langs_es` already OR'd worker langs; after 0033, window langs should also include `es` under headed Pollution and page-principal probes.
+
+## Soft residual — audio silence-safe farbling (0031) — **IN FLIGHT**
+
+| Item | Status |
+|------|--------|
+| PR | *(open — do not merge until Proof XOR)* |
+| Patch | [`patches/0031-darkstr-audio-silence-farbling.patch`](../patches/0031-darkstr-audio-silence-farbling.patch) |
+| Mini helper | [`PHASE-4-AUDIO-0031-MINI-APPLY.sh`](PHASE-4-AUDIO-0031-MINI-APPLY.sh) |
+| Tree | LibreWolf **156.0.1-1** (chrome JS; browser/components only) |
+
+Deepens existing page-compartment OfflineAudioContext / `AudioBuffer.getChannelData` (0017/0019)
+with **Brave-style silence-safe** multiplicative fudge
+(`fudge = 0.999 + (seed>>>0)/4294967295/1000` so exact zeros stay zero; byte
+time-domain keeps 128) plus `copyFromChannel` and `AnalyserNode`
+`get{Float,Byte}{TimeDomain,Frequency}Data`. Seed remains depth `audioSeed`
+(persona / eTLD+1 effective via 0030). Double-read stable via WeakMap
+`noisedBuffers` + `contentKey` (mutate-once). Homogeneous / hooks off: idle.
+
+### Proof XOR gates (required before merge)
+
+1. Pollution+hooks: same seed → stable audio fingerprint across double-read
+2. Different eTLD+1 (rotate on) → different audio digests
+3. Silence / zero buffer → no measurable farbling tell (or within Brave-like bound)
+4. Golden lock seed-42 → prior exit checklist audio still coherent
+5. Homogeneous / hooks-off → idle
+
+### Out of scope (next pins)
+
+WebGL extension lists / shader precision; fonts / speech / WebGPU; product README.
+
