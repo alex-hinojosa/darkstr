@@ -281,7 +281,7 @@ WebGL extension lists / shader precision; fonts / speech / WebGPU; product READM
 
 | Item | Status |
 |------|--------|
-| PR | *(open with this commit — do not merge until Proof XOR)* |
+| PR | [#62](https://github.com/alex-hinojosa/darkstr/pull/62) — **do not merge until Proof XOR** |
 | Patch | [`patches/0032-darkstr-webgl-ext-precision.patch`](../patches/0032-darkstr-webgl-ext-precision.patch) |
 | Mini helper | [`PHASE-4-WEBGL-0032-MINI-APPLY.sh`](PHASE-4-WEBGL-0032-MINI-APPLY.sh) |
 | Tree | LibreWolf **156.0.1-1** (chrome JS; browser/components only) |
