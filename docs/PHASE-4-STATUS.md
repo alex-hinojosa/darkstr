@@ -275,7 +275,7 @@ derives `audioSeed`/`canvasSeed` from eTLD-effective `_seedForEtld` when
 
 ### Soft residual (not FAIL)
 
-`darkstr.depth.lastSeeds` lag vs digests — **addressed by in-flight 0034** (soft diag).
+`darkstr.depth.lastSeeds` lag vs digests — **closed by 0034 / PR #65** (soft diag).
 
 ## Soft residual — WebGL extension list + shader precision (0032) — **MERGED** / Proof XOR **PASS**
 
@@ -308,16 +308,17 @@ eTLD-effective `_seedForEtld` when `rotatePerSite` is on (shared with 0031).
 
 ### Soft residual (not FAIL)
 
-`lastSeeds`/canvasSeed diagnostic lag — **addressed by in-flight 0034**. Out of scope: fonts / speech / WebGPU; product README.
+`lastSeeds`/canvasSeed diagnostic lag — **closed by 0034 / PR #65**. Out of scope: fonts / speech / WebGPU; product README.
 
-## Soft residual — depth lastSeeds eTLD diag (0034) — **IN FLIGHT** (do not merge; parent ACK)
+## Soft residual — depth lastSeeds eTLD diag (0034) — **MERGED** / Proof XOR **PASS**
 
 | Item | Status |
 |------|--------|
-| PR | [#65](https://github.com/alex-hinojosa/darkstr/pull/65) **OPEN** (do not merge; parent ACK) |
-| Tip target | LibreWolf **156.0.1-1** post-0031/0032/0033 |
+| PR | [#65](https://github.com/alex-hinojosa/darkstr/pull/65) **MERGED** as `ba47913` |
+| Tip at Proof | `18d0ee7eaf14900f27d383efbfd92aa74a82d6bb` (LibreWolf **156.0.1-1**) |
 | Patch | [`patches/0034-darkstr-depth-lastseeds-etld-diag.patch`](../patches/0034-darkstr-depth-lastseeds-etld-diag.patch) |
 | Mini helper | [`PHASE-4-LASTSEEDS-0034-MINI-APPLY.sh`](PHASE-4-LASTSEEDS-0034-MINI-APPLY.sh) |
+| Evidence | `~/AgentDocs/proof/pr65-0034-lastseeds-xor-20260924-132002/` |
 
 **Problem (Proof soft after #61/#62 re-XOR):** digests diverged correctly per eTLD
 when `rotatePerSite` on, but `darkstr.depth.lastSeeds` stayed stuck on global
@@ -329,12 +330,11 @@ when `rotatePerSite` on, but `darkstr.depth.lastSeeds` stayed stuck on global
 Golden lock path still records global/plan seeds. Chrome JS only; no farbling
 math change.
 
-### Verify (soft)
+### Proof XOR gates (PASS)
 
-1. Pollution+hooks+`rotatePerSite`: navigate two different eTLD+1 →
-   `darkstr.depth.lastSeeds` `canvasSeed`/`audioSeed` differ (match digests)
-2. Golden lock seed-42 → `lastSeeds` stays global/plan
-3. Homogeneous / hooks-off → idle
+1. Pollution+hooks+`rotatePerSite`: two eTLD+1 → `lastSeeds` canvas/audio diverge and match digests — **PASS**
+2. Golden lock seed-42 → `lastSeeds` stays global/plan — **PASS**
+3. Homogeneous / hooks-off → idle — **PASS**
 
-**Do not ping Proof from this pin** — parent will ACK.
+Soft residual from #61/#62 closed: `lastSeeds` mirrors eTLD install seeds under rotate.
 
