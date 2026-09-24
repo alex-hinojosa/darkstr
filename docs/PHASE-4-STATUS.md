@@ -160,7 +160,7 @@ FAIL set is green on 156 dry-run+apply. Next: Mini subdirectory `mach build` + `
 
 ### Soft residuals (not FAIL)
 - ~~`libduppel_ffi.dylib` missing on this 156 dist~~ — **closed 2026-09-24**: rebuilt via Approach B `third_party/darkstr/build-and-install-ffi.sh` into 156 `dist/bin` (+ app MacOS/Resources mirror). See section below.
-- Marionette/CSP could not read window `navigator.languages` on SubsequentNav (empty probe); worker langs independently `en-US,en,es`; first-nav window langs included `es`
+- ~~Marionette/CSP could not read window `navigator.languages` on SubsequentNav (empty probe)~~ — **eng fix 0033 / PR (cloneInto)**; see section below. Worker langs were already OK (`en-US,en,es`).
 
 ### Cutover
 - Mini `DARKSTR_GECKO_ROOT` → **156.0.1-1**; `DARKSTR_GECKO_ROOT_155` keeps 155 for reference
@@ -215,3 +215,31 @@ nm -gU $DYLIB | grep darkstr_ffi_
 ```
 
 Brand: darkstr — not official LibreWolf. No Proof ping from this residual close.
+
+## Soft residual — window `navigator.languages` empty on SubsequentNav (0033) — **ENG FIX** ([PR #64](https://github.com/alex-hinojosa/darkstr/pull/64))
+
+| Item | Status |
+|------|--------|
+| Symptom | Proof XOR PASS soft note: Marionette window `langs_page=[]` on Pollution SubsequentNav; worker langs `en-US,en,es`; first-nav window langs included `es`. |
+| Root cause | **Product** (not harness-only): Child `darkstrLangsGetter` via `Cu.exportFunction` returned a **chrome Array**. Page principal then throws `Permission denied to access property "length"` when reading `navigator.languages` (reproduced 2026-09-24 CDT; inline script `data-darkstr-ran=1` + `pageErr`). Prefs already held full CSV (`darkstr.persona.languages` / `intl.accept_languages` = `en-US,en,es`). Worker OK because WorkerHooks injects a page-source JSON literal. |
+| PR | [#64](https://github.com/alex-hinojosa/darkstr/pull/64) **OPEN** (tip `5dc9aa2`) — do not merge from this residual |
+| Fix | Pin **0033**: `Cu.cloneInto(langsCopy.slice(), pageWindow)` in `DarkstrNativePersonaChild.sys.mjs` (DepthHooks lesson). |
+| Patch | [`patches/0033-darkstr-nav-languages-cloneinto.patch`](../patches/0033-darkstr-nav-languages-cloneinto.patch) |
+| Mini helper | [`PHASE-4-LANGS-0033-MINI-APPLY.sh`](PHASE-4-LANGS-0033-MINI-APPLY.sh) |
+| Rebuild | `browser/components` subdirectory + `install-dist_bin` only — **no** full `mach package` / DMG (disk ~14–16 Gi). |
+| Open PRs | Do **not** merge/rewrite #61 (0031) or #62 (0032); 0033 touches only NativePersonaChild + docs/apply markers. |
+| Proof | Parent ACK when ready — **do not ping Proof** from this residual. |
+
+### Mini verify (2026-09-24 ~12:58 CDT)
+
+`proof-xor/diag_langs_subsequent.py` after 0033 apply on 156:
+
+- SubsequentNav page `navigator.languages` → `['en-US','en','es']` (direct + attr + expando); `pageErr=null`; getter name `darkstrLangsGetter`
+- Worker langs → `['en-US','en','es']`; HW=8; prefs CSV still `en-US,en,es`
+- Pre-fix: same probe had `pageErr=Permission denied to access property "length"` and empty attr langs
+
+
+### Residual risk
+
+- Marionette **direct** sandbox read of `navigator.languages.length` may still Xray-deny after the spoof lands; page-principal / attr / in-page probes are SoT for product correctness.
+- Gate `poll_langs_es` already OR'd worker langs; after 0033, window langs should also include `es` under headed Pollution and page-principal probes.
