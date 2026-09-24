@@ -314,7 +314,7 @@ eTLD-effective `_seedForEtld` when `rotatePerSite` is on (shared with 0031).
 
 | Item | Status |
 |------|--------|
-| PR | *(opened by Builder eng — see GitHub)* |
+| PR | [#65](https://github.com/alex-hinojosa/darkstr/pull/65) **OPEN** (do not merge; parent ACK) |
 | Tip target | LibreWolf **156.0.1-1** post-0031/0032/0033 |
 | Patch | [`patches/0034-darkstr-depth-lastseeds-etld-diag.patch`](../patches/0034-darkstr-depth-lastseeds-etld-diag.patch) |
 | Mini helper | [`PHASE-4-LASTSEEDS-0034-MINI-APPLY.sh`](PHASE-4-LASTSEEDS-0034-MINI-APPLY.sh) |
