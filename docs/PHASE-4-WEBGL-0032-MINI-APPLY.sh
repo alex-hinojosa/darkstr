@@ -11,18 +11,15 @@ COMP="${DARKSTR_GECKO_ROOT}/browser/components"
 echo "DARKSTR_GECKO_ROOT=${DARKSTR_GECKO_ROOT}"
 df -h "${DARKSTR_GECKO_ROOT}" | tail -1 || true
 test -f "${PATCH}"
-if grep -Fq 'Soft residual (0032)' "${COMP}/DarkstrDepthHooksChild.sys.mjs" \
-  && grep -Fq 'advertisedExtensions' "${COMP}/DarkstrDepthHooksChild.sys.mjs" \
-  && grep -Fq 'PRECISION_PROFILES' "${COMP}/DarkstrDepthHooksChild.sys.mjs" \
-  && grep -Fq 'getShaderPrecisionFormat' "${COMP}/DarkstrDepthHooksChild.sys.mjs"; then
-  echo "0032 markers already present — skip patch apply"
-else
-  patch -d "${DARKSTR_GECKO_ROOT}" -p1 --forward --batch < "${PATCH}"
-fi
+# Always --forward: skips landed hunks, applies Proof-fix hunks
+# (cloneInto + depthSeeds eTLD seed) when Soft residual (0032) already present.
+patch -d "${DARKSTR_GECKO_ROOT}" -p1 --forward --batch < "${PATCH}" || true
 grep -Fq 'Soft residual (0032)' "${COMP}/DarkstrDepthHooksChild.sys.mjs"
 grep -Fq 'advertisedExtensions' "${COMP}/DarkstrDepthHooksChild.sys.mjs"
 grep -Fq 'PRECISION_PROFILES' "${COMP}/DarkstrDepthHooksChild.sys.mjs"
 grep -Fq 'BASELINE_WEBGL_EXTENSIONS' "${COMP}/DarkstrDepthHooksChild.sys.mjs"
+grep -Fq 'Cu.cloneInto(cached, pageWindow)' "${COMP}/DarkstrDepthHooksChild.sys.mjs"
+grep -Fq '_seedForEtld' "${COMP}/DarkstrDepthHooks.sys.mjs"
 
 cd "${DARKSTR_GECKO_ROOT}"
 export MACH_SYSTEM_ASSERTED_COMPATIBLE_WITH_MACH_SITE=1

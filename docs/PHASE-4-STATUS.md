@@ -290,9 +290,13 @@ WebGL extension lists / shader precision; fonts / speech / WebGPU; product READM
 Deepens existing page-compartment WebGL (0017/0023 UNMASKED + cap buckets; 0029
 headed unlock) with seed-tied **`getSupportedExtensions` / `getExtension`**
 (Firefox-plausible baseline ∩ native + coherent stubs; Brave-like deterministic
-optional keep/drop via `canvasSeed`) and **`getShaderPrecisionFormat`** (two
+optional keep/drop via `canvasSeed`; list via **`Cu.cloneInto` into pageWindow**) and **`getShaderPrecisionFormat`** (two
 internally coherent Firefox-desktop profiles, seed-picked). Double-read stable
 via WeakMap. No Chrome-only extension names. Homogeneous / hooks off: idle.
+
+**Proof FAIL fix (2026-09-24):** (1) `getSupportedExtensions` → `Cu.cloneInto(cached, pageWindow)`;
+(2) `depthSeedsForBrowsingContext` derives `canvasSeed`/`audioSeed` from
+eTLD-effective `_seedForEtld` when `rotatePerSite` is on (shared with 0031).
 
 ### Proof XOR gates (required before merge)
 
