@@ -174,3 +174,14 @@ Crate fixtures: `duppel_coherence::xor_matrix`, `assert_pollution_kills_rfp`, `a
 - No AMO-signed stock path that writes `privacy.*`.
 - No RFP metric customization.
 - Stock LibreWolf companion without experiments: still storage-only (honest soft no-op).
+
+## 6d. Cookie firewall (0035 — Phase 5)
+
+| Pref | Type | Default | Notes |
+|------|------|---------|-------|
+| `darkstr.cookieFirewall.enabled` | bool | `false` | Explicit second arm; idle unless Pollution+hooks too |
+| `darkstr.cookieFirewall.mode` | string | `synthetic` | `synthetic` \| `isolate` |
+| `darkstr.cookieFirewall.allowlist` | string | `""` | CSV eTLD+1 real-jar passthrough |
+
+Diagnostics: `darkstr.cookieFirewall.armed`, `lastEtld`, `lastSeed`, `lastDecision`, `lastInstall`.  
+Design: [`COOKIE-SANDBOX-FAKE-JAR.md`](COOKIE-SANDBOX-FAKE-JAR.md). Status: [`PHASE-5-STATUS.md`](PHASE-5-STATUS.md).
