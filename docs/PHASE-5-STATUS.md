@@ -7,13 +7,17 @@
 **Train:** LibreWolf **156.0.1-1** (Mini SoT via `DARKSTR_GECKO_ROOT`)
 
 Phase 4 depth (through **0034** lastSeeds eTLD diag) is **CLOSED** / Proof PASS.  
-Phase 5 opens the **cookie firewall** backlog (PR #34 docs → live pin).
+Phase 5 pin **0035 cookie firewall MVP** is **MERGED** / Proof XOR **PASS**.
 
-## In-flight — 0035 Cookie firewall MVP
+## Completed — 0035 Cookie firewall MVP
 
 | Item | Status |
 |------|--------|
 | Pin | **0035** |
+| PR | [#66](https://github.com/alex-hinojosa/darkstr/pull/66) **MERGED** as `79f2e59c6a8bdbd2f3891fc649011698a639c351` |
+| Tip at Proof | `d35c5fd8fdec6fba20cf1c08c1f270b8f550ecf3` |
+| Proof | **PASS** |
+| Evidence | `~/AgentDocs/proof/pr66-0035-cookie-firewall-xor-20260924-134154/` |
 | Branch | `builder/phase5-cookie-firewall-0035` |
 | Patch | [`patches/0035-darkstr-cookie-firewall.patch`](../patches/0035-darkstr-cookie-firewall.patch) |
 | Mini helper | [`scripts/apply-0035-cookie-firewall-mini.sh`](../scripts/apply-0035-cookie-firewall-mini.sh) |
@@ -51,6 +55,16 @@ No HTTP/JS split-brain by construction: both paths call the same ingest/decision
 4. Same eTLD two tabs → same policy/seed behavior
 5. Golden lock seed-42 path still coherent
 
+### Proof result — PASS
+
+Evidence: `~/AgentDocs/proof/pr66-0035-cookie-firewall-xor-20260924-134154/`
+
+All five cookie-firewall XOR gates passed on Proof tip `d35c5fd8fdec6fba20cf1c08c1f270b8f550ecf3`.
+
+**Soft observation:** the outbound `/echo` Cookie request header was empty (not
+`NETWORK_REAL`). The sandbox jar and script surfaces held the synthetic
+`net_probe`; this is a soft note only and does not change the PASS verdict.
+
 ### Out of scope (this pin)
 
 - fonts / speech / WebGPU
@@ -73,5 +87,5 @@ No HTTP/JS split-brain by construction: both paths call the same ingest/decision
 - `./mach build --allow-subdirectory-build browser/components` — **OK** (~17s)
 - `make install-dist_bin` — Added/updated 3 CookieFirewall modules
 - Symlinks: `dist/LibreWolf.app/.../moz-src/browser/components/DarkstrCookieFirewall*.sys.mjs` → source
-- **Not merged. Proof not pinged** (parent ACK).
+- PR #66 **MERGED** as `79f2e59c6a8bdbd2f3891fc649011698a639c351`; Proof XOR **PASS** on tip `d35c5fd8fdec6fba20cf1c08c1f270b8f550ecf3`.
 
