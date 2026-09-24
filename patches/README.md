@@ -281,6 +281,9 @@ Surgical in-place refresh of **0009 / 0022 / 0027 / 0028 / 0029** so they apply 
 | [`0030-darkstr-persona-etld-seed-rotate.patch`](0030-darkstr-persona-etld-seed-rotate.patch) | **Real** Phase 4 — sticky per-eTLD+1 persona seed (`rotatePerSite`; Proof lock via snapshot\|rotate=false) |
 | [`0031-darkstr-audio-silence-farbling.patch`](0031-darkstr-audio-silence-farbling.patch) | **Real** Phase 4 — Brave-style silence-safe AnalyserNode/getChannelData farbling |
 | [`0032-darkstr-webgl-ext-precision.patch`](0032-darkstr-webgl-ext-precision.patch) | **Real** Phase 4 — WebGL extension list + shader precision coherence |
+| [`0033-darkstr-nav-languages-cloneinto.patch`](0033-darkstr-nav-languages-cloneinto.patch) | **Real** Phase 4 soft — page-compartment `navigator.languages` via `Cu.cloneInto` |
+| [`0034-darkstr-depth-lastseeds-etld-diag.patch`](0034-darkstr-depth-lastseeds-etld-diag.patch) | **Real** Phase 4 soft — `lastSeeds` mirrors eTLD install seeds (diag↔digests) |
+
 ## Phase 4 soft residual — window languages cloneInto (0033)
 
 Real unified diff [`0033-darkstr-nav-languages-cloneinto.patch`](0033-darkstr-nav-languages-cloneinto.patch) against LibreWolf **156.0.1-1** post-0030:
@@ -289,3 +292,13 @@ Real unified diff [`0033-darkstr-nav-languages-cloneinto.patch`](0033-darkstr-na
 - Fix: `Cu.cloneInto(langsCopy.slice(), pageWindow)` (DepthHooks lesson) so page sees a content-compartment array.
 - Chrome JS only; no XUL relink. Mini helper: [`docs/PHASE-4-LANGS-0033-MINI-APPLY.sh`](../docs/PHASE-4-LANGS-0033-MINI-APPLY.sh).
 - Non-claims: Accept-Language HTTP rewrite beyond existing 0014 path; harness may still prefer attr/in-page bridges under Marionette Xray.
+
+## Phase 4 soft residual — depth lastSeeds eTLD diag (0034)
+
+Real unified diff [`0034-darkstr-depth-lastseeds-etld-diag.patch`](0034-darkstr-depth-lastseeds-etld-diag.patch) against LibreWolf **156.0.1-1** post-0031/0032:
+
+- Root cause: `depthSeedsForBrowsingContext` already derives eTLD canvasSeed/audioSeed when `rotatePerSite` is on (0031/0032 Proof FAIL fix), but `darkstr.depth.lastSeeds` was only written from `refreshPlan` → `_setArmed` (global plan seeds) — digests diverged, diag stuck.
+- Fix: `_writeLastSeeds` helper; call from every non-null return of `depthSeedsForBrowsingContext` (snap / eTLD `_seedForEtld`+`_generateDepthFromSeed` / global fallback) so lastSeeds matches install seeds. Golden lock unchanged (returns global/plan).
+- Chrome JS only; Mini helper: [`docs/PHASE-4-LASTSEEDS-0034-MINI-APPLY.sh`](../docs/PHASE-4-LASTSEEDS-0034-MINI-APPLY.sh).
+- Non-claims: does not change farbling math; diagnostic prefs only (`darkstr.depth.*`).
+

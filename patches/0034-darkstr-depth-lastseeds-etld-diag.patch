@@ -1,0 +1,137 @@
+# darkstr 0034 — soft diag: lastSeeds mirrors eTLD install seeds
+#
+# Product: when rotatePerSite is active, darkstr.depth.lastSeeds must report the
+#   same canvasSeed/audioSeed/gpu handed to content install (via
+#   depthSeedsForBrowsingContext → _seedForEtld / _generateDepthFromSeed), so
+#   chrome diag matches farbling digests. Golden lock (snapshot non-empty OR
+#   rotatePerSite=false) still records global/plan seeds.
+#
+# Root cause (Proof soft residual after 0031/0032 re-XOR): digests diverged
+#   correctly per eTLD but lastSeeds stayed stuck on global refreshPlan/_setArmed.
+#
+# Apply (after 0031/0032): patch -d "$DARKSTR_GECKO_ROOT" -p1 < \
+#   patches/0034-darkstr-depth-lastseeds-etld-diag.patch
+#   or docs/PHASE-4-LASTSEEDS-0034-MINI-APPLY.sh
+#
+# Rebuild: ./mach build --allow-subdirectory-build browser/components then
+#   make install-dist_bin + moz-src symlinks (chrome JS only; no XUL relink).
+#
+# Verify (do not merge until Proof soft ACK from parent):
+#   - Pollution+hooks+rotatePerSite: navigate two different eTLD+1 →
+#     darkstr.depth.lastSeeds canvasSeed/audioSeed differ (match digests)
+#   - Golden lock seed-42 → lastSeeds stays global/plan seeds
+#   - Homogeneous/hooks-off idle
+#
+# Marker: Soft residual (0034)
+
+--- a/browser/components/DarkstrDepthHooks.sys.mjs
++++ b/browser/components/DarkstrDepthHooks.sys.mjs
+@@ -23,7 +23,9 @@
+  * fallback derive from darkstr.persona.seed (mulberry32). Under 0030 rotatePerSite,
+  * depthSeedsForBrowsingContext re-derives from eTLD-effective seed (_seedForEtld);
+  * golden lock (snapshot / rotatePerSite=false) keeps global plan.seeds.
+- * Does not write privacy.*.
++ * Soft residual (0034): darkstr.depth.lastSeeds mirrors the seeds actually handed
++ * to content install (eTLD-derived when rotatePerSite; global/plan under golden lock)
++ * so diag matches digests. Does not write privacy.*.
+  *
+  * Workers = Phase 3 pin 3 — NOT in this module.
+  */
+@@ -291,6 +293,8 @@
+     // eTLD-effective persona seed (_seedForEtld) — same SoT as sticky rotation.
+     // Golden lock (snapshot pref non-empty OR rotatePerSite=false) keeps global
+     // plan.seeds from _readDepthSeeds (Proof seed-42 coherent).
++    // Soft residual (0034): persist returned seeds to darkstr.depth.lastSeeds so
++    // diag matches the install seeds used for farbling (not stuck on global plan).
+     try {
+       const { DarkstrNativePersona } = ChromeUtils.importESModule(
+         "moz-src:///browser/components/DarkstrNativePersona.sys.mjs"
+@@ -305,11 +309,13 @@
+         const snapAudio = readU32Field(snap, "audioSeed", "audio_seed");
+         const snapGpu = normalizeGpu(snap.gpu);
+         if (snapCanvas !== null && snapAudio !== null && snapGpu) {
+-          return {
++          const out = {
+             canvasSeed: snapCanvas >>> 0,
+             audioSeed: snapAudio >>> 0,
+             gpu: { vendor: snapGpu.vendor, renderer: snapGpu.renderer },
+           };
++          this._writeLastSeeds(out);
++          return out;
+         }
+         const npPlan = DarkstrNativePersona.getPlan
+           ? DarkstrNativePersona.getPlan()
+@@ -326,7 +332,7 @@
+             const seed = DarkstrNativePersona._seedForEtld(etld) >>> 0;
+             const derived = this._generateDepthFromSeed(seed);
+             if (derived) {
+-              return {
++              const out = {
+                 canvasSeed: derived.canvasSeed >>> 0,
+                 audioSeed: derived.audioSeed >>> 0,
+                 gpu: {
+@@ -334,6 +340,8 @@
+                   renderer: derived.gpu.renderer,
+                 },
+               };
++              this._writeLastSeeds(out);
++              return out;
+             }
+           }
+         }
+@@ -356,7 +364,7 @@
+         }
+       } catch (_e2) {}
+     }
+-    return {
++    const out = {
+       canvasSeed: plan.seeds.canvasSeed >>> 0,
+       audioSeed: plan.seeds.audioSeed >>> 0,
+       gpu: {
+@@ -364,6 +372,8 @@
+         renderer: plan.seeds.gpu.renderer,
+       },
+     };
++    this._writeLastSeeds(out);
++    return out;
+   },
+ 
+   _readDepthSeeds() {
+@@ -468,13 +478,14 @@
+     };
+   },
+ 
+-  _setArmed(armed, seeds) {
+-    this._armed = !!armed;
++  /**
++   * Persist depth install-seed diagnostics (darkstr.depth.lastSeeds only).
++   * Soft residual (0034): called from depthSeedsForBrowsingContext with the
++   * same seeds handed to content, and from _setArmed for arm/disarm baseline.
++   */
++  _writeLastSeeds(seeds) {
+     try {
+-      Services.prefs.setBoolPref(ARMED_PREF, this._armed);
+-    } catch (_e) {}
+-    try {
+-      if (this._armed && seeds) {
++      if (seeds) {
+         Services.prefs.setStringPref(
+           LAST_SEEDS_PREF,
+           JSON.stringify({
+@@ -488,4 +499,16 @@
+       }
+     } catch (_e) {}
+   },
++
++  _setArmed(armed, seeds) {
++    this._armed = !!armed;
++    try {
++      Services.prefs.setBoolPref(ARMED_PREF, this._armed);
++    } catch (_e) {}
++    if (this._armed && seeds) {
++      this._writeLastSeeds(seeds);
++    } else {
++      this._writeLastSeeds(null);
++    }
++  },
+ };

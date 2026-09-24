@@ -72,3 +72,17 @@ Depth `canvasSeed` (persona snapshot / mulberry fallback; after 0030 the
 Same seed → stable digests (WeakMap double-read). Different eTLD+1 → diverge.
 Golden lock via snapshot or `rotatePerSite=false` as with 0030. Independent of
 0031 audio farbling (different DepthHooksChild region).
+
+## Soft residual — depth lastSeeds eTLD diag (0034)
+
+`darkstr.depth.lastSeeds` is written from the same effective seed path as content
+install (`DarkstrDepthHooks.depthSeedsForBrowsingContext`):
+
+| Mode | lastSeeds source |
+|------|------------------|
+| `rotatePerSite` on | eTLD-derived via `_seedForEtld` → `_generateDepthFromSeed` (or snapshot depth fields) |
+| Golden lock (snapshot non-empty **or** `rotatePerSite=false`) | global / plan seeds |
+
+Verify: two eTLD+1 under Pollution+rotate → different `canvasSeed`/`audioSeed` in
+`lastSeeds` (aligned with digests). Diagnostic only — no farbling math change.
+
