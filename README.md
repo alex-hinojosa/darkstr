@@ -8,6 +8,8 @@ It is **not** an anti-detect browser.
 It is **not** a Cloudflare bypass.  
 It is **not** official LibreWolf.
 
+Product framing and bounded claims: [docs/POSITIONING.md](docs/POSITIONING.md).
+
 We are **not** rewriting LibreWolf in Rust in Phase 1.
 Phase 2: private LibreWolf-based fork + Rust crates behind prefs — see [docs/PHASE-2-PLAN.md](docs/PHASE-2-PLAN.md).
 Servo/Ladybird = research-only Track D.

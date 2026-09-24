@@ -4,7 +4,7 @@
 **Owner:** Builder  
 **Audience:** Meridian / Proof / Product Manager skim  
 **Brand:** darkstr — not official LibreWolf. Pollution browser, not Cloudflare bypass.  
-**Status:** **Train cutover READY.** Proof XOR **PASS** 2026-09-23 (exit checklist seed-42). Mini SoT app is 156.0.1-1.
+**Status:** **Train cutover READY.** Proof XOR **PASS** 2026-09-23 (exit checklist seed-42). Mini SoT app is 156.0.1-1; Phase 4 DMG packaging is **DONE** 2026-09-24.
 
 **Prior train:** Phase 3 eng gate CLOSED on **155.0.1-1** (main tip through `0029` / PR #54; exit checklist in [`PHASE-3-STATUS.md`](PHASE-3-STATUS.md)).
 
@@ -20,18 +20,18 @@ Re-pin the darkstr native Firefox-persona surface (`patches/0002`–`0029` + app
 | Upstream Firefox | **156.0.1** |
 | Mini gecko root (target) | `$DARKSTR_GECKO_ROOT` → `…/librewolf-source/librewolf-156.0.1-1` |
 | Mini gecko root (prior) | `$DARKSTR_GECKO_ROOT_155` → `…/librewolf-source/librewolf-155.0.1-1` |
-| Keep 155 tree | Yes until 156 Proof PASS + Mini dist cutover |
+| Keep 155 tree | Removed after 156 became SoT and the DMG package completed |
 
 ## Kickoff checklist
 
 - [x] LibreWolf source repo checked out at tag `156.0.1-1`
 - [x] `make fetch` + `make dir` → `librewolf-156.0.1-1` present (155 tree retained)
-- [x] Point `DARKSTR_GECKO_ROOT.env` at 156 for port work (`DARKSTR_GECKO_ROOT_155` keeps 155; do not delete 155)
+- [x] Point `DARKSTR_GECKO_ROOT.env` at 156 for port work; the 155 tree was removed after 156 became SoT and the DMG package completed
 - [x] Dry-run / sequential apply of `patches/0002`–`0029` on 156; log fails (matrix below)
 - [x] Port / refresh broken hunks (DocShell / Navigator / ModeXor / NativePersona / Ffi) — **in-place surgical refresh of 0009/0022/0027/0028/0029** (no blanket 0030+)
 - [ ] Mini subdirectory builds + install-dist_bin as needed (**no full `mach build` yet** — disk ~43 Gi)
 - [x] Proof: Phase 3 exit checklist on 156 seed-42 — **PASS** (`proof-xor/pr-phase4-156-20260923-111540.md`)
-- [ ] Optional: fresh `mach package` DMG when disk allows
+- [x] Fresh `mach package` DMG completed on 2026-09-24 CDT (path recorded below)
 - [x] Cutover docs: PHASE-3 remains historical; this file is SoT for 156 (this PR)
 
 ## Mini seat notes (2026-09-23 CDT)
@@ -128,8 +128,13 @@ Method: rewrite only the five FAIL patch bodies against the post-OK 156 tree (af
 
 Effective content coverage: **27 / 27** OK|SKIP.
 
-## Explicit non-claims (unchanged)
+## Product positioning
 
+See [`POSITIONING.md`](POSITIONING.md): darkstr is a coherent Gecko/LibreWolf Firefox persona browser layer, not Chrome cosplay and not a Brave/Tor clone. It is inspired by Brave’s sticky per-eTLD+1 farbling and Tor’s “don’t be uniquely random,” implemented as seed-tied cross-surface coherence across canvas, audio, WebGL, workers, languages, hardware, and timezone, with sticky per-site rotation (0030) and golden-lock for Proof. When it ships, the pitch is “Firefox that stays one believable person per site,” not “Brave but Gecko.”
+
+Non-claims remain: darkstr is not anti-detect and not a Cloudflare bypass; fonts, speech, and WebGPU are out of scope; CF/TLS/JA3 are not claimed.
+
+## Explicit non-claims (unchanged)
 
 ServiceWorker/Worklets, fonts, screen/DPR, CF/TLS/JA3, Chrome cosplay, speech / WebGPU. Homogeneous WebGL may stay Mozilla/Mozilla (RFP). WebGL extension-list / shader-precision: soft residual **0032** **MERGED** / Proof PASS (see below).
 
@@ -163,8 +168,14 @@ FAIL set is green on 156 dry-run+apply. Next: Mini subdirectory `mach build` + `
 - ~~Marionette/CSP could not read window `navigator.languages` on SubsequentNav (empty probe)~~ — **eng fix 0033 / PR (cloneInto)**; see section below. Worker langs were already OK (`en-US,en,es`).
 
 ### Cutover
-- Mini `DARKSTR_GECKO_ROOT` → **156.0.1-1**; `DARKSTR_GECKO_ROOT_155` keeps 155 for reference
-- Optional next: fresh `mach package` DMG when disk allows (>25 Gi free preferred; Mini ~16 Gi free after FFI rebuild — do not reclaim Gecko 156 objdir)
+- Mini `DARKSTR_GECKO_ROOT` → **156.0.1-1**; the prior 155 tree was removed after 156 became SoT
+- Fresh `mach package` DMG is complete; keep the 156 objdir for the packaged train
+
+## Packaging gate — DONE (2026-09-24 CDT)
+
+- DMG: `~/src/darkstr-gecko/librewolf-source/librewolf-156.0.1-1/obj-aarch64-apple-darwin25.6.0/dist/librewolf-156.0.1.en-US.mac.dmg`
+- 155 tree: removed on Mini after 156 became the SoT
+- Mini free space after package: approximately **32 GiB**
 
 ## Soft residual — eTLD seed rotate (0030) — **MERGED** / Proof XOR **PASS**
 
