@@ -216,12 +216,13 @@ nm -gU $DYLIB | grep darkstr_ffi_
 
 Brand: darkstr — not official LibreWolf. No Proof ping from this residual close.
 
-## Soft residual — window `navigator.languages` empty on SubsequentNav (0033) — **ENG FIX** (open PR)
+## Soft residual — window `navigator.languages` empty on SubsequentNav (0033) — **ENG FIX** ([PR #64](https://github.com/alex-hinojosa/darkstr/pull/64))
 
 | Item | Status |
 |------|--------|
 | Symptom | Proof XOR PASS soft note: Marionette window `langs_page=[]` on Pollution SubsequentNav; worker langs `en-US,en,es`; first-nav window langs included `es`. |
 | Root cause | **Product** (not harness-only): Child `darkstrLangsGetter` via `Cu.exportFunction` returned a **chrome Array**. Page principal then throws `Permission denied to access property "length"` when reading `navigator.languages` (reproduced 2026-09-24 CDT; inline script `data-darkstr-ran=1` + `pageErr`). Prefs already held full CSV (`darkstr.persona.languages` / `intl.accept_languages` = `en-US,en,es`). Worker OK because WorkerHooks injects a page-source JSON literal. |
+| PR | [#64](https://github.com/alex-hinojosa/darkstr/pull/64) **OPEN** (tip `5dc9aa2`) — do not merge from this residual |
 | Fix | Pin **0033**: `Cu.cloneInto(langsCopy.slice(), pageWindow)` in `DarkstrNativePersonaChild.sys.mjs` (DepthHooks lesson). |
 | Patch | [`patches/0033-darkstr-nav-languages-cloneinto.patch`](../patches/0033-darkstr-nav-languages-cloneinto.patch) |
 | Mini helper | [`PHASE-4-LANGS-0033-MINI-APPLY.sh`](PHASE-4-LANGS-0033-MINI-APPLY.sh) |
