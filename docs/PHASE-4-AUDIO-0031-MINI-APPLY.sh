@@ -10,18 +10,14 @@ COMP="${DARKSTR_GECKO_ROOT}/browser/components"
 echo "DARKSTR_GECKO_ROOT=${DARKSTR_GECKO_ROOT}"
 df -h "${DARKSTR_GECKO_ROOT}" | tail -1 || true
 test -f "${PATCH}"
-if grep -Fq 'Soft residual (0031)' "${COMP}/DarkstrDepthHooksChild.sys.mjs" \
-  && grep -Fq 'farbleFloat' "${COMP}/DarkstrDepthHooksChild.sys.mjs" \
-  && grep -Fq 'getByteTimeDomainData' "${COMP}/DarkstrDepthHooksChild.sys.mjs" \
-  && grep -Fq 'copyFromChannel' "${COMP}/DarkstrDepthHooksChild.sys.mjs"; then
-  echo "0031 markers already present — skip patch apply"
-else
-  patch -d "${DARKSTR_GECKO_ROOT}" -p1 --forward --batch < "${PATCH}"
-fi
+# Always --forward: skips landed hunks, applies Proof-fix depthSeeds
+# eTLD seed hunk when Soft residual (0031) body was already present.
+patch -d "${DARKSTR_GECKO_ROOT}" -p1 --forward --batch < "${PATCH}" || true
 grep -Fq 'Soft residual (0031)' "${COMP}/DarkstrDepthHooksChild.sys.mjs"
 grep -Fq 'farbleFloat' "${COMP}/DarkstrDepthHooksChild.sys.mjs"
 grep -Fq 'AnalyserNode' "${COMP}/DarkstrDepthHooksChild.sys.mjs"
 grep -Fq '0.999 +' "${COMP}/DarkstrDepthHooksChild.sys.mjs"
+grep -Fq '_seedForEtld' "${COMP}/DarkstrDepthHooks.sys.mjs"
 
 cd "${DARKSTR_GECKO_ROOT}"
 export MACH_SYSTEM_ASSERTED_COMPATIBLE_WITH_MACH_SITE=1
