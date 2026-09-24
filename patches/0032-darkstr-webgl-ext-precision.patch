@@ -7,7 +7,11 @@
 #   getShaderPrecisionFormat (internally coherent tiers). Seed-tied via depth
 #   canvasSeed (persona / eTLD+1 effective via 0030). Brave-like deterministic
 #   optional-extension keep/drop + precision profile pick; double-read stable
-#   via WeakMap. Homogeneous / hooks off: idle.
+#   via WeakMap. getSupportedExtensions returns Cu.cloneInto(list, pageWindow)
+#   (chrome Array via exportFunction is page-opaque). Also wires
+#   DarkstrDepthHooks.depthSeedsForBrowsingContext through _seedForEtld when
+#   rotatePerSite is on (shared with 0031; --forward idempotent). Homogeneous /
+#   hooks off: idle.
 #
 # Apply (after 0023; independent of 0031 — may land before or after #61):
 #   patch -d "$DARKSTR_GECKO_ROOT" -p1 < patches/0032-darkstr-webgl-ext-precision.patch
@@ -31,7 +35,7 @@
 
 --- a/browser/components/DarkstrDepthHooksChild.sys.mjs
 +++ b/browser/components/DarkstrDepthHooksChild.sys.mjs
-@@ -19,9 +19,10 @@
+@@ -19,9 +19,11 @@
   *   SPOOFED — UNMASKED vendor/renderer; persona-family MAX_* / viewport / line /
   *             point / anisotropy buckets; OffscreenCanvas convertToBlob +
   *             OffscreenCanvasRenderingContext2D.getImageData noise (when present).
@@ -39,7 +43,8 @@
 - *             getShaderPrecisionFormat tiers, fail-closed null for unknown
 - *             getParameter (unknown params passthrough to native).
 + *   Soft residual (0032): getSupportedExtensions / getExtension (Firefox-plausible,
-+ *             seed-tied via canvasSeed) + getShaderPrecisionFormat coherent tiers.
++ *             seed-tied via canvasSeed; list via Cu.cloneInto into pageWindow) +
++ *             getShaderPrecisionFormat coherent tiers.
 + *   NOT SPOOFED here — fail-closed null for unknown getParameter
 + *             (unknown params passthrough to native).
   */
@@ -168,7 +173,7 @@
      function patchWebGL(proto, label) {
        if (!proto) {
          return;
-@@ -407,6 +515,133 @@
+@@ -407,6 +515,142 @@
            replacements
          );
        }
@@ -192,16 +197,25 @@
 +          "getSupportedExtensions",
 +          function () {
 +            let cached = extListByContext.get(this);
-+            if (cached) {
-+              return cached.slice();
++            if (!cached) {
++              const nativeList = Reflect.apply(origGetSupported, this, []) || [];
++              cached = advertisedExtensions(
++                nativeList,
++                canvasSeed >>> 0
++              );
++              extListByContext.set(this, cached);
 +            }
-+            const nativeList = Reflect.apply(origGetSupported, this, []) || [];
-+            const advertised = advertisedExtensions(
-+              nativeList,
-+              canvasSeed >>> 0
-+            );
-+            extListByContext.set(this, advertised);
-+            return advertised.slice();
++            // Page-compartment Array (0032): exportFunction + chrome Array denies
++            // .length / index to page principal. cloneInto matches langs 0033 lesson.
++            try {
++              return Cu.cloneInto(cached, pageWindow);
++            } catch (_e) {
++              try {
++                return pageWindow.Array.from(Cu.cloneInto(cached, pageWindow));
++              } catch (_e2) {
++                return cached.slice();
++              }
++            }
 +          },
 +          replacements
 +        );
@@ -302,3 +316,72 @@
        if (!origGetParameter && !origReadPixels) {
          throw new Error(`${label} native methods unavailable`);
        }
+--- a/browser/components/DarkstrDepthHooks.sys.mjs
++++ b/browser/components/DarkstrDepthHooks.sys.mjs
+@@ -20,7 +20,10 @@
+  * Homogeneous / Native-Compatible / hooks false → no content hooks; seeds null.
+  *
+  * Seeds: prefer darkstr.persona.snapshot JSON (canvasSeed/audioSeed/gpu);
+- * fallback derive from darkstr.persona.seed (mulberry32). Does not write privacy.*.
++ * fallback derive from darkstr.persona.seed (mulberry32). Under 0030 rotatePerSite,
++ * depthSeedsForBrowsingContext re-derives from eTLD-effective seed (_seedForEtld);
++ * golden lock (snapshot / rotatePerSite=false) keeps global plan.seeds.
++ * Does not write privacy.*.
+  *
+  * Workers = Phase 3 pin 3 — NOT in this module.
+  */
+@@ -284,6 +287,10 @@
+       return null;
+     }
+     // SubsequentNav arm: reuse NativePersona first-doc gate when available.
++    // When 0030 rotatePerSite is active, derive canvasSeed/audioSeed/gpu from the
++    // eTLD-effective persona seed (_seedForEtld) — same SoT as sticky rotation.
++    // Golden lock (snapshot pref non-empty OR rotatePerSite=false) keeps global
++    // plan.seeds from _readDepthSeeds (Proof seed-42 coherent).
+     try {
+       const { DarkstrNativePersona } = ChromeUtils.importESModule(
+         "moz-src:///browser/components/DarkstrNativePersona.sys.mjs"
+@@ -292,6 +299,43 @@
+         const snap = DarkstrNativePersona.snapshotForBrowsingContext(bc);
+         if (!snap) {
+           return null;
++        }
++        // Prefer depth fields already on the resolved snapshot (pasted/FFI).
++        const snapCanvas = readU32Field(snap, "canvasSeed", "canvas_seed");
++        const snapAudio = readU32Field(snap, "audioSeed", "audio_seed");
++        const snapGpu = normalizeGpu(snap.gpu);
++        if (snapCanvas !== null && snapAudio !== null && snapGpu) {
++          return {
++            canvasSeed: snapCanvas >>> 0,
++            audioSeed: snapAudio >>> 0,
++            gpu: { vendor: snapGpu.vendor, renderer: snapGpu.renderer },
++          };
++        }
++        const npPlan = DarkstrNativePersona.getPlan
++          ? DarkstrNativePersona.getPlan()
++          : null;
++        if (
++          DarkstrNativePersona._rotationActive &&
++          DarkstrNativePersona._rotationActive(npPlan)
++        ) {
++          let etld = null;
++          if (DarkstrNativePersona._etldPlus1FromBrowsingContext) {
++            etld = DarkstrNativePersona._etldPlus1FromBrowsingContext(bc);
++          }
++          if (etld && DarkstrNativePersona._seedForEtld) {
++            const seed = DarkstrNativePersona._seedForEtld(etld) >>> 0;
++            const derived = this._generateDepthFromSeed(seed);
++            if (derived) {
++              return {
++                canvasSeed: derived.canvasSeed >>> 0,
++                audioSeed: derived.audioSeed >>> 0,
++                gpu: {
++                  vendor: derived.gpu.vendor,
++                  renderer: derived.gpu.renderer,
++                },
++              };
++            }
++          }
+         }
+       }
+     } catch (_e) {
