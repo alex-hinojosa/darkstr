@@ -131,7 +131,7 @@ Effective content coverage: **27 / 27** OK|SKIP.
 ## Explicit non-claims (unchanged)
 
 
-ServiceWorker/Worklets, fonts, screen/DPR, CF/TLS/JA3, Chrome cosplay, full WebGL extension-list / shader-precision (WebExt richer). Homogeneous WebGL may stay Mozilla/Mozilla (RFP).
+ServiceWorker/Worklets, fonts, screen/DPR, CF/TLS/JA3, Chrome cosplay, speech / WebGPU. Homogeneous WebGL may stay Mozilla/Mozilla (RFP). WebGL extension-list / shader-precision: see soft residual **0032** (in flight).
 
 ## Suggested next eng pin
 
@@ -277,3 +277,31 @@ now derives `audioSeed`/`canvasSeed` from eTLD-effective `_seedForEtld` when
 
 WebGL extension lists / shader precision; fonts / speech / WebGPU; product README.
 
+## Soft residual — WebGL extension list + shader precision (0032) — **IN FLIGHT**
+
+| Item | Status |
+|------|--------|
+| PR | *(open with this commit — do not merge until Proof XOR)* |
+| Patch | [`patches/0032-darkstr-webgl-ext-precision.patch`](../patches/0032-darkstr-webgl-ext-precision.patch) |
+| Mini helper | [`PHASE-4-WEBGL-0032-MINI-APPLY.sh`](PHASE-4-WEBGL-0032-MINI-APPLY.sh) |
+| Tree | LibreWolf **156.0.1-1** (chrome JS; browser/components only) |
+| Base | Branched from `main` (0030 merged). **Independent of 0031 / PR #61** — WebGL hunks apply with or without 0031; do not merge #61 from this work. |
+
+Deepens existing page-compartment WebGL (0017/0023 UNMASKED + cap buckets; 0029
+headed unlock) with seed-tied **`getSupportedExtensions` / `getExtension`**
+(Firefox-plausible baseline ∩ native + coherent stubs; Brave-like deterministic
+optional keep/drop via `canvasSeed`) and **`getShaderPrecisionFormat`** (two
+internally coherent Firefox-desktop profiles, seed-picked). Double-read stable
+via WeakMap. No Chrome-only extension names. Homogeneous / hooks off: idle.
+
+### Proof XOR gates (required before merge)
+
+1. Pollution+hooks: same seed → stable extension list + precision digests; double-read stable
+2. Different eTLD+1 (rotate on) → diverge
+3. Golden lock seed-42 → coherent Firefox-like WebGL (Apple M2 / prior checklist OK)
+4. Homogeneous / hooks-off → idle
+5. No Chrome cosplay in extension names
+
+### Out of scope
+
+fonts / speech / WebGPU; merging #61; product README.
