@@ -248,7 +248,7 @@ Brand: darkstr — not official LibreWolf. No Proof ping from this residual clos
 
 | Item | Status |
 |------|--------|
-| PR | *(open — do not merge until Proof XOR)* |
+| PR | [#61](https://github.com/alex-hinojosa/darkstr/pull/61) — **do not merge until Proof XOR** |
 | Patch | [`patches/0031-darkstr-audio-silence-farbling.patch`](../patches/0031-darkstr-audio-silence-farbling.patch) |
 | Mini helper | [`PHASE-4-AUDIO-0031-MINI-APPLY.sh`](PHASE-4-AUDIO-0031-MINI-APPLY.sh) |
 | Tree | LibreWolf **156.0.1-1** (chrome JS; browser/components only) |
