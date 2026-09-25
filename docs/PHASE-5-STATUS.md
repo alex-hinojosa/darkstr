@@ -75,6 +75,16 @@ fudge; DOM residual documented).
 - `document.fonts` iteration / `ready` not wrapped (only `check`).
 - Not anti-detect / not Cloudflare bypass.
 
+## Apply status (Mini) — 0036 — 2026-09-24 ~20:56 CDT
+
+- Tree: LibreWolf **156.0.1-1** (`$DARKSTR_GECKO_ROOT`)
+- Markers already present (Builder applied source edits); patch skip OK
+- `./mach build --allow-subdirectory-build browser/components` — **OK** (~7s)
+- `make install-dist_bin` — Kept existing; moz-src symlinks refreshed
+- Symlinks: `dist/LibreWolf.app/.../moz-src/browser/components/DarkstrDepthHooks*.sys.mjs` → source (fontSeed / Soft residual 0036 present)
+- PR [#67](https://github.com/alex-hinojosa/darkstr/pull/67) **OPEN**; tip awaiting Proof XOR (not claimed)
+- Apply log: `~/src/darkstr-gecko/darkstr-apply-0036-20260924-205605.log`
+
 ## Completed — 0035 Cookie firewall MVP
 
 | Item | Status |
