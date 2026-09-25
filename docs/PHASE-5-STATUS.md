@@ -15,7 +15,7 @@ Phase 5 pin **0036 fonts coherence** is **IN PROGRESS** (PR open; awaiting Proof
 | Item | Status |
 |------|--------|
 | Pin | **0036** |
-| PR | *(filled on open)* |
+| PR | [#67](https://github.com/alex-hinojosa/darkstr/pull/67) **OPEN** |
 | Branch | `builder/phase5-fonts-0036` |
 | Patch | [`patches/0036-darkstr-fonts-coherence.patch`](../patches/0036-darkstr-fonts-coherence.patch) |
 | Mini helper | [`scripts/apply-0036-fonts-coherence-mini.sh`](../scripts/apply-0036-fonts-coherence-mini.sh) / [`PHASE-5-FONTS-0036-MINI-APPLY.sh`](PHASE-5-FONTS-0036-MINI-APPLY.sh) |
