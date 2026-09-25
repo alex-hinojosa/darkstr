@@ -8,18 +8,20 @@
 
 Phase 4 depth (through **0034** lastSeeds eTLD diag) is **CLOSED** / Proof PASS.  
 Phase 5 pin **0035 cookie firewall MVP** is **MERGED** / Proof XOR **PASS**.  
-Phase 5 pin **0036 fonts coherence** is **IN PROGRESS** (PR open; awaiting Proof XOR).
+Phase 5 pin **0036 fonts coherence** is **MERGED** / Proof XOR **PASS** (PR #67; see evidence below).
 
-## In progress — 0036 Fonts coherence / fingerprint farbling
+## Completed — 0036 Fonts coherence / fingerprint farbling
 
 | Item | Status |
 |------|--------|
 | Pin | **0036** |
-| PR | [#67](https://github.com/alex-hinojosa/darkstr/pull/67) **OPEN** |
+| PR | [#67](https://github.com/alex-hinojosa/darkstr/pull/67) **MERGED** as `a49cf98b3f120e5c0d14336f2411c9638d4c0cff` |
+| Tip at Proof | `d01038b7d64c3dd95e581263dca2fa47381b8d7c` |
 | Branch | `builder/phase5-fonts-0036` |
 | Patch | [`patches/0036-darkstr-fonts-coherence.patch`](../patches/0036-darkstr-fonts-coherence.patch) |
 | Mini helper | [`scripts/apply-0036-fonts-coherence-mini.sh`](../scripts/apply-0036-fonts-coherence-mini.sh) / [`PHASE-5-FONTS-0036-MINI-APPLY.sh`](PHASE-5-FONTS-0036-MINI-APPLY.sh) |
-| Proof | **not claimed** — awaiting ACK |
+| Proof | **PASS** |
+| Evidence | `~/AgentDocs/proof/darkstr-pr67-0036-xor-20260924-205857/` |
 
 ### Design summary
 
@@ -54,13 +56,22 @@ Diag: `darkstr.depth.lastSeeds` JSON gains `fontSeed` (0034 path).
 No new default-off arm pref (justified: same risk class as 0031 audio width-style
 fudge; DOM residual documented).
 
-### Proof gates (for Proof ACK — do not ping from Builder)
+### Proof gates — PASS (do not ping from Builder)
 
 1. Hooks-off / Homogeneous → idle (host font metrics)
 2. Pollution+hooks: same seed → stable font/measureText digests (double-read)
 3. Different eTLD+1 with rotatePerSite → digests diverge
 4. Same eTLD two tabs → same digests/seed
-5. Golden lock seed-42 coherent; no Chrome-only font names in any surfaced list
+5. Golden lock seed-42 coherent; no Chrome-only font names in any surfaced list — **PASS**
+
+### Proof result — PASS
+
+All five font-coherence XOR gates passed on Proof tip `d01038b7d64c3dd95e581263dca2fa47381b8d7c`.
+
+**Soft residuals (not FAIL):**
+
+- DOM width fudge may shift pixel-perfect layouts by **≤0.1%** when hooks are armed.
+- `document.fonts.ready` / `FontFaceSet` iteration and full enumeration are not wrapped (only `check`).
 
 ### Out of scope (this pin)
 
@@ -82,8 +93,17 @@ fudge; DOM residual documented).
 - `./mach build --allow-subdirectory-build browser/components` — **OK** (~7s)
 - `make install-dist_bin` — Kept existing; moz-src symlinks refreshed
 - Symlinks: `dist/LibreWolf.app/.../moz-src/browser/components/DarkstrDepthHooks*.sys.mjs` → source (fontSeed / Soft residual 0036 present)
-- PR [#67](https://github.com/alex-hinojosa/darkstr/pull/67) **OPEN**; tip awaiting Proof XOR (not claimed)
+- PR [#67](https://github.com/alex-hinojosa/darkstr/pull/67) **MERGED** as `a49cf98b3f120e5c0d14336f2411c9638d4c0cff`; Proof XOR **PASS** on tip `d01038b7d64c3dd95e581263dca2fa47381b8d7c`
 - Apply log: `~/src/darkstr-gecko/darkstr-apply-0036-20260924-205605.log`
+
+## Next eng backlog
+
+0036 is closed after Proof PASS. Next pins, in order:
+
+1. **Speech**
+2. **WebGPU**
+
+No speech or WebGPU engineering was started in this merge/docs pass.
 
 ## Completed — 0035 Cookie firewall MVP
 
