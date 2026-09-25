@@ -86,3 +86,16 @@ install (`DarkstrDepthHooks.depthSeedsForBrowsingContext`):
 Verify: two eTLD+1 under Pollution+rotate → different `canvasSeed`/`audioSeed` in
 `lastSeeds` (aligned with digests). Diagnostic only — no farbling math change.
 
+## Phase 5 — fonts coherence (0036) — **IN PROGRESS**
+
+Depth `fontSeed` is derived in `_generateDepthFromSeed` **after** `canvasSeed` and
+`audioSeed` so prior golden digests stay bit-identical. Snapshot may supply
+`fontSeed` / `font_seed`; otherwise chrome uses a stable XOR fallback that does
+**not** advance the mulberry stream. Under 0030 `rotatePerSite`,
+`depthSeedsForBrowsingContext` re-derives `fontSeed` with the eTLD-effective seed;
+golden lock (snapshot / `rotatePerSite=false`) keeps global plan seeds.
+
+`darkstr.depth.lastSeeds` includes `fontSeed` alongside canvas/audio/gpu (0034 path).
+Farbling math lives in `DarkstrDepthHooksChild` (measureText / fonts.check / DOM
+widths) — Proof XOR gates in `PHASE-5-STATUS.md`.
+

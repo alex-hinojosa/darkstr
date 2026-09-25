@@ -1,0 +1,609 @@
+# darkstr 0036 — fonts coherence / fingerprint farbling
+#
+# Product (locked): Pollution+depth hooks keep seed-tied fonts farbling coherent
+#   with canvas/audio/WebGL depth (0017/0031/0032) and sticky eTLD+1 seed (0030).
+#   Soft residual: Canvas/Offscreen measureText width, document.fonts.check
+#   (Firefox-plausible baseline; seed-tied hide of non-baseline), DOM
+#   offsetWidth/clientWidth/getBoundingClientRect width fudge. Seed via depth
+#   fontSeed (derived AFTER canvasSeed/audioSeed so golden digests stay intact;
+#   snapshot may supply fontSeed/font_seed). Brave-inspired sticky farbling,
+#   coherent Firefox/LibreWolf/Gecko persona only — NOT Chrome font-list cosplay.
+#   Default-on with depth hooks (same gate family). Homogeneous/hooks-off: idle.
+#   Speech / WebGPU / Native UI = out of scope for this pin.
+#
+# Apply (after 0034; independent of 0035 cookie):
+#   patch -d "$DARKSTR_GECKO_ROOT" -p1 < patches/0036-darkstr-fonts-coherence.patch
+#   or scripts/apply-0036-fonts-coherence-mini.sh
+#   / docs/PHASE-5-FONTS-0036-MINI-APPLY.sh
+#
+# Rebuild: ./mach build --allow-subdirectory-build browser/components then
+#   make install-dist_bin + moz-src symlinks (chrome JS only; no XUL relink).
+#
+# Proof XOR (do not merge until PASS; Builder does not ping Proof):
+#   - Hooks-off / Homogeneous → idle (host font metrics)
+#   - Pollution+hooks: same seed → stable font/measureText digests (double-read)
+#   - Different eTLD+1 with rotatePerSite → digests diverge
+#   - Same eTLD two tabs → same digests/seed
+#   - Golden lock seed-42 coherent; no Chrome-only font names in any surfaced list
+#
+# Marker: Soft residual (0036)
+
+--- a/browser/components/DarkstrDepthHooks.sys.mjs
++++ b/browser/components/DarkstrDepthHooks.sys.mjs
+@@ -23,14 +23,17 @@
+  * fallback derive from darkstr.persona.seed (mulberry32). Under 0030 rotatePerSite,
+  * depthSeedsForBrowsingContext re-derives from eTLD-effective seed (_seedForEtld);
+  * golden lock (snapshot / rotatePerSite=false) keeps global plan.seeds.
+  * Soft residual (0034): darkstr.depth.lastSeeds mirrors the seeds actually handed
+  * to content install (eTLD-derived when rotatePerSite; global/plan under golden lock)
+  * so diag matches digests. Does not write privacy.*.
++ * Soft residual (0036): depth fontSeed (derived after canvasSeed/audioSeed so golden
++ * digests stay intact) drives fonts coherence farbling in DepthHooksChild —
++ * measureText / document.fonts.check / DOM width probes. Folded into lastSeeds.
+  *
+- * Workers = Phase 3 pin 3 — NOT in this module.
++ * Workers = Phase 3 pin 3 — NOT in this module. Speech / WebGPU = later pins.
+  */
+ 
+ const MODE_PREF = "darkstr.mode";
+ const NATIVE_PREF = "darkstr.nativeCompatible";
+ const HOOKS_PREF = "darkstr.nativePersonaHooks";
+ const SNAPSHOT_PREF = "darkstr.persona.snapshot";
+@@ -115,12 +118,26 @@
+       }
+     }
+   }
+   return null;
+ }
+ 
++
++function deriveFontSeed(canvasSeed, audioSeed) {
++  // Stable fallback when snapshot omits fontSeed — does not consume mulberry stream.
++  return (canvasSeed ^ Math.imul(audioSeed >>> 0, 0x9e3779b9)) >>> 0;
++}
++
++function readFontSeed(obj, canvasSeed, audioSeed) {
++  const direct = readU32Field(obj, "fontSeed", "font_seed");
++  if (direct !== null) {
++    return direct >>> 0;
++  }
++  return deriveFontSeed(canvasSeed >>> 0, audioSeed >>> 0);
++}
++
+ export var DarkstrDepthHooks = {
+   _inited: false,
+   _actorRegistered: false,
+   _observer: null,
+   _seeds: null,
+   _armed: false,
+@@ -203,13 +220,13 @@
+   /**
+    * Resolve depth gate + seeds (read_depth_seeds equivalent).
+    * @returns {{
+    *   pollutionActive: boolean,
+    *   nativeHooks: boolean,
+    *   armed: boolean,
+-   *   seeds: {canvasSeed:number, audioSeed:number, gpu:{vendor:string,renderer:string}}|null
++   *   seeds: {canvasSeed:number, audioSeed:number, fontSeed:number, gpu:{vendor:string,renderer:string}}|null
+    * }}
+    */
+   refreshPlan() {
+     let mode = "homogeneous";
+     try {
+       mode = Services.prefs.getStringPref(MODE_PREF, "homogeneous");
+@@ -309,12 +326,13 @@
+         const snapAudio = readU32Field(snap, "audioSeed", "audio_seed");
+         const snapGpu = normalizeGpu(snap.gpu);
+         if (snapCanvas !== null && snapAudio !== null && snapGpu) {
+           const out = {
+             canvasSeed: snapCanvas >>> 0,
+             audioSeed: snapAudio >>> 0,
++            fontSeed: readFontSeed(snap, snapCanvas, snapAudio),
+             gpu: { vendor: snapGpu.vendor, renderer: snapGpu.renderer },
+           };
+           this._writeLastSeeds(out);
+           return out;
+         }
+         const npPlan = DarkstrNativePersona.getPlan
+@@ -332,12 +350,13 @@
+             const seed = DarkstrNativePersona._seedForEtld(etld) >>> 0;
+             const derived = this._generateDepthFromSeed(seed);
+             if (derived) {
+               const out = {
+                 canvasSeed: derived.canvasSeed >>> 0,
+                 audioSeed: derived.audioSeed >>> 0,
++                fontSeed: derived.fontSeed >>> 0,
+                 gpu: {
+                   vendor: derived.gpu.vendor,
+                   renderer: derived.gpu.renderer,
+                 },
+               };
+               this._writeLastSeeds(out);
+@@ -364,12 +383,14 @@
+         }
+       } catch (_e2) {}
+     }
+     const out = {
+       canvasSeed: plan.seeds.canvasSeed >>> 0,
+       audioSeed: plan.seeds.audioSeed >>> 0,
++      fontSeed: (plan.seeds.fontSeed >>> 0) ||
++        deriveFontSeed(plan.seeds.canvasSeed, plan.seeds.audioSeed),
+       gpu: {
+         vendor: plan.seeds.gpu.vendor,
+         renderer: plan.seeds.gpu.renderer,
+       },
+     };
+     this._writeLastSeeds(out);
+@@ -384,13 +405,18 @@
+         const parsed = JSON.parse(raw);
+         if (parsed && typeof parsed === "object") {
+           const canvasSeed = readU32Field(parsed, "canvasSeed", "canvas_seed");
+           const audioSeed = readU32Field(parsed, "audioSeed", "audio_seed");
+           const gpu = normalizeGpu(parsed.gpu);
+           if (canvasSeed !== null && audioSeed !== null && gpu) {
+-            return { canvasSeed, audioSeed, gpu };
++            return {
++              canvasSeed,
++              audioSeed,
++              fontSeed: readFontSeed(parsed, canvasSeed, audioSeed),
++              gpu,
++            };
+           }
+           // Partial snapshot: fill missing fields from seed fallback below,
+           // but keep present fields when we have a persona seed.
+         }
+       }
+     } catch (_e) {}
+@@ -402,15 +428,20 @@
+         const raw = Services.prefs.getStringPref(SNAPSHOT_PREF, "");
+         if (raw) {
+           const parsed = JSON.parse(raw);
+           const canvasSeed = readU32Field(parsed, "canvasSeed", "canvas_seed");
+           const audioSeed = readU32Field(parsed, "audioSeed", "audio_seed");
+           const gpu = normalizeGpu(parsed.gpu);
+-          // Need all three for a coherent depth payload.
++          // Need canvas+audio+gpu for a coherent depth payload; fontSeed fills.
+           if (canvasSeed !== null && audioSeed !== null && gpu) {
+-            return { canvasSeed, audioSeed, gpu };
++            return {
++              canvasSeed,
++              audioSeed,
++              fontSeed: readFontSeed(parsed, canvasSeed, audioSeed),
++              gpu,
++            };
+           }
+         }
+       } catch (_e) {}
+       return null;
+     }
+     return this._generateDepthFromSeed(seed >>> 0);
+@@ -468,15 +499,18 @@
+     // with profiles.js (gpu after screen/colorDepth):
+     const gpu2 = pickFrom(gpus, rng);
+     void pickFrom([0, 1], rng); // languages
+     void pickFrom([0, 1], rng); // timezone
+     const canvasSeed = (rng() * 0xffffffff) >>> 0;
+     const audioSeed = (rng() * 0xffffffff) >>> 0;
++    // Soft residual (0036): fontSeed AFTER canvas/audio so prior digests unchanged.
++    const fontSeed = (rng() * 0xffffffff) >>> 0;
+     return {
+       canvasSeed,
+       audioSeed,
++      fontSeed,
+       gpu: gpu2 || gpu,
+     };
+   },
+ 
+   /**
+    * Persist depth install-seed diagnostics (darkstr.depth.lastSeeds only).
+@@ -488,12 +522,16 @@
+       if (seeds) {
+         Services.prefs.setStringPref(
+           LAST_SEEDS_PREF,
+           JSON.stringify({
+             canvasSeed: seeds.canvasSeed >>> 0,
+             audioSeed: seeds.audioSeed >>> 0,
++            fontSeed:
++              seeds.fontSeed != null
++                ? seeds.fontSeed >>> 0
++                : deriveFontSeed(seeds.canvasSeed, seeds.audioSeed),
+             gpu: seeds.gpu,
+           })
+         );
+       } else {
+         Services.prefs.setStringPref(LAST_SEEDS_PREF, "");
+       }
+--- a/browser/components/DarkstrDepthHooksChild.sys.mjs
++++ b/browser/components/DarkstrDepthHooksChild.sys.mjs
+@@ -5,12 +5,17 @@
+ /**
+  * darkstr Phase 3 — JSWindowActor child (pin 2 + optional 0023 depth extension).
+  * Canvas 2D noise / WebGL vendor·renderer + persona GPU cap buckets / OffscreenCanvas
+  * window parity / AudioBuffer + AnalyserNode farbling from depth seeds.
+  * Soft residual (0031): Brave-style silence-safe multiplicative audio farbling
+  *   (fudge∈[0.999,1.0); zeros stay zero) + AnalyserNode / copyFromChannel.
++ * Soft residual (0036): fonts coherence — Canvas/Offscreen measureText width,
++ *   document.fonts.check (Firefox-plausible baseline; seed-tied hide of extras),
++ *   DOM offsetWidth/clientWidth/getBoundingClientRect width fudge. Seed via
++ *   depth fontSeed (eTLD-effective). Default-on with depth hooks. No Chrome
++ *   font-list cosplay. Speech/WebGPU out of scope.
+  * Brand: darkstr — not official LibreWolf.
+  *
+  * Fission note: this actor runs with chrome privileges while content prototypes
+  * live behind Xrays. Always waive the content window and export replacement
+  * callables into that page's compartment; assigning chrome functions to Xray
+  * prototypes does not stick.
+@@ -75,16 +80,26 @@
+     );
+   }
+ }
+ 
+ function methodIsInstalled(replacement) {
+   try {
+-    return (
+-      Object.getOwnPropertyDescriptor(replacement.proto, replacement.name)?.value ===
+-      replacement.wrapper
++    const desc = Object.getOwnPropertyDescriptor(
++      replacement.proto,
++      replacement.name
+     );
++    if (!desc) {
++      return false;
++    }
++    if (desc.value !== undefined) {
++      return desc.value === replacement.wrapper;
++    }
++    if (desc.get !== undefined) {
++      return desc.get === replacement.wrapper;
++    }
++    return false;
+   } catch (_e) {
+     return false;
+   }
+ }
+ 
+ function restoreReplacement(replacement) {
+@@ -245,12 +260,17 @@
+     uninstallDepthHooks(rawWindow);
+   }
+ 
+   const pageWindow = contentWindowFor(rawWindow);
+   const canvasSeed = seeds.canvasSeed >>> 0;
+   const audioSeed = seeds.audioSeed >>> 0;
++  // Soft residual (0036): fontSeed from depth plan; stable fallback if older plan.
++  const fontSeed =
++    typeof seeds.fontSeed === "number"
++      ? seeds.fontSeed >>> 0
++      : (canvasSeed ^ Math.imul(audioSeed, 0x9e3779b9)) >>> 0;
+   const gpu = seeds.gpu || { vendor: "Apple", renderer: "Apple M1" };
+   const replacements = [];
+ 
+   try {
+     const doc = pageWindow.document;
+     const HTMLCanvasElement = pageWindow.HTMLCanvasElement;
+@@ -729,12 +749,325 @@
+           },
+           replacements
+         );
+       }
+     }
+ 
++    // Soft residual (0036): fonts coherence / fingerprint farbling.
++    // Brave-inspired, Firefox/LibreWolf/Gecko persona only — no Chrome font lists.
++    // Surfaces: measureText width (Canvas2D + OffscreenCanvas2D), document.fonts.check,
++    // DOM offsetWidth/clientWidth/getBoundingClientRect width. Silence-safe fudge
++    // [0.999,1.0); width 0 stays 0. Double-read stable (constant per fontSeed).
++    // Default-on with depth hooks (same gate as audio/WebGL).
++    if (pageWindow.CanvasRenderingContext2D?.prototype?.measureText ||
++        pageWindow.document?.fonts?.check ||
++        pageWindow.HTMLElement?.prototype) {
++      const installFontsInPage = new pageWindow.Function(
++        "seed",
++        `"use strict";
++var fontFudge = 0.999 + (((seed >>> 0) / 4294967295) / 1000);
++function farbleWidth(w) {
++  if (typeof w !== "number" || !isFinite(w) || w === 0) { return w; }
++  return w * fontFudge;
++}
++function farbleIntWidth(w) {
++  if (typeof w !== "number" || !isFinite(w) || w === 0) { return w; }
++  var out = Math.round(w * fontFudge);
++  return out < 0 ? 0 : out;
++}
++// Firefox-plausible generics + common desktop families (NOT Chrome-only lists).
++var FIREFOX_BASELINE = {
++  "serif":1,"sans-serif":1,"monospace":1,"cursive":1,"fantasy":1,"system-ui":1,
++  "ui-sans-serif":1,"ui-serif":1,"ui-monospace":1,"ui-rounded":1,"emoji":1,
++  "math":1,"fangsong":1,
++  "arial":1,"helvetica":1,"helvetica neue":1,"times":1,"times new roman":1,
++  "courier":1,"courier new":1,"georgia":1,"verdana":1,"tahoma":1,
++  "trebuchet ms":1,"palatino":1,"palatino linotype":1,"garamond":1,
++  "lucida grande":1,"lucida console":1,"lucida sans":1,"lucida sans unicode":1,
++  "menlo":1,"monaco":1,"consolas":1,"andale mono":1,"monaco":1,
++  "apple color emoji":1,"segoe ui":1,"segoe ui emoji":1,"segoe ui symbol":1,
++  "arial unicode ms":1,"microsoft sans serif":1,"symbol":1,"wingdings":1,
++  "comic sans ms":1,"impact":1,"bookman old style":1,"andale mono":1,
++  "sans-serif-smallcaps":1
++};
++function hashFont(name) {
++  var h = seed >>> 0;
++  var s = String(name || "");
++  for (var i = 0; i < s.length; i++) {
++    h = Math.imul(h ^ s.charCodeAt(i), 0x01000193) >>> 0;
++  }
++  return h >>> 0;
++}
++function normalizeFamily(fam) {
++  return String(fam || "").replace(/^['\"]+|['\"]+$/g, "").trim().toLowerCase();
++}
++function extractFamilies(font) {
++  // CSS font shorthand: size/weight then family list. Take trailing families.
++  var s = String(font || "");
++  var idx = s.lastIndexOf(" ");
++  // Prefer split on comma families after first length/size token cluster.
++  var famPart = s;
++  var m = s.match(/\d+(?:px|pt|em|rem|%)\s+(.+)$/i);
++  if (m) { famPart = m[1]; }
++  return famPart.split(",").map(normalizeFamily).filter(Boolean);
++}
++function shouldHideFamily(family) {
++  var key = normalizeFamily(family);
++  if (!key || FIREFOX_BASELINE[key]) { return false; }
++  // Deterministic keep/drop of non-baseline (Brave-like subset, sticky per seed).
++  return (hashFont(key) & 1) === 0;
++}
++function copyMetrics(m, fw) {
++  var out = { width: fw };
++  var props = [
++    "actualBoundingBoxLeft","actualBoundingBoxRight",
++    "actualBoundingBoxAscent","actualBoundingBoxDescent",
++    "fontBoundingBoxAscent","fontBoundingBoxDescent",
++    "emHeightAscent","emHeightDescent",
++    "hangingBaseline","alphabeticBaseline","ideographicBaseline"
++  ];
++  for (var i = 0; i < props.length; i++) {
++    var p = props[i];
++    try {
++      var v = m[p];
++      if (typeof v === "number") {
++        if (p === "actualBoundingBoxLeft" || p === "actualBoundingBoxRight") {
++          out[p] = farbleWidth(v);
++        } else {
++          out[p] = v;
++        }
++      }
++    } catch (_e) {}
++  }
++  return out;
++}
++
++var hooks = { measureText: null, origMeasureText: null, measureTextProto: null,
++  ocMeasureText: null, origOcMeasureText: null, ocMeasureTextProto: null,
++  check: null, origCheck: null, checkProto: null,
++  ow: null, origOw: null, owProto: null,
++  cw: null, origCw: null, cwProto: null,
++  gbcr: null, origGbcr: null, gbcrProto: null,
++  fudge: fontFudge, seed: seed >>> 0 };
++
++// --- CanvasRenderingContext2D.measureText ---
++if (typeof CanvasRenderingContext2D !== "undefined" &&
++    CanvasRenderingContext2D.prototype &&
++    typeof CanvasRenderingContext2D.prototype.measureText === "function") {
++  var c2d = CanvasRenderingContext2D.prototype;
++  var origMT = c2d.measureText;
++  var wrappedMT = function(text) {
++    var m = origMT.apply(this, arguments);
++    if (!m) { return m; }
++    var w = m.width;
++    var fw = farbleWidth(w);
++    if (fw === w) { return m; }
++    return copyMetrics(m, fw);
++  };
++  Object.defineProperty(c2d, "measureText", {
++    configurable: true, enumerable: true, writable: true, value: wrappedMT
++  });
++  hooks.measureText = wrappedMT;
++  hooks.origMeasureText = origMT;
++  hooks.measureTextProto = c2d;
++}
++
++// --- OffscreenCanvasRenderingContext2D.measureText (when present) ---
++if (typeof OffscreenCanvasRenderingContext2D !== "undefined" &&
++    OffscreenCanvasRenderingContext2D.prototype &&
++    typeof OffscreenCanvasRenderingContext2D.prototype.measureText === "function") {
++  var oc2d = OffscreenCanvasRenderingContext2D.prototype;
++  var origOcMT = oc2d.measureText;
++  var wrappedOcMT = function(text) {
++    var m = origOcMT.apply(this, arguments);
++    if (!m) { return m; }
++    var w = m.width;
++    var fw = farbleWidth(w);
++    if (fw === w) { return m; }
++    return copyMetrics(m, fw);
++  };
++  Object.defineProperty(oc2d, "measureText", {
++    configurable: true, enumerable: true, writable: true, value: wrappedOcMT
++  });
++  hooks.ocMeasureText = wrappedOcMT;
++  hooks.origOcMeasureText = origOcMT;
++  hooks.ocMeasureTextProto = oc2d;
++}
++
++// --- document.fonts.check (FontFaceSet.prototype.check) ---
++var ffsProto = null;
++if (typeof FontFaceSet !== "undefined" && FontFaceSet.prototype) {
++  ffsProto = FontFaceSet.prototype;
++} else if (document && document.fonts) {
++  ffsProto = Object.getPrototypeOf(document.fonts);
++}
++if (ffsProto && typeof ffsProto.check === "function") {
++  var origCheck = ffsProto.check;
++  var wrappedCheck = function(font, text) {
++    var native = origCheck.apply(this, arguments);
++    if (!native) { return false; }
++    var families = extractFamilies(font);
++    for (var i = 0; i < families.length; i++) {
++      if (shouldHideFamily(families[i])) { return false; }
++    }
++    return true;
++  };
++  Object.defineProperty(ffsProto, "check", {
++    configurable: true, enumerable: true, writable: true, value: wrappedCheck
++  });
++  hooks.check = wrappedCheck;
++  hooks.origCheck = origCheck;
++  hooks.checkProto = ffsProto;
++}
++
++// --- DOM metric probes (offsetWidth / clientWidth / getBoundingClientRect) ---
++var elProto = typeof HTMLElement !== "undefined" ? HTMLElement.prototype : null;
++if (elProto) {
++  var owDesc = Object.getOwnPropertyDescriptor(elProto, "offsetWidth");
++  if (owDesc && typeof owDesc.get === "function") {
++    var origOw = owDesc.get;
++    var wrappedOw = function() {
++      return farbleIntWidth(origOw.call(this));
++    };
++    Object.defineProperty(elProto, "offsetWidth", {
++      configurable: true, enumerable: true, get: wrappedOw
++    });
++    hooks.ow = wrappedOw;
++    hooks.origOw = origOw;
++    hooks.owProto = elProto;
++  }
++  var cwDesc = Object.getOwnPropertyDescriptor(elProto, "clientWidth");
++  if (cwDesc && typeof cwDesc.get === "function") {
++    var origCw = cwDesc.get;
++    var wrappedCw = function() {
++      return farbleIntWidth(origCw.call(this));
++    };
++    Object.defineProperty(elProto, "clientWidth", {
++      configurable: true, enumerable: true, get: wrappedCw
++    });
++    hooks.cw = wrappedCw;
++    hooks.origCw = origCw;
++    hooks.cwProto = elProto;
++  }
++}
++var geomProto = typeof Element !== "undefined" ? Element.prototype : elProto;
++if (geomProto && typeof geomProto.getBoundingClientRect === "function") {
++  var origGbcr = geomProto.getBoundingClientRect;
++  var wrappedGbcr = function() {
++    var r = origGbcr.apply(this, arguments);
++    if (!r) { return r; }
++    var w = farbleWidth(r.width);
++    if (w === r.width) { return r; }
++    try {
++      if (typeof DOMRect === "function") {
++        return new DOMRect(r.x, r.y, w, r.height);
++      }
++    } catch (_e) {}
++    return {
++      x: r.x, y: r.y, width: w, height: r.height,
++      top: r.top, left: r.left, bottom: r.bottom,
++      right: r.left + w,
++      toJSON: function() {
++        return { x: this.x, y: this.y, width: this.width, height: this.height,
++          top: this.top, left: this.left, bottom: this.bottom, right: this.right };
++      }
++    };
++  };
++  Object.defineProperty(geomProto, "getBoundingClientRect", {
++    configurable: true, enumerable: true, writable: true, value: wrappedGbcr
++  });
++  hooks.gbcr = wrappedGbcr;
++  hooks.origGbcr = origGbcr;
++  hooks.gbcrProto = geomProto;
++}
++
++return hooks;`
++      );
++
++      let installedFonts;
++      try {
++        installedFonts = installFontsInPage(fontSeed >>> 0);
++      } catch (error) {
++        onRuntimeError("fonts.installPage", error);
++        throw error;
++      }
++
++      function pushPageHook(proto, name, wrapper, original, kind) {
++        if (!proto || !wrapper || !original) {
++          return;
++        }
++        if (kind === "getter") {
++          replacements.push({
++            proto,
++            name,
++            wrapper,
++            originalDescriptor: {
++              configurable: true,
++              enumerable: true,
++              get: original,
++            },
++          });
++        } else {
++          replacements.push({
++            proto,
++            name,
++            wrapper,
++            originalDescriptor: {
++              configurable: true,
++              enumerable: true,
++              writable: true,
++              value: original,
++            },
++          });
++        }
++      }
++
++      pushPageHook(
++        installedFonts.measureTextProto,
++        "measureText",
++        installedFonts.measureText,
++        installedFonts.origMeasureText,
++        "method"
++      );
++      pushPageHook(
++        installedFonts.ocMeasureTextProto,
++        "measureText",
++        installedFonts.ocMeasureText,
++        installedFonts.origOcMeasureText,
++        "method"
++      );
++      pushPageHook(
++        installedFonts.checkProto,
++        "check",
++        installedFonts.check,
++        installedFonts.origCheck,
++        "method"
++      );
++      pushPageHook(
++        installedFonts.owProto,
++        "offsetWidth",
++        installedFonts.ow,
++        installedFonts.origOw,
++        "getter"
++      );
++      pushPageHook(
++        installedFonts.cwProto,
++        "clientWidth",
++        installedFonts.cw,
++        installedFonts.origCw,
++        "getter"
++      );
++      pushPageHook(
++        installedFonts.gbcrProto,
++        "getBoundingClientRect",
++        installedFonts.gbcr,
++        installedFonts.origGbcr,
++        "method"
++      );
++    }
++
+     // AudioContext and OfflineAudioContext both expose AudioBuffer.
+     // Soft residual (pin 2 / PR #47 XOR FAIL f18c0b6): chrome-exported
+     // getChannelData + waived Float32Array.set stayed inert on OfflineAudio
+     // (deltaSum=0; startRendering sums identical to Homogeneous) while canvas
+     // PASS and depth.lastInstall=installed. Xray cross-compartment channel
+     // views swallow chrome writes. Fix: install AudioBuffer.getChannelData and

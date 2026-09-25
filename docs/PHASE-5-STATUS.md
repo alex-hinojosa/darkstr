@@ -7,7 +7,83 @@
 **Train:** LibreWolf **156.0.1-1** (Mini SoT via `DARKSTR_GECKO_ROOT`)
 
 Phase 4 depth (through **0034** lastSeeds eTLD diag) is **CLOSED** / Proof PASS.  
-Phase 5 pin **0035 cookie firewall MVP** is **MERGED** / Proof XOR **PASS**.
+Phase 5 pin **0035 cookie firewall MVP** is **MERGED** / Proof XOR **PASS**.  
+Phase 5 pin **0036 fonts coherence** is **IN PROGRESS** (PR open; awaiting Proof XOR).
+
+## In progress — 0036 Fonts coherence / fingerprint farbling
+
+| Item | Status |
+|------|--------|
+| Pin | **0036** |
+| PR | [#67](https://github.com/alex-hinojosa/darkstr/pull/67) **OPEN** |
+| Branch | `builder/phase5-fonts-0036` |
+| Patch | [`patches/0036-darkstr-fonts-coherence.patch`](../patches/0036-darkstr-fonts-coherence.patch) |
+| Mini helper | [`scripts/apply-0036-fonts-coherence-mini.sh`](../scripts/apply-0036-fonts-coherence-mini.sh) / [`PHASE-5-FONTS-0036-MINI-APPLY.sh`](PHASE-5-FONTS-0036-MINI-APPLY.sh) |
+| Proof | **not claimed** — awaiting ACK |
+
+### Design summary
+
+Depth `fontSeed` (from eTLD-effective persona seed via `_generateDepthFromSeed` **after**
+`canvasSeed`/`audioSeed` so golden digests stay intact; snapshot may supply
+`fontSeed`/`font_seed`; else stable XOR fallback) drives page-compartment farbling
+under the same arm gate as other depth hooks:
+
+`pollution && !nativeCompatible && nativePersonaHooks` (plus DocShell SubsequentNav
+when `strictFirstDoc`).
+
+Surfaces (Brave-inspired sticky farbling; Firefox/LibreWolf/Gecko persona only):
+
+1. **Canvas / Offscreen `measureText`** — silence-safe multiplicative width fudge
+   `[0.999, 1.0)`; width `0` stays `0`; horizontal bounding boxes scaled coherently.
+2. **`document.fonts.check`** — Firefox-plausible baseline families passthrough;
+   non-baseline keep/drop by deterministic seed hash (no Chrome-only font lists).
+3. **DOM probes** — `offsetWidth` / `clientWidth` / `getBoundingClientRect` width
+   fudge (same fudge; integer widths rounded). Soft residual: ≤0.1% layout shift risk.
+
+Default-**on** with depth hooks (like audio/WebGL). Homogeneous / hooks-off: idle.
+Diag: `darkstr.depth.lastSeeds` JSON gains `fontSeed` (0034 path).
+
+### Prefs / arm gate
+
+| Pref / gate | Role |
+|-------------|------|
+| `darkstr.mode=pollution` ∧ `!nativeCompatible` ∧ `nativePersonaHooks` | Arm (shared depth) |
+| `darkstr.depth.hooksArmed` / `lastSeeds` (incl. `fontSeed`) | Diag |
+| Golden lock | non-empty `darkstr.persona.snapshot` **or** `rotatePerSite=false` |
+
+No new default-off arm pref (justified: same risk class as 0031 audio width-style
+fudge; DOM residual documented).
+
+### Proof gates (for Proof ACK — do not ping from Builder)
+
+1. Hooks-off / Homogeneous → idle (host font metrics)
+2. Pollution+hooks: same seed → stable font/measureText digests (double-read)
+3. Different eTLD+1 with rotatePerSite → digests diverge
+4. Same eTLD two tabs → same digests/seed
+5. Golden lock seed-42 coherent; no Chrome-only font names in any surfaced list
+
+### Out of scope (this pin)
+
+- speech / WebGPU
+- Native-Compatible privacy-pane UI (PM)
+- FontFaceSet full enumeration filtering (soft residual — `check` covered)
+- gfx-level font whitelist (Tor-style) — page-compartment only
+
+### Residual risks
+
+- DOM width fudge may shift pixel-perfect layouts by ≤0.1% when hooks armed.
+- `document.fonts` iteration / `ready` not wrapped (only `check`).
+- Not anti-detect / not Cloudflare bypass.
+
+## Apply status (Mini) — 0036 — 2026-09-24 ~20:56 CDT
+
+- Tree: LibreWolf **156.0.1-1** (`$DARKSTR_GECKO_ROOT`)
+- Markers already present (Builder applied source edits); patch skip OK
+- `./mach build --allow-subdirectory-build browser/components` — **OK** (~7s)
+- `make install-dist_bin` — Kept existing; moz-src symlinks refreshed
+- Symlinks: `dist/LibreWolf.app/.../moz-src/browser/components/DarkstrDepthHooks*.sys.mjs` → source (fontSeed / Soft residual 0036 present)
+- PR [#67](https://github.com/alex-hinojosa/darkstr/pull/67) **OPEN**; tip awaiting Proof XOR (not claimed)
+- Apply log: `~/src/darkstr-gecko/darkstr-apply-0036-20260924-205605.log`
 
 ## Completed — 0035 Cookie firewall MVP
 
@@ -65,9 +141,9 @@ All five cookie-firewall XOR gates passed on Proof tip `d35c5fd8fdec6fba20cf1c08
 `NETWORK_REAL`). The sandbox jar and script surfaces held the synthetic
 `net_probe`; this is a soft note only and does not change the PASS verdict.
 
-### Out of scope (this pin)
+### Out of scope (this pin) — 0035
 
-- fonts / speech / WebGPU
+- fonts / speech / WebGPU (fonts → **0036**)
 - Native-Compatible privacy-pane UI (PM)
 - Approach A FFI
 - Full browser UI / dual-jar C++ CookieService
