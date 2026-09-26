@@ -102,8 +102,8 @@ All five font-coherence XOR gates passed on Proof tip `d01038b7d64c3dd95e581263d
 | Item | Status |
 |------|--------|
 | Pin | **0037** |
-| PR | *(opened with this pin — see PR URL in apply report)* |
-| Tip | *(branch tip SHA)* |
+| PR | [#68](https://github.com/alex-hinojosa/darkstr/pull/68) **OPEN** |
+| Tip | `8562e76dd81c572d1716227e99a74b5eff7fc7a1` |
 | Branch | `builder/phase5-speech-0037` |
 | Patch | [`patches/0037-darkstr-speech-coherence.patch`](../patches/0037-darkstr-speech-coherence.patch) |
 | Mini helper | [`scripts/apply-0037-speech-coherence-mini.sh`](../scripts/apply-0037-speech-coherence-mini.sh) / [`PHASE-5-SPEECH-0037-MINI-APPLY.sh`](PHASE-5-SPEECH-0037-MINI-APPLY.sh) |
@@ -173,6 +173,17 @@ still uses real host voices; SpeechRecognition soft and pref-gated upstream).
 
 - Host with very few voices → subset may equal full list (entropy soft).
 - Not anti-detect / not Cloudflare bypass.
+
+## Apply status (Mini) — 0037 — 2026-09-26 ~13:14 CDT
+
+- Tree: LibreWolf **156.0.1-1** (`$DARKSTR_GECKO_ROOT`)
+- Markers already present (Builder applied source edits); patch skip OK
+- `./mach build --allow-subdirectory-build browser/components` — **OK** (~8s)
+- `make install-dist_bin` — Kept existing; moz-src symlinks refreshed
+- Symlinks: `dist/LibreWolf.app/.../moz-src/browser/components/DarkstrDepthHooks*.sys.mjs` → source (`speechSeed` / Soft residual 0037 present)
+- PR [#68](https://github.com/alex-hinojosa/darkstr/pull/68) **OPEN** tip `8562e76dd81c572d1716227e99a74b5eff7fc7a1`; Proof XOR **not claimed**
+- Apply log: `~/src/darkstr-gecko/darkstr-apply-0037-20260926-131431.log`
+- Disk free after apply: ~9.3 Gi (Data volume)
 
 ## Next eng backlog
 
