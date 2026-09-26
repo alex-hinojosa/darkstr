@@ -1,6 +1,6 @@
 # Phase 5 status — eng backlog after Phase 4 depth closed
 
-**Date:** 2026-09-24 (CDT)  
+**Date:** 2026-09-26 (CDT)  
 **Owner:** Builder  
 **Audience:** Meridian / Proof / Product Manager skim  
 **Brand:** darkstr — not official LibreWolf. Pollution browser, not Cloudflare bypass.  
@@ -9,6 +9,7 @@
 Phase 4 depth (through **0034** lastSeeds eTLD diag) is **CLOSED** / Proof PASS.  
 Phase 5 pin **0035 cookie firewall MVP** is **MERGED** / Proof XOR **PASS**.  
 Phase 5 pin **0036 fonts coherence** is **MERGED** / Proof XOR **PASS** (PR #67; see evidence below).
+Phase 5 pin **0037 speech coherence** is **IN PROGRESS** (PR pending; not Proof-PASS).
 
 ## Completed — 0036 Fonts coherence / fingerprint farbling
 
@@ -96,14 +97,90 @@ All five font-coherence XOR gates passed on Proof tip `d01038b7d64c3dd95e581263d
 - PR [#67](https://github.com/alex-hinojosa/darkstr/pull/67) **MERGED** as `a49cf98b3f120e5c0d14336f2411c9638d4c0cff`; Proof XOR **PASS** on tip `d01038b7d64c3dd95e581263dca2fa47381b8d7c`
 - Apply log: `~/src/darkstr-gecko/darkstr-apply-0036-20260924-205605.log`
 
+## IN PROGRESS — 0037 Speech synthesis / SpeechRecognition coherence
+
+| Item | Status |
+|------|--------|
+| Pin | **0037** |
+| PR | *(opened with this pin — see PR URL in apply report)* |
+| Tip | *(branch tip SHA)* |
+| Branch | `builder/phase5-speech-0037` |
+| Patch | [`patches/0037-darkstr-speech-coherence.patch`](../patches/0037-darkstr-speech-coherence.patch) |
+| Mini helper | [`scripts/apply-0037-speech-coherence-mini.sh`](../scripts/apply-0037-speech-coherence-mini.sh) / [`PHASE-5-SPEECH-0037-MINI-APPLY.sh`](PHASE-5-SPEECH-0037-MINI-APPLY.sh) |
+| Proof | **not claimed** — awaiting Proof XOR ACK |
+
+### Design summary
+
+Depth `speechSeed` (from eTLD-effective persona seed via `_generateDepthFromSeed`
+**after** `fontSeed` so golden digests stay intact; snapshot may supply
+`speechSeed`/`speech_seed`; else stable XOR fallback from `fontSeed`⊕`canvasSeed`)
+drives page-compartment farbling under the same arm gate as other depth hooks:
+
+`pollution && !nativeCompatible && nativePersonaHooks` (plus DocShell SubsequentNav
+when `strictFirstDoc`).
+
+Surfaces (Brave-inspired sticky farbling; Firefox/LibreWolf/Gecko persona only):
+
+1. **`speechSynthesis.getVoices()`** — seed-tied filter/reorder of **host native**
+   voices only. Empty native list stays empty. Default voice always kept. No
+   invented Chrome/Google voice names. Double-read and `voiceschanged` coherent
+   via fingerprint-keyed cache of the farbled list.
+2. **SpeechRecognition / `webkitSpeechRecognition`** — soft residual only: when the
+   pref-gated constructor is already exposed (`media.webspeech.recognition.enable`),
+   seed-tie empty `lang` to a Firefox-plausible BCP47 default. Do **not** invent
+   the API when absent (would be Chrome cosplay).
+
+Default-**on** with depth hooks (same risk class as fonts/audio list farbling;
+justified). Homogeneous / hooks-off: idle. Diag: `darkstr.depth.lastSeeds` JSON
+gains `speechSeed` (0034 path).
+
+### Prefs / arm gate
+
+| Pref / gate | Role |
+|-------------|------|
+| `darkstr.mode=pollution` ∧ `!nativeCompatible` ∧ `nativePersonaHooks` | Arm (shared depth) |
+| `darkstr.depth.hooksArmed` / `lastSeeds` (incl. `speechSeed`) | Diag |
+| Golden lock | non-empty `darkstr.persona.snapshot` **or** `rotatePerSite=false` |
+
+No new default-off arm pref (justified: read-only voice-list subset/reorder; TTS
+still uses real host voices; SpeechRecognition soft and pref-gated upstream).
+
+### Proof gates — propose for Proof ACK (do not claim PASS)
+
+1. Hooks-off / Homogeneous → idle (host voices)
+2. Pollution+hooks: same seed → stable getVoices digests (double-read / voiceschanged)
+3. Different eTLD+1 with rotatePerSite → digests / speechSeed diverge
+4. Same eTLD two tabs → same digests / speechSeed
+5. Golden lock seed-42 coherent; no Chrome-only voice names in any surfaced list
+
+### Soft residuals (not FAIL)
+
+- SpeechRecognition surface is best-effort when pref-off / ctor absent.
+- Voice-list subset may hide some non-default host voices under Pollution+hooks
+  (TTS still works via kept default / first voice).
+- `voiceschanged` fires from host; farbled list updates only when native signature
+  changes (by design for coherence).
+
+### Out of scope (this pin)
+
+- WebGPU
+- Native-Compatible privacy-pane UI (PM)
+- Fonts (already **0036** MERGED / PASS)
+- Inventing Chrome-only voice names or `webkitSpeechRecognition` when absent
+- gfx/C++ speech service farbling
+
+### Residual risks
+
+- Host with very few voices → subset may equal full list (entropy soft).
+- Not anti-detect / not Cloudflare bypass.
+
 ## Next eng backlog
 
-0036 is closed after Proof PASS. Next pins, in order:
+0037 is **IN PROGRESS** (awaiting Proof). After 0037 PASS:
 
-1. **Speech**
-2. **WebGPU**
+1. **WebGPU**
 
-No speech or WebGPU engineering was started in this merge/docs pass.
+No WebGPU engineering in this pin.
 
 ## Completed — 0035 Cookie firewall MVP
 
