@@ -1,67 +1,70 @@
 # Mini package / artifact pin
 
 **Project:** darkstr — pollution browser; not official LibreWolf.  
-**Date:** 2026-09-17 (CDT)  
-**Scope:** honest packaging evidence for Phase 2 exit. Does **not** flip hooks
-default-on. Does **not** claim a fresh `./mach package` unless one was actually run.
+**Date:** 2026-09-28 (CDT)  
+**Scope:** honest packaging evidence. Does **not** flip hooks default-on.  
+**Train:** LibreWolf **156.0.1-1** (`$DARKSTR_GECKO_ROOT`).
 
-## What this push did (and did not)
-
-| Claim | Truth |
-|---|---|
-| Fresh `./mach package` this push | **No.** Builder executor for this docs push ran off-Mini (Cursor Linux box). No SSH/local Mini seat → `./mach package` was **not** attempted. |
-| Disk ~14 Gi free on Mini | **Verified 2026-09-17** (~14 Gi on Data). Fresh `./mach package` still deferred (tight for stage/DMG). |
-| Fresh branded installer / DMG | **Not claimed.** |
-| Existing built app as Proof target | **Yes — pin only** (see below). Operator / Mini seat must confirm path + mtime before treating as Proof evidence. |
-
-## Existing app pin (expected Mini layout)
-
-When the Mini objdir already has a built app, Proof should target that binary — **not**
-invent a package that was never produced.
+## Fresh `./mach package` — **YES** (2026-09-28)
 
 | Field | Value |
 |---|---|
-| Gecko / train root (typical) | `~/src/darkstr-gecko/librewolf-source/librewolf-155.0.1-1` (or `$DARKSTR_GECKO_ROOT`) |
-| App glob | `$DARKSTR_GECKO_ROOT/obj-*/dist/LibreWolf.app` |
-| Binary (typical) | `LibreWolf.app/Contents/MacOS/librewolf` |
+| Fresh `./mach package` this push | **Yes** — Mini seat, 2026-09-28 ~06:59 CDT |
+| CWD | `$DARKSTR_GECKO_ROOT` = `~/src/darkstr-gecko/librewolf-source/librewolf-156.0.1-1` |
+| Command | `./mach package` |
+| Exit | **0** (DMG created; log `~/src/darkstr-gecko/mach-package-156-20260928-065859.log`) |
+| Artifact | `obj-aarch64-apple-darwin25.6.0/dist/librewolf-156.0.1.en-US.mac.dmg` |
+| Size | 99451265 bytes (~95 MiB) |
+| SHA-256 | `d400de8bf4271312f123b1adfbd8fef2bdabbc3c867f57ea11bf861096dab32b` |
+| DMG mtime | **2026-09-28 06:59:13 CDT** |
+| Sourcestamp (`*.mac.txt`) | buildid `20260928015621`; mozilla-release `6f2c158dfc7e9693f880fad2510ceb51a158c069` |
+| darkstr tip (docs / applied Soft residual SoT) | `ff89e8287509e21049399504bfdf2b85e54e33a0` (main; 0038 Proof-green) |
 | Brand | darkstr fork work on LibreWolf train — **not** official LibreWolf |
-| Fresh package this push | **No** |
-| Exact app path | `…/obj-aarch64-apple-darwin25.6.0/dist/LibreWolf.app` |
-| App dir mtime (Mini, verified 2026-09-17 ~00:53 CDT) | **2026-09-15 23:21 CDT** (`ls -ld`) |
-| `librewolf` binary mtime | **2026-09-15 23:21 CDT** (post-0011 XUL relink era) |
-| `libduppel_ffi.dylib` mtime | **2026-09-15 18:25 CDT** |
-| Mini free disk at verify | **~14 Gi** (`df` on Data volume) |
 
-**Do not** clobber the objdir to “make room.” Prefer documenting the existing app.
-**Never** `mv` under `/Volumes/Mesh` (Atlas / smbfs panic risk).
+### Disk
 
-## How Proof runs headed XOR on that artifact
+| When | Data volume free |
+|---|---|
+| Before reclaim | **~19 Gi** (`df` on `/System/Volumes/Data`) |
+| After safe reclaim | **~21 Gi** (~2.8 Gi reclaimed) |
+| Before `./mach package` | **~21 Gi** |
+| After `./mach package` | **~21 Gi** |
 
-1. Confirm the pin path exists on Mini SSD (objdir preserved).
-2. Prefer launcher: `~/src/darkstr-gecko/headed-hooks-on-skim.sh`  
-   (temp profile; pollution + hooks for skim when intentional — product default
-   remains hooks **off**).
-3. Matrix (exit gate — still **OPEN** until Proof records PASS):
-   - **Homogeneous** — stock RFP path; persona/chaff idle; no RFP metric customization.
-   - **Pollution** — RFP/FPP off via ModeXor; no UTC letterbox under active Pollution;
-     HTTP ↔ JS coherence when hooks-on skim is intentional.
-   - **Native-Compatible (NC)** — escape without flipping `darkstr.mode`; banking/SSO
-     site skip as in `docs/NC-BANKING-SMOKE.md`.
-4. Soft residual post-#39: harness `storage.local` live read vs chrome mirror stays
-   **soft** — see `docs/MINI-SMOKE-CHECKLIST.md`.
+**Reclaimed (safe only; Gecko 156 source + objdir kept):** Chrome/Google caches, ms-playwright, UnityHub/Unity editor caches, Homebrew/pip/node-gyp caches, Xcode DerivedData, VS Code ShipIt cache, regenerable prior `dist/librewolf` stage + prior Sep-24 DMG / xpt zip / `dist/mac`. **Never** `mv` under `/Volumes/Mesh`. Objdir **not** clobbered.
 
-Checklists: [`PROOF-XOR-CHECKLIST.md`](PROOF-XOR-CHECKLIST.md),
-[`MINI-SMOKE-CHECKLIST.md`](MINI-SMOKE-CHECKLIST.md),
-[`PHASE-2-EXIT-STATUS.md`](PHASE-2-EXIT-STATUS.md).
+### Hooks markers in packaged DMG
 
-## If Mini later runs `./mach package`
+Verified inside DMG `LibreWolf.app/Contents/Resources/omni.ja`:
 
-Only then update this file with:
+| Marker | Result |
+|---|---|
+| `moz-src/browser/components/DarkstrDepthHooksChild.sys.mjs` | Present (69924 bytes); SHA-256 matches tree source |
+| Soft residual **0038** / `webgpuSeed` / `installWebGpuInPage` / `plainAdapterInfo` | Present in packaged module |
+| Soft residual **0037** / `speechSeed` | Present |
+| XUL `darkstr.mode` / `darkstr.nativePersonaHooks` | Present in staged/DMG `Contents/MacOS/XUL` |
+| `librewolf.cfg` darkstr prefs (hooks **default-off**) | Present in stage Resources |
 
-- command + cwd (`$DARKSTR_GECKO_ROOT`)
-- exit code / package path under `obj-*/dist/`
-- free disk before/after
-- whether Proof should switch from the existing `.app` pin to the new package
+**Honest gap (unchanged vs Sep-24 package behavior):** `libduppel_ffi.dylib` is **not** in the DMG. Approach B installs it into `dist/bin` (+ DEV app MacOS/Resources mirror) but it is **not** listed in `browser/installer/package-manifest.in`. Pollution+hooks FFI snapshot fill for a DMG-installed copy needs a post-copy of the dylib next to `MacOS/librewolf`, or Proof continues to use the objdir DEV app which already has the dylib (mtime **2026-09-24 12:49:55 CDT**). Soft residual JS hooks in omni.ja do **not** require the dylib.
 
-Until that happens, **do not** check off “reproducible branded fork packaging artifact”
-as a fresh package in [`PHASE-2-EXIT-STATUS.md`](PHASE-2-EXIT-STATUS.md).
+## Existing DEV app pin (Proof / headed skim)
+
+Prefer launcher: `~/src/darkstr-gecko/headed-hooks-on-skim.sh` (temp profile; pollution + hooks for intentional skim — product default remains hooks **off**).
+
+| Field | Value |
+|---|---|
+| App | `$DARKSTR_GECKO_ROOT/obj-aarch64-apple-darwin25.6.0/dist/LibreWolf.app` |
+| Binary | `…/Contents/MacOS/librewolf` |
+| XUL mtime | **2026-09-23 11:04:45 CDT** (Soft residual depth is JS in omni/moz-src; XUL carries native persona prefs strings) |
+| `libduppel_ffi.dylib` | Present next to binary (see gap note above for DMG) |
+| Light smoke 2026-09-28 ~07:00 CDT | Launch OK — parent + content processes alive ≥15s; no DiagnosticReports crash; quit OK. **Not** full Proof XOR. |
+
+## How Proof runs headed XOR
+
+1. Confirm pin path exists on Mini SSD (objdir preserved) **or** install from the fresh DMG and, if FFI needed, copy `libduppel_ffi.dylib` beside `MacOS/librewolf`.
+2. Prefer launcher: `~/src/darkstr-gecko/headed-hooks-on-skim.sh`.
+3. Matrix (Homogeneous / Pollution / NC) per [`PROOF-XOR-CHECKLIST.md`](PROOF-XOR-CHECKLIST.md) / [`MINI-SMOKE-CHECKLIST.md`](MINI-SMOKE-CHECKLIST.md).
+4. Soft residual harness `storage.local` live read vs chrome mirror stays **soft**.
+
+## Builder note for Alex
+
+Fresh branded fork **DMG** is recorded. Hooks Soft residual through **0038** verified in the packaged `omni.ja`. Product hooks remain **default-off**. Full Proof XOR on this artifact is **next if** Proof wants a package-path ACK; light Mini smoke already launch-OK on the DEV app. FFI-in-DMG packaging is a known residual (manifest), not a new depth pin.

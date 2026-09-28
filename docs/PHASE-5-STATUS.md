@@ -310,6 +310,23 @@ webgpuSeed diverge, plainAdapterInfo non-empty / familiesCoherent).
 
 **Phase 5 eng depth backlog is empty.** Pin **0038** was the last depth pin (WebGPU); closed Proof-green / MERGED.
 
+## Ship note — Mini `./mach package` DMG (2026-09-28 ~06:59 CDT)
+
+Honest packaging evidence only — **no new eng depth pins**.
+
+| Field | Value |
+|------|--------|
+| Command | `./mach package` from `$DARKSTR_GECKO_ROOT` (LibreWolf **156.0.1-1**) |
+| Exit / artifact | **0** → `obj-aarch64-apple-darwin25.6.0/dist/librewolf-156.0.1.en-US.mac.dmg` (~95 MiB) |
+| SHA-256 | `d400de8bf4271312f123b1adfbd8fef2bdabbc3c867f57ea11bf861096dab32b` |
+| darkstr tip | `ff89e8287509e21049399504bfdf2b85e54e33a0` |
+| Disk | ~19 Gi → reclaim ~2.8 Gi safe caches/old stage → ~21 Gi; after package still ~21 Gi |
+| Hooks in DMG | Soft residual **0038** (`webgpuSeed` / plainAdapterInfo) inside `omni.ja` `DarkstrDepthHooksChild.sys.mjs` (SHA match source); XUL `darkstr.mode` / `nativePersonaHooks` present |
+| FFI in DMG | **Absent** — Approach B `libduppel_ffi.dylib` not in `package-manifest.in` (same gap as Sep-24 DMG). DEV app still has dylib for headed skim. |
+| Light smoke | DEV app Pollution+hooks-on skim launch OK (~07:00 CDT); no crash. Not full Proof XOR. |
+
+Pin detail: [`MINI-PACKAGE-PIN.md`](MINI-PACKAGE-PIN.md). Builder may offer Proof a package-path XOR when ready; do not invent packaging-manifest eng from this note.
+
 What is **not** eng-owned next (do not invent pins):
 
 - **Native privacy-pane UI** — PM-owned
