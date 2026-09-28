@@ -26,7 +26,7 @@ These stubs document *how* a real bsys6 / LibreWolf recipe would layer darkstr p
 
 Design pin: [`../docs/GECKO-HOOKS.md`](../docs/GECKO-HOOKS.md). Bridge: [`../docs/PREF-BRIDGE.md`](../docs/PREF-BRIDGE.md).
 
-Phase 5 depth pins (real patches): [`0035`](0035-darkstr-cookie-firewall.patch) cookie · [`0036`](0036-darkstr-fonts-coherence.patch) fonts · [`0037`](0037-darkstr-speech-coherence.patch) speech · [`0038`](0038-darkstr-webgpu-coherence.patch) WebGPU.
+Phase 5 depth pins (real patches): [`0035`](0035-darkstr-cookie-firewall.patch) cookie · [`0036`](0036-darkstr-fonts-coherence.patch) fonts · [`0037`](0037-darkstr-speech-coherence.patch) speech · [`0038`](0038-darkstr-webgpu-coherence.patch) WebGPU. Soft residual: [`0039`](0039-darkstr-fonts-enum-coherence.patch) FontFaceSet enum (extends 0036).
 
 
 ## Intended apply flow (real fork)
@@ -307,3 +307,13 @@ Real unified diff [`0034-darkstr-depth-lastseeds-etld-diag.patch`](0034-darkstr-
 
 
 | [`0035-darkstr-cookie-firewall.patch`](0035-darkstr-cookie-firewall.patch) | **Real** Phase 5 pin — cookie firewall MVP (shared HTTP+JS policy, default-off) |
+
+
+## Phase 5 soft residual — FontFaceSet enum (0039)
+
+Real unified diff [`0039-darkstr-fonts-enum-coherence.patch`](0039-darkstr-fonts-enum-coherence.patch) (+ Apply SoT [`0039-files/`](0039-files/)) against post-0036/0038 156.0.1-1:
+
+- Extends **0036** `shouldHideFamily` / `fontSeed` — no new seed
+- Wraps `FontFaceSet` `values`/`keys`/`entries`/`forEach`/`@@iterator`/`size`/`load`
+- `document.fonts.ready` **not** wrapped (host Promise)
+- Mini: [`../scripts/apply-0039-fonts-enum-coherence-mini.sh`](../scripts/apply-0039-fonts-enum-coherence-mini.sh)
