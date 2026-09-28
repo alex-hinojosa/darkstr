@@ -1,0 +1,474 @@
+# darkstr 0037 — speech synthesis / SpeechRecognition fingerprint coherence
+#
+# Product (locked): Pollution+depth hooks keep seed-tied speech farbling coherent
+#   with canvas/audio/WebGL/fonts depth (0017/0031/0032/0036) and sticky eTLD+1
+#   seed (0030). Soft residual: speechSynthesis.getVoices filter/reorder of host
+#   native voices only (no invented Chrome voice names); empty native stays empty;
+#   default voice always kept; double-read / voiceschanged coherent via fingerprint-
+#   keyed cache. Seed via depth speechSeed (derived AFTER fontSeed so golden digests
+#   stay intact; snapshot may supply speechSeed/speech_seed). Brave-inspired sticky
+#   farbling, coherent Firefox/LibreWolf/Gecko persona only — NOT Chrome cosplay.
+#   Default-on with depth hooks (same gate family). Homogeneous/hooks-off: idle.
+#   SpeechRecognition: soft — lang default only when pref-gated ctor already exposed;
+#   do not invent webkitSpeechRecognition. WebGPU / Native UI / fonts = out of scope.
+#
+# Apply (after 0036):
+#   patch -d "$DARKSTR_GECKO_ROOT" -p1 < patches/0037-darkstr-speech-coherence.patch
+#   or scripts/apply-0037-speech-coherence-mini.sh
+#   / docs/PHASE-5-SPEECH-0037-MINI-APPLY.sh
+#
+# Rebuild: ./mach build --allow-subdirectory-build browser/components then
+#   make install-dist_bin + moz-src symlinks (chrome JS only; no XUL relink).
+#
+# Proof XOR (do not merge until PASS; Builder does not ping Proof):
+#   - Hooks-off / Homogeneous → idle (host voices)
+#   - Pollution+hooks: same seed → stable getVoices digests (double-read / voiceschanged)
+#   - Different eTLD+1 with rotatePerSite → digests / speechSeed diverge
+#   - Same eTLD two tabs → same digests / speechSeed
+#   - Golden lock seed-42 coherent; no Chrome-only voice names in surfaced list
+#
+# Marker: Soft residual (0037)
+
+--- a/browser/components/DarkstrDepthHooks.sys.mjs
++++ b/browser/components/DarkstrDepthHooks.sys.mjs
+@@ -29,8 +29,12 @@
+  * Soft residual (0036): depth fontSeed (derived after canvasSeed/audioSeed so golden
+  * digests stay intact) drives fonts coherence farbling in DepthHooksChild —
+  * measureText / document.fonts.check / DOM width probes. Folded into lastSeeds.
++ * Soft residual (0037): depth speechSeed (derived AFTER fontSeed so prior digests
++ * stay intact) drives speechSynthesis.getVoices coherence in DepthHooksChild.
++ * Snapshot may supply speechSeed/speech_seed; else stable XOR fallback. Folded
++ * into lastSeeds. SpeechRecognition soft/out-of-scope when pref-off.
+  *
+- * Workers = Phase 3 pin 3 — NOT in this module. Speech / WebGPU = later pins.
++ * Workers = Phase 3 pin 3 — NOT in this module. WebGPU = later pin.
+  */
+ 
+ const MODE_PREF = "darkstr.mode";
+@@ -133,6 +137,19 @@
+     return direct >>> 0;
+   }
+   return deriveFontSeed(canvasSeed >>> 0, audioSeed >>> 0);
++}
++
++function deriveSpeechSeed(fontSeed, canvasSeed) {
++  // Stable fallback when snapshot omits speechSeed — does not consume mulberry stream.
++  return (fontSeed ^ Math.imul(canvasSeed >>> 0, 0x85ebca6b)) >>> 0;
++}
++
++function readSpeechSeed(obj, fontSeed, canvasSeed) {
++  const direct = readU32Field(obj, "speechSeed", "speech_seed");
++  if (direct !== null) {
++    return direct >>> 0;
++  }
++  return deriveSpeechSeed(fontSeed >>> 0, canvasSeed >>> 0);
+ }
+ 
+ export var DarkstrDepthHooks = {
+@@ -223,7 +240,7 @@
+    *   pollutionActive: boolean,
+    *   nativeHooks: boolean,
+    *   armed: boolean,
+-   *   seeds: {canvasSeed:number, audioSeed:number, fontSeed:number, gpu:{vendor:string,renderer:string}}|null
++   *   seeds: {canvasSeed:number, audioSeed:number, fontSeed:number, speechSeed:number, gpu:{vendor:string,renderer:string}}|null
+    * }}
+    */
+   refreshPlan() {
+@@ -326,10 +343,12 @@
+         const snapAudio = readU32Field(snap, "audioSeed", "audio_seed");
+         const snapGpu = normalizeGpu(snap.gpu);
+         if (snapCanvas !== null && snapAudio !== null && snapGpu) {
++          const snapFont = readFontSeed(snap, snapCanvas, snapAudio);
+           const out = {
+             canvasSeed: snapCanvas >>> 0,
+             audioSeed: snapAudio >>> 0,
+-            fontSeed: readFontSeed(snap, snapCanvas, snapAudio),
++            fontSeed: snapFont,
++            speechSeed: readSpeechSeed(snap, snapFont, snapCanvas),
+             gpu: { vendor: snapGpu.vendor, renderer: snapGpu.renderer },
+           };
+           this._writeLastSeeds(out);
+@@ -354,6 +373,7 @@
+                 canvasSeed: derived.canvasSeed >>> 0,
+                 audioSeed: derived.audioSeed >>> 0,
+                 fontSeed: derived.fontSeed >>> 0,
++                speechSeed: derived.speechSeed >>> 0,
+                 gpu: {
+                   vendor: derived.gpu.vendor,
+                   renderer: derived.gpu.renderer,
+@@ -383,11 +403,16 @@
+         }
+       } catch (_e2) {}
+     }
++    const fontSeedOut =
++      (plan.seeds.fontSeed >>> 0) ||
++      deriveFontSeed(plan.seeds.canvasSeed, plan.seeds.audioSeed);
+     const out = {
+       canvasSeed: plan.seeds.canvasSeed >>> 0,
+       audioSeed: plan.seeds.audioSeed >>> 0,
+-      fontSeed: (plan.seeds.fontSeed >>> 0) ||
+-        deriveFontSeed(plan.seeds.canvasSeed, plan.seeds.audioSeed),
++      fontSeed: fontSeedOut,
++      speechSeed:
++        (plan.seeds.speechSeed >>> 0) ||
++        deriveSpeechSeed(fontSeedOut, plan.seeds.canvasSeed),
+       gpu: {
+         vendor: plan.seeds.gpu.vendor,
+         renderer: plan.seeds.gpu.renderer,
+@@ -408,12 +433,16 @@
+           const audioSeed = readU32Field(parsed, "audioSeed", "audio_seed");
+           const gpu = normalizeGpu(parsed.gpu);
+           if (canvasSeed !== null && audioSeed !== null && gpu) {
+-            return {
+-              canvasSeed,
+-              audioSeed,
+-              fontSeed: readFontSeed(parsed, canvasSeed, audioSeed),
+-              gpu,
+-            };
++            {
++              const fontSeed = readFontSeed(parsed, canvasSeed, audioSeed);
++              return {
++                canvasSeed,
++                audioSeed,
++                fontSeed,
++                speechSeed: readSpeechSeed(parsed, fontSeed, canvasSeed),
++                gpu,
++              };
++            }
+           }
+           // Partial snapshot: fill missing fields from seed fallback below,
+           // but keep present fields when we have a persona seed.
+@@ -433,12 +462,16 @@
+           const gpu = normalizeGpu(parsed.gpu);
+           // Need canvas+audio+gpu for a coherent depth payload; fontSeed fills.
+           if (canvasSeed !== null && audioSeed !== null && gpu) {
+-            return {
+-              canvasSeed,
+-              audioSeed,
+-              fontSeed: readFontSeed(parsed, canvasSeed, audioSeed),
+-              gpu,
+-            };
++            {
++              const fontSeed = readFontSeed(parsed, canvasSeed, audioSeed);
++              return {
++                canvasSeed,
++                audioSeed,
++                fontSeed,
++                speechSeed: readSpeechSeed(parsed, fontSeed, canvasSeed),
++                gpu,
++              };
++            }
+           }
+         }
+       } catch (_e) {}
+@@ -504,10 +537,13 @@
+     const audioSeed = (rng() * 0xffffffff) >>> 0;
+     // Soft residual (0036): fontSeed AFTER canvas/audio so prior digests unchanged.
+     const fontSeed = (rng() * 0xffffffff) >>> 0;
++    // Soft residual (0037): speechSeed AFTER fontSeed so prior digests unchanged.
++    const speechSeed = (rng() * 0xffffffff) >>> 0;
+     return {
+       canvasSeed,
+       audioSeed,
+       fontSeed,
++      speechSeed,
+       gpu: gpu2 || gpu,
+     };
+   },
+@@ -522,15 +558,22 @@
+       if (seeds) {
+         Services.prefs.setStringPref(
+           LAST_SEEDS_PREF,
+-          JSON.stringify({
+-            canvasSeed: seeds.canvasSeed >>> 0,
+-            audioSeed: seeds.audioSeed >>> 0,
+-            fontSeed:
++          JSON.stringify((() => {
++            const fontSeed =
+               seeds.fontSeed != null
+                 ? seeds.fontSeed >>> 0
+-                : deriveFontSeed(seeds.canvasSeed, seeds.audioSeed),
+-            gpu: seeds.gpu,
+-          })
++                : deriveFontSeed(seeds.canvasSeed, seeds.audioSeed);
++            return {
++              canvasSeed: seeds.canvasSeed >>> 0,
++              audioSeed: seeds.audioSeed >>> 0,
++              fontSeed,
++              speechSeed:
++                seeds.speechSeed != null
++                  ? seeds.speechSeed >>> 0
++                  : deriveSpeechSeed(fontSeed, seeds.canvasSeed),
++              gpu: seeds.gpu,
++            };
++          })())
+         );
+       } else {
+         Services.prefs.setStringPref(LAST_SEEDS_PREF, "");
+--- a/browser/components/DarkstrDepthHooksChild.sys.mjs
++++ b/browser/components/DarkstrDepthHooksChild.sys.mjs
+@@ -12,7 +12,11 @@
+  *   document.fonts.check (Firefox-plausible baseline; seed-tied hide of extras),
+  *   DOM offsetWidth/clientWidth/getBoundingClientRect width fudge. Seed via
+  *   depth fontSeed (eTLD-effective). Default-on with depth hooks. No Chrome
+- *   font-list cosplay. Speech/WebGPU out of scope.
++ *   font-list cosplay.
++ * Soft residual (0037): speechSynthesis.getVoices coherence — seed-tied
++ *   filter/reorder of host native voices only (no invented Chrome voices).
++ *   speechSeed after fontSeed. SpeechRecognition soft/out-of-scope when pref-off.
++ *   WebGPU out of scope.
+  * Brand: darkstr — not official LibreWolf.
+  *
+  * Fission note: this actor runs with chrome privileges while content prototypes
+@@ -268,6 +272,11 @@
+     typeof seeds.fontSeed === "number"
+       ? seeds.fontSeed >>> 0
+       : (canvasSeed ^ Math.imul(audioSeed, 0x9e3779b9)) >>> 0;
++  // Soft residual (0037): speechSeed after fontSeed; stable XOR fallback.
++  const speechSeed =
++    typeof seeds.speechSeed === "number"
++      ? seeds.speechSeed >>> 0
++      : (fontSeed ^ Math.imul(canvasSeed, 0x85ebca6b)) >>> 0;
+   const gpu = seeds.gpu || { vendor: "Apple", renderer: "Apple M1" };
+   const replacements = [];
+ 
+@@ -1061,8 +1070,239 @@
+         "getBoundingClientRect",
+         installedFonts.gbcr,
+         installedFonts.origGbcr,
++        "method"
++      );
++    }
++
++    // Soft residual (0037): speechSynthesis.getVoices coherence / fingerprint farbling.
++    // Brave-inspired sticky farbling, Firefox/LibreWolf/Gecko persona only —
++    // filter/reorder native host voices; NEVER invent Chrome-only voice names.
++    // Empty native list stays empty. Default voice always kept. Double-read /
++    // voiceschanged coherent via fingerprint-keyed cache. Default-on with depth.
++    // SpeechRecognition: soft residual — only lightly touch lang default when the
++    // pref-gated constructor is already exposed; do not synthesize webkit* APIs.
++    if (pageWindow.speechSynthesis?.getVoices ||
++        pageWindow.SpeechSynthesis?.prototype?.getVoices) {
++      const installSpeechInPage = new pageWindow.Function(
++        "seed",
++        `"use strict";
++var SEED = seed >>> 0;
++function hashStr(s) {
++  var h = SEED;
++  var str = String(s || "");
++  for (var i = 0; i < str.length; i++) {
++    h = Math.imul(h ^ str.charCodeAt(i), 0x01000193) >>> 0;
++  }
++  return h >>> 0;
++}
++function voiceKey(v) {
++  try {
++    return String(v.voiceURI || "") + "\\0" + String(v.name || "") + "\\0" + String(v.lang || "");
++  } catch (_e) {
++    return "";
++  }
++}
++function shouldKeepVoice(v, idx, total) {
++  // Always keep default voice(s) and the first voice (TTS compatibility).
++  try {
++    if (v && v.default) { return true; }
++  } catch (_e) {}
++  if (idx === 0) { return true; }
++  // Keep a deterministic majority (~3/4) of remaining native voices.
++  // Never invent voices — only subset of what the host already exposes.
++  return (hashStr(voiceKey(v)) & 3) !== 0;
++}
++function sortKey(v) {
++  return hashStr("ord:" + voiceKey(v));
++}
++var cacheBySig = Object.create(null);
++function listSignature(voices) {
++  var parts = [];
++  for (var i = 0; i < voices.length; i++) {
++    parts.push(voiceKey(voices[i]));
++  }
++  return parts.join("|");
++}
++function farbledFromNative(nativeList) {
++  var arr = [];
++  for (var i = 0; i < nativeList.length; i++) {
++    arr.push(nativeList[i]);
++  }
++  if (!arr.length) { return arr; }
++  var kept = [];
++  for (var j = 0; j < arr.length; j++) {
++    if (shouldKeepVoice(arr[j], j, arr.length)) {
++      kept.push(arr[j]);
++    }
++  }
++  // Guarantee non-empty when native was non-empty.
++  if (!kept.length) { kept.push(arr[0]); }
++  kept.sort(function(a, b) {
++    var ka = sortKey(a);
++    var kb = sortKey(b);
++    if (ka < kb) { return -1; }
++    if (ka > kb) { return 1; }
++    return 0;
++  });
++  // Stable secondary: defaults first after seed order for believable UX.
++  kept.sort(function(a, b) {
++    var da = 0, db = 0;
++    try { da = a.default ? 0 : 1; } catch (_e) {}
++    try { db = b.default ? 0 : 1; } catch (_e) {}
++    if (da !== db) { return da - db; }
++    var ka = sortKey(a);
++    var kb = sortKey(b);
++    if (ka < kb) { return -1; }
++    if (ka > kb) { return 1; }
++    return 0;
++  });
++  return kept;
++}
++
++var hooks = {
++  getVoices: null, origGetVoices: null, synthProto: null,
++  speechCtor: null, origLangDesc: null, langProto: null,
++  seed: SEED
++};
++
++var synth = null;
++if (typeof speechSynthesis !== "undefined" && speechSynthesis) {
++  synth = speechSynthesis;
++} else if (typeof SpeechSynthesis !== "undefined" && SpeechSynthesis.prototype) {
++  // Rare: operate on prototype if instance missing early.
++  synth = null;
++}
++var synthProto = null;
++if (synth) {
++  synthProto = Object.getPrototypeOf(synth);
++} else if (typeof SpeechSynthesis !== "undefined" && SpeechSynthesis.prototype) {
++  synthProto = SpeechSynthesis.prototype;
++}
++if (synthProto && typeof synthProto.getVoices === "function") {
++  var origGV = synthProto.getVoices;
++  var wrappedGV = function() {
++    var nativeList = origGV.apply(this, arguments);
++    if (!nativeList || !nativeList.length) {
++      return nativeList;
++    }
++    var sig = listSignature(nativeList);
++    if (cacheBySig[sig]) {
++      return cacheBySig[sig];
++    }
++    var farbled = farbledFromNative(nativeList);
++    cacheBySig[sig] = farbled;
++    return farbled;
++  };
++  Object.defineProperty(synthProto, "getVoices", {
++    configurable: true, enumerable: true, writable: true, value: wrappedGV
++  });
++  hooks.getVoices = wrappedGV;
++  hooks.origGetVoices = origGV;
++  hooks.synthProto = synthProto;
++}
++
++// Soft residual: SpeechRecognition / webkitSpeechRecognition lang default only
++// when already exposed (pref media.webspeech.recognition.enable). Do not create
++// the constructors — that would be Chrome cosplay / API invention.
++var SR = null;
++try {
++  if (typeof SpeechRecognition === "function") { SR = SpeechRecognition; }
++  else if (typeof webkitSpeechRecognition === "function") { SR = webkitSpeechRecognition; }
++} catch (_e) {}
++if (SR && SR.prototype) {
++  var langDesc = Object.getOwnPropertyDescriptor(SR.prototype, "lang");
++  if (langDesc && typeof langDesc.set === "function" && typeof langDesc.get === "function") {
++    var origGet = langDesc.get;
++    var origSet = langDesc.set;
++    // Seed-tied default lang when page leaves lang empty — Firefox-plausible BCP47.
++    var LANG_POOL = ["en-US", "en-GB", "en-CA", "en-AU", "fr-FR", "de-DE", "es-ES", "it-IT", "pt-BR", "ja-JP"];
++    var defaultLang = LANG_POOL[SEED % LANG_POOL.length];
++    var wrappedGet = function() {
++      var v = origGet.call(this);
++      if (v === "" || v == null) { return defaultLang; }
++      return v;
++    };
++    var wrappedSet = function(v) {
++      if (v === "" || v == null) {
++        return origSet.call(this, defaultLang);
++      }
++      return origSet.call(this, v);
++    };
++    Object.defineProperty(SR.prototype, "lang", {
++      configurable: true, enumerable: true, get: wrappedGet, set: wrappedSet
++    });
++    hooks.speechCtor = SR;
++    hooks.origLangDesc = langDesc;
++    hooks.langProto = SR.prototype;
++    hooks.langGet = wrappedGet;
++    hooks.langSet = wrappedSet;
++  }
++}
++
++return hooks;`
++      );
++
++      let installedSpeech;
++      try {
++        installedSpeech = installSpeechInPage(speechSeed >>> 0);
++      } catch (error) {
++        onRuntimeError("speech.installPage", error);
++        throw error;
++      }
++
++      function pushSpeechHook(proto, name, wrapper, original, kind) {
++        if (!proto || !wrapper || !original) {
++          return;
++        }
++        if (kind === "getter") {
++          replacements.push({
++            proto,
++            name,
++            wrapper,
++            originalDescriptor: {
++              configurable: true,
++              enumerable: true,
++              get: original,
++            },
++          });
++        } else if (kind === "accessor") {
++          replacements.push({
++            proto,
++            name,
++            wrapper,
++            originalDescriptor: original,
++          });
++        } else {
++          replacements.push({
++            proto,
++            name,
++            wrapper,
++            originalDescriptor: {
++              configurable: true,
++              enumerable: true,
++              writable: true,
++              value: original,
++            },
++          });
++        }
++      }
++
++      pushSpeechHook(
++        installedSpeech.synthProto,
++        "getVoices",
++        installedSpeech.getVoices,
++        installedSpeech.origGetVoices,
+         "method"
+       );
++      // lang accessor: restore via originalDescriptor blob if present
++      if (installedSpeech.langProto && installedSpeech.origLangDesc) {
++        replacements.push({
++          proto: installedSpeech.langProto,
++          name: "lang",
++          wrapper: installedSpeech.langGet,
++          originalDescriptor: installedSpeech.origLangDesc,
++        });
++      }
+     }
+ 
+     // AudioContext and OfflineAudioContext both expose AudioBuffer.
