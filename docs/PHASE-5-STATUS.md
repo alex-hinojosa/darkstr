@@ -9,7 +9,7 @@
 Phase 4 depth (through **0034** lastSeeds eTLD diag) is **CLOSED** / Proof PASS.  
 Phase 5 pin **0035 cookie firewall MVP** is **MERGED** / Proof XOR **PASS**.  
 Phase 5 pin **0036 fonts coherence** is **MERGED** / Proof XOR **PASS** (PR #67; see evidence below).
-Phase 5 pin **0037 speech coherence** is **IN PROGRESS** (PR pending; not Proof-PASS).
+Phase 5 pin **0037 speech coherence** is **MERGED** / Proof XOR **PASS** (PR #68; see evidence below).
 
 ## Completed — 0036 Fonts coherence / fingerprint farbling
 
@@ -97,17 +97,17 @@ All five font-coherence XOR gates passed on Proof tip `d01038b7d64c3dd95e581263d
 - PR [#67](https://github.com/alex-hinojosa/darkstr/pull/67) **MERGED** as `a49cf98b3f120e5c0d14336f2411c9638d4c0cff`; Proof XOR **PASS** on tip `d01038b7d64c3dd95e581263dca2fa47381b8d7c`
 - Apply log: `~/src/darkstr-gecko/darkstr-apply-0036-20260924-205605.log`
 
-## IN PROGRESS — 0037 Speech synthesis / SpeechRecognition coherence
+## Completed — 0037 Speech synthesis / SpeechRecognition coherence
 
 | Item | Status |
 |------|--------|
 | Pin | **0037** |
-| PR | [#68](https://github.com/alex-hinojosa/darkstr/pull/68) **OPEN** |
-| Tip | `8562e76dd81c572d1716227e99a74b5eff7fc7a1` |
+| PR | [#68](https://github.com/alex-hinojosa/darkstr/pull/68) **MERGED** as `fda34a4890ab9b5a8eeae7b5862e6ffddd5c8464` |
+| Tip at Proof | `f1ae094082f7c626a10caa9356d60a309977e971` |
 | Branch | `builder/phase5-speech-0037` |
 | Patch | [`patches/0037-darkstr-speech-coherence.patch`](../patches/0037-darkstr-speech-coherence.patch) |
 | Mini helper | [`scripts/apply-0037-speech-coherence-mini.sh`](../scripts/apply-0037-speech-coherence-mini.sh) / [`PHASE-5-SPEECH-0037-MINI-APPLY.sh`](PHASE-5-SPEECH-0037-MINI-APPLY.sh) |
-| Proof | **not claimed** — awaiting Proof XOR ACK |
+| Proof | **PASS** |
 
 ### Design summary
 
@@ -145,7 +145,7 @@ gains `speechSeed` (0034 path).
 No new default-off arm pref (justified: read-only voice-list subset/reorder; TTS
 still uses real host voices; SpeechRecognition soft and pref-gated upstream).
 
-### Proof gates — propose for Proof ACK (do not claim PASS)
+### Proof gates — PASS
 
 1. Hooks-off / Homogeneous → idle (host voices)
 2. Pollution+hooks: same seed → stable getVoices digests (double-read / voiceschanged)
@@ -153,9 +153,16 @@ still uses real host voices; SpeechRecognition soft and pref-gated upstream).
 4. Same eTLD two tabs → same digests / speechSeed
 5. Golden lock seed-42 coherent; no Chrome-only voice names in any surfaced list
 
-### Soft residuals (not FAIL)
+### Proof result — PASS
 
-- SpeechRecognition surface is best-effort when pref-off / ctor absent.
+All five speech-coherence XOR gates passed on Proof tip `f1ae094082f7c626a10caa9356d60a309977e971`.
+
+**Evidence:** `~/AgentDocs/proof/darkstr-pr68-0037-xor-20260928-004815/`
+
+**Soft residuals (not FAIL)**:
+
+- SpeechRecognition surface is best-effort when the pref is off / constructor is absent.
+- `getVoices()` may be empty before the host asynchronously populates native voices.
 - Voice-list subset may hide some non-default host voices under Pollution+hooks
   (TTS still works via kept default / first voice).
 - `voiceschanged` fires from host; farbled list updates only when native signature
@@ -181,13 +188,13 @@ still uses real host voices; SpeechRecognition soft and pref-gated upstream).
 - `./mach build --allow-subdirectory-build browser/components` — **OK** (~8s)
 - `make install-dist_bin` — Kept existing; moz-src symlinks refreshed
 - Symlinks: `dist/LibreWolf.app/.../moz-src/browser/components/DarkstrDepthHooks*.sys.mjs` → source (`speechSeed` / Soft residual 0037 present)
-- PR [#68](https://github.com/alex-hinojosa/darkstr/pull/68) **OPEN** tip `8562e76dd81c572d1716227e99a74b5eff7fc7a1`; Proof XOR **not claimed**
+- PR [#68](https://github.com/alex-hinojosa/darkstr/pull/68) **MERGED** as `fda34a4890ab9b5a8eeae7b5862e6ffddd5c8464`; Proof XOR **PASS** on tip `f1ae094082f7c626a10caa9356d60a309977e971`
 - Apply log: `~/src/darkstr-gecko/darkstr-apply-0037-20260926-131431.log`
 - Disk free after apply: ~9.3 Gi (Data volume)
 
 ## Next eng backlog
 
-0037 is **IN PROGRESS** (awaiting Proof). After 0037 PASS:
+0037 is **MERGED** / Proof XOR **PASS**.
 
 1. **WebGPU**
 
