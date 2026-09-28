@@ -334,7 +334,7 @@ webgpuSeed diverge, plainAdapterInfo non-empty / familiesCoherent).
 | Mini helper | [`scripts/apply-0042-cookie-echo-qi-mini.sh`](../scripts/apply-0042-cookie-echo-qi-mini.sh) / [`PHASE-5-COOKIE-0042-MINI-APPLY.sh`](PHASE-5-COOKIE-0042-MINI-APPLY.sh) |
 | Extends | **0035** Cookie firewall HTTP outbound path |
 | Mini apply | **OK** 2026-09-28 ~08:00 CDT (SoT + mach build browser/components; moz-src symlink live) |
-| Tip (Builder) | `75b61b426b8dbb97b223be57a5f517fdd18016d6` |
+| Tip (Builder) | `01fb03d1cd963cc4be5e42c841dcae0978724305` |
 | Local verify | **PASS** — `fetch('/echo', {credentials:'include'})` Cookie header = sandbox synthetic `net_probe=8ad45765c6b3be31` (was empty under 0035); `lastCookieOut` == `lastCookieSet`; `lastCookieErr` empty |
 | Proof | pending (do not ping from Builder) |
 
