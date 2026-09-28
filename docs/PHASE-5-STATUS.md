@@ -311,7 +311,7 @@ webgpuSeed diverge, plainAdapterInfo non-empty / familiesCoherent).
 
 ## Next eng backlog
 
-**Phase 5 eng depth backlog empty after 0039.** Soft residual **0042** Cookie `/echo` QI **CLOSED** / Proof-green. Soft residual **0043** Worker WebGPU **IN FLIGHT**. Remaining softs:
+**Phase 5 eng depth backlog empty after 0039.** Soft residual **0042** Cookie `/echo` QI **CLOSED** / Proof-green. Soft residual **0043** Worker WebGPU **OPEN** (PR #74). Remaining softs:
 
 | Pin | Residual | Status |
 |-----|----------|--------|
@@ -333,7 +333,7 @@ webgpuSeed diverge, plainAdapterInfo non-empty / familiesCoherent).
 |------|--------|
 | Pin | **0043** (soft residual after 0038 Worker OOS) |
 | PR | [#74](https://github.com/alex-hinojosa/darkstr/pull/74) **OPEN** |
-| Tip at Proof |  |
+| Tip at Proof | `e9598edd55ca05330248ce7b94858112c73c533e` |
 | Branch | `builder/phase5-webgpu-worker-0043` |
 | Patch | [`patches/0043-darkstr-webgpu-worker-coherence.patch`](../patches/0043-darkstr-webgpu-worker-coherence.patch) |
 | Apply SoT | [`patches/0043-files/`](../patches/0043-files/) (`DarkstrWorkerHooks.sys.mjs`, `DarkstrWorkerHooksChild.sys.mjs`) |
