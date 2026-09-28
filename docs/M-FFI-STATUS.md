@@ -1,7 +1,7 @@
 # Phase 2 M-FFI status — Gecko FFI boundary → live link
 
 **Brand:** darkstr — not official LibreWolf.  
-**Train target:** LibreWolf / Firefox **155.0.1-1**.
+**Train target:** LibreWolf / Firefox **156.0.1-1** (historical 155 pins remain in 0008 docs).
 
 ## Goal
 
@@ -16,7 +16,7 @@ Reviewed Rust→C ABI (`duppel-ffi`) consumed by Pollution chrome without hand-p
 | `darkstr_ffi.h` | **Landed** |
 | Train-pinned `patches/0008-darkstr-gecko-ffi-link.patch` (Approach **B**) | **This pin** |
 | Chrome `DarkstrFfi.sys.mjs` + `_readSnapshot` prefers FFI | **This pin** |
-| Approach A (gkrust path-dep into libxul) | **Deferred** (Cargo.lock) |
+| Approach A (gkrust path-dep into libxul) | **0040** — see [`M-FFI-0040-STATUS.md`](M-FFI-0040-STATUS.md) |
 | Mini apply + `mach` + symbol smoke EXIT recorded from authoring executor | **See M-FFI-0008-STATUS** |
 | `darkstr.nativePersonaHooks` default | **Still false** (unchanged) |
 | Headed Proof XOR / PM copy | **Not claimed** |
@@ -36,3 +36,4 @@ See [`M-FFI-0008-STATUS.md`](M-FFI-0008-STATUS.md).
 ## Follow-up
 
 - **0009**: [`M-FFI-0009-STATUS.md`](M-FFI-0009-STATUS.md).
+- **0040 Approach A**: [`M-FFI-0040-STATUS.md`](M-FFI-0040-STATUS.md).

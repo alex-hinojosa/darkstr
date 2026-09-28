@@ -8,7 +8,7 @@
 
 | Option | Choice | Why |
 |--------|--------|-----|
-| **A** gkrust path-dep (`toolkit/library/rust/shared` + `extern crate` → libxul) | Deferred | Needs live `cargo update -p gkrust-shared` on train `Cargo.lock`; Mini local-exec was unavailable to the authoring executor for lock iteration |
+| **A** gkrust path-dep (`toolkit/library/rust/shared` + `extern crate` → libxul) | **Follow-up 0040** | See [`M-FFI-0040-STATUS.md`](M-FFI-0040-STATUS.md) |
 | **B** release `cdylib` + chrome ctypes (`DarkstrFfi.sys.mjs`) | **Selected** | Symbols reachable from shipped `libduppel_ffi` next to the binary; chrome actually calls ABI; no Gecko lockfile rewrite |
 
 ## What this pin claims
@@ -24,7 +24,7 @@
 | Mini apply + FFI build + `mach` + `nm`/`otool`/`dlopen` EXIT from this executor | **No — blocked** (see below) |
 | Headed Proof XOR / merge-ready | **No** |
 | Cloudflare / TLS / JA3 / RFP metrics | **No** |
-| Approach A libxul-resident symbols | **No** |
+| Approach A libxul-resident symbols | **See 0040** |
 
 ## Mini verify steps (operator / Builder with machineId)
 
