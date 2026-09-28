@@ -123,6 +123,7 @@ golden lock keeps snapshot/global plan seeds.
 
 `darkstr.depth.lastSeeds` includes `webgpuSeed`. Farbling lives in
 `DarkstrDepthHooksChild` (window `navigator.gpu.requestAdapter` → Proxy adapter/
-device; features subset; soft `max*` limits; AdapterInfo mapped from depth `gpu`
-persona). LibreWolf `dom.webgpu.enabled` default **false** — hooks idle when
+device; seed-ranked features subset; soft `max*` limits; AdapterInfo mapped from depth `gpu`
+persona; `requestDevice` reuses adapter farbled features/limits/info via
+`sharedFeatCache` for adapter↔device coherence). LibreWolf `dom.webgpu.enabled` default **false** — hooks idle when
 `navigator.gpu` absent (soft-coherence; no API invention).

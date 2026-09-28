@@ -13,8 +13,9 @@ test -f "${PATCH}"
 
 if grep -Fq 'Soft residual (0038)' "${COMP}/DarkstrDepthHooksChild.sys.mjs" 2>/dev/null \
   && grep -Fq 'webgpuSeed' "${COMP}/DarkstrDepthHooks.sys.mjs" 2>/dev/null \
-  && grep -Fq 'installWebGpuInPage' "${COMP}/DarkstrDepthHooksChild.sys.mjs" 2>/dev/null; then
-  echo "0038 markers already present — skip patch apply"
+  && grep -Fq 'installWebGpuInPage' "${COMP}/DarkstrDepthHooksChild.sys.mjs" 2>/dev/null \
+  && grep -Fq 'sharedFeatCache' "${COMP}/DarkstrDepthHooksChild.sys.mjs" 2>/dev/null; then
+  echo "0038 markers already present (incl. sharedFeatCache a↔d fix) — skip patch apply"
 else
   # --forward: skips landed hunks if partially present
   patch -d "${DARKSTR_GECKO_ROOT}" -p1 --forward --batch < "${PATCH}" || true
@@ -24,6 +25,8 @@ grep -Fq 'webgpuSeed' "${COMP}/DarkstrDepthHooks.sys.mjs"
 grep -Fq 'installWebGpuInPage' "${COMP}/DarkstrDepthHooksChild.sys.mjs"
 grep -Fq 'deriveWebGpuSeed' "${COMP}/DarkstrDepthHooks.sys.mjs"
 grep -Fq 'wrapAdapter' "${COMP}/DarkstrDepthHooksChild.sys.mjs"
+grep -Fq 'sharedFeatCache' "${COMP}/DarkstrDepthHooksChild.sys.mjs"
+grep -Fq 'wrapDevice(dev, getFeat()' "${COMP}/DarkstrDepthHooksChild.sys.mjs"
 
 cd "${DARKSTR_GECKO_ROOT}"
 export MACH_SYSTEM_ASSERTED_COMPATIBLE_WITH_MACH_SITE=1

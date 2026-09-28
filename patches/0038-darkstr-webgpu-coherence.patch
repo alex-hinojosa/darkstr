@@ -31,7 +31,7 @@
 #
 # Marker: Soft residual (0038)
 
---- a/browser/components/DarkstrDepthHooks.sys.mjs	2026-09-28 01:29:51
+--- a/browser/components/DarkstrDepthHooks.sys.mjs
 +++ b/browser/components/DarkstrDepthHooks.sys.mjs
 @@ -33,8 +33,15 @@
   * stay intact) drives speechSynthesis.getVoices coherence in DepthHooksChild.
@@ -193,7 +193,7 @@
              };
            })())
 
---- a/browser/components/DarkstrDepthHooksChild.sys.mjs	2026-09-28 01:29:51
+--- a/browser/components/DarkstrDepthHooksChild.sys.mjs
 +++ b/browser/components/DarkstrDepthHooksChild.sys.mjs
 @@ -16,7 +16,11 @@
   * Soft residual (0037): speechSynthesis.getVoices coherence — seed-tied
@@ -220,21 +220,17 @@
    const gpu = seeds.gpu || { vendor: "Apple", renderer: "Apple M1" };
    const replacements = [];
  
-@@ -1301,6 +1310,343 @@
-           name: "lang",
-           wrapper: installedSpeech.langGet,
-           originalDescriptor: installedSpeech.origLangDesc,
-+        });
-+      }
-+    }
-+
+@@ -1305,6 +1314,440 @@
+       }
+     }
+ 
 +    // Soft residual (0038): WebGPU adapter/device/limits/features coherence.
 +    // LibreWolf defaults dom.webgpu.enabled=false — when navigator.gpu is absent,
 +    // skip entirely (idle; do not invent WebGPU API / Chrome adapters).
 +    // When exposed: wrap requestAdapter → Proxy adapter with seed-tied features
 +    // subset, soft limits fudge, and AdapterInfo coherent with depth gpu persona
-+    // (Firefox/LibreWolf/Gecko-plausible only). requestDevice similarly wraps
-+    // device features/limits/adapterInfo for adapter↔device coherence.
++    // (Firefox/LibreWolf/Gecko-plausible only). requestDevice reuses adapter
++    // farbled features/limits/info (sharedFeatCache) — not native device set.
 +    // Default-on with depth hooks. Homogeneous/hooks-off: idle.
 +    if (pageWindow.navigator?.gpu?.requestAdapter) {
 +      const installWebGpuInPage = new pageWindow.Function(
@@ -282,41 +278,55 @@
 +var ALWAYS_KEEP_FEATURES = {
 +  "core-features-and-limits": 1
 +};
-+function shouldKeepFeature(name) {
-+  if (ALWAYS_KEEP_FEATURES[name]) { return true; }
-+  // Keep a deterministic majority (~3/4) of host features; never invent names.
-+  return (hashStr("feat:" + name) & 3) !== 0;
-+}
++// Seed-ranked subset (0038 Proof FAIL fix): sort optional host features by
++// seed hash and drop a seed-tied count so different webgpuSeeds diverge.
++// Avoids &3 keep-mask collisions across eTLD (gate 3). Never invent names.
 +function wrapFeatures(nativeFeatures) {
 +  if (!nativeFeatures) { return nativeFeatures; }
-+  var kept = [];
++  var all = [];
 +  try {
 +    if (typeof nativeFeatures.forEach === "function") {
-+      nativeFeatures.forEach(function(name) {
-+        if (shouldKeepFeature(String(name))) { kept.push(String(name)); }
-+      });
++      nativeFeatures.forEach(function(name) { all.push(String(name)); });
 +    } else if (typeof nativeFeatures.values === "function") {
 +      var it = nativeFeatures.values();
 +      var step;
-+      while (!(step = it.next()).done) {
-+        var n = String(step.value);
-+        if (shouldKeepFeature(n)) { kept.push(n); }
-+      }
++      while (!(step = it.next()).done) { all.push(String(step.value)); }
 +    }
 +  } catch (_e) {
 +    return nativeFeatures;
 +  }
-+  // Guarantee non-empty when native was non-empty.
-+  if (!kept.length) {
-+    try {
-+      if (typeof nativeFeatures.values === "function") {
-+        var first = nativeFeatures.values().next();
-+        if (!first.done) { kept.push(String(first.value)); }
-+      }
-+    } catch (_e2) {}
++  var always = [];
++  var optional = [];
++  for (var i = 0; i < all.length; i++) {
++    if (ALWAYS_KEEP_FEATURES[all[i]]) { always.push(all[i]); }
++    else { optional.push(all[i]); }
 +  }
++  optional.sort(function(a, b) {
++    var ra = hashStr("rank:" + a);
++    var rb = hashStr("rank:" + b);
++    if (ra !== rb) { return ra < rb ? -1 : 1; }
++    if (a < b) { return -1; }
++    if (a > b) { return 1; }
++    return 0;
++  });
++  var drop = 0;
++  if (optional.length > 0) {
++    drop = 1 + (SEED % Math.min(3, optional.length));
++    if (drop > optional.length) { drop = optional.length; }
++    if (optional.length >= 2 && drop >= optional.length) {
++      drop = optional.length - 1;
++    }
++  }
++  var kept = always.concat(optional.slice(drop));
++  if (!kept.length && all.length) { kept.push(all[0]); }
++  var seen = Object.create(null);
++  var uniq = [];
++  for (var k = 0; k < kept.length; k++) {
++    if (!seen[kept[k]]) { seen[kept[k]] = 1; uniq.push(kept[k]); }
++  }
++  kept = uniq;
 +  var set = Object.create(null);
-+  for (var i = 0; i < kept.length; i++) { set[kept[i]] = 1; }
++  for (var j = 0; j < kept.length; j++) { set[kept[j]] = 1; }
 +  return {
 +    has: function(name) { return !!set[String(name)]; },
 +    values: function() {
@@ -335,15 +345,15 @@
 +      return {
 +        next: function() {
 +          if (idx >= kept.length) { return { done: true, value: undefined }; }
-+          var k = kept[idx++];
-+          return { done: false, value: [k, k] };
++          var kk = kept[idx++];
++          return { done: false, value: [kk, kk] };
 +        },
 +        [Symbol.iterator]: function() { return this; }
 +      };
 +    },
 +    forEach: function(cb, thisArg) {
-+      for (var j = 0; j < kept.length; j++) {
-+        cb.call(thisArg, kept[j], kept[j], this);
++      for (var j2 = 0; j2 < kept.length; j2++) {
++        cb.call(thisArg, kept[j2], kept[j2], this);
 +      }
 +    },
 +    get size() { return kept.length; }
@@ -383,14 +393,41 @@
 +}
 +function wrapLimits(nativeLimits) {
 +  if (!nativeLimits) { return nativeLimits; }
++  // Eager snapshot via native `this` — Proxy receiver breaks WebIDL getters
++  // (Proof soft: adapter.limits / device.limits read as {}).
++  var snapped = Object.create(null);
++  var snapKeys = Object.keys(FUDGE_LIMIT_KEYS).concat([
++    "minUniformBufferOffsetAlignment",
++    "minStorageBufferOffsetAlignment",
++    "maxBindGroupsPlusVertexBuffers",
++    "maxDynamicUniformBuffersPerPipelineLayout",
++    "maxDynamicStorageBuffersPerPipelineLayout",
++    "maxComputeWorkgroupSizeX",
++    "maxComputeWorkgroupSizeY",
++    "maxComputeWorkgroupSizeZ",
++    "maxInterStageShaderVariables",
++    "maxColorAttachmentBytesPerSample"
++  ]);
++  for (var si = 0; si < snapKeys.length; si++) {
++    var sk = snapKeys[si];
++    var sv;
++    try { sv = nativeLimits[sk]; } catch (_se) { continue; }
++    if (typeof sv === "number" || typeof sv === "bigint") {
++      snapped[sk] = fudgeLimit(sk, sv);
++    }
++  }
 +  return new Proxy(nativeLimits, {
 +    get: function(target, prop, receiver) {
 +      if (typeof prop === "symbol") {
-+        return Reflect.get(target, prop, receiver);
++        return Reflect.get(target, prop, target);
 +      }
 +      var key = String(prop);
 +      if (key === "then") { return undefined; }
-+      var raw = Reflect.get(target, prop, receiver);
++      if (Object.prototype.hasOwnProperty.call(snapped, key)) {
++        return snapped[key];
++      }
++      var raw;
++      try { raw = target[prop]; } catch (_e) { return undefined; }
 +      if (typeof raw === "function") {
 +        return raw.bind(target);
 +      }
@@ -408,7 +445,7 @@
 +  return new Proxy(nativeInfo || {}, {
 +    get: function(target, prop, receiver) {
 +      if (typeof prop === "symbol") {
-+        return Reflect.get(target, prop, receiver);
++        return Reflect.get(target, prop, target);
 +      }
 +      var key = String(prop);
 +      if (key === "vendor") { return base.vendor; }
@@ -417,22 +454,24 @@
 +      if (key === "description") { return base.description; }
 +      // Pass through isFallbackAdapter / subgroupMinSize / subgroupMaxSize / etc.
 +      try {
-+        return Reflect.get(target, prop, receiver);
++        return target[prop];
 +      } catch (_e) {
 +        return undefined;
 +      }
 +    }
 +  });
 +}
-+function wrapDevice(device) {
++// 0038 Proof FAIL fix: wrapDevice MUST reuse adapter farbled features/limits/info
++// (sharedFeatCache) — native default requestDevice() exposes a reduced set (n=1).
++function wrapDevice(device, sharedFeatures, sharedLimits, sharedInfo) {
 +  if (!device) { return device; }
-+  var featCache = null;
-+  var limCache = null;
-+  var infoCache = null;
++  var featCache = sharedFeatures || null;
++  var limCache = sharedLimits || null;
++  var infoCache = sharedInfo || null;
 +  return new Proxy(device, {
 +    get: function(target, prop, receiver) {
 +      if (typeof prop === "symbol") {
-+        return Reflect.get(target, prop, receiver);
++        return Reflect.get(target, prop, target);
 +      }
 +      var key = String(prop);
 +      if (key === "features") {
@@ -447,7 +486,8 @@
 +        if (!infoCache) { infoCache = wrapInfo(target.adapterInfo); }
 +        return infoCache;
 +      }
-+      var raw = Reflect.get(target, prop, receiver);
++      var raw;
++      try { raw = target[prop]; } catch (_e) { return undefined; }
 +      if (typeof raw === "function") {
 +        return raw.bind(target);
 +      }
@@ -460,33 +500,86 @@
 +  var featCache = null;
 +  var limCache = null;
 +  var infoCache = null;
++  function getFeat() {
++    if (!featCache) { featCache = wrapFeatures(adapter.features); }
++    return featCache;
++  }
++  function getLim() {
++    if (!limCache) { limCache = wrapLimits(adapter.limits); }
++    return limCache;
++  }
++  function getInfo() {
++    if (!infoCache) { infoCache = wrapInfo(adapter.info); }
++    return infoCache;
++  }
 +  return new Proxy(adapter, {
 +    get: function(target, prop, receiver) {
 +      if (typeof prop === "symbol") {
-+        return Reflect.get(target, prop, receiver);
++        return Reflect.get(target, prop, target);
 +      }
 +      var key = String(prop);
-+      if (key === "features") {
-+        if (!featCache) { featCache = wrapFeatures(target.features); }
-+        return featCache;
-+      }
-+      if (key === "limits") {
-+        if (!limCache) { limCache = wrapLimits(target.limits); }
-+        return limCache;
-+      }
-+      if (key === "info") {
-+        if (!infoCache) { infoCache = wrapInfo(target.info); }
-+        return infoCache;
-+      }
++      if (key === "features") { return getFeat(); }
++      if (key === "limits") { return getLim(); }
++      if (key === "info") { return getInfo(); }
 +      if (key === "requestDevice") {
 +        var origRD = target.requestDevice;
 +        return function(desc) {
-+          return Promise.resolve(origRD.apply(target, arguments)).then(function(dev) {
-+            return wrapDevice(dev);
++          var farbled = getFeat();
++          var forced = false;
++          var newDesc;
++          if (desc === undefined || desc === null) {
++            newDesc = {};
++            forced = true;
++          } else {
++            try {
++              newDesc = Object.assign({}, desc);
++            } catch (_eAssign) {
++              newDesc = desc;
++            }
++          }
++          if (newDesc && typeof newDesc === "object") {
++            var reqIn = newDesc.requiredFeatures;
++            var reqOut = [];
++            if (reqIn && typeof reqIn.length === "number" && reqIn.length > 0) {
++              for (var ri = 0; ri < reqIn.length; ri++) {
++                var fn = String(reqIn[ri]);
++                if (!farbled.has(fn)) {
++                  return Promise.reject(
++                    new TypeError(
++                      "Failed to execute 'requestDevice' on 'GPUAdapter': " +
++                      "Invalid feature call. Missing feature: " + fn
++                    )
++                  );
++                }
++                reqOut.push(fn);
++              }
++              newDesc.requiredFeatures = reqOut;
++            } else {
++              // No/partial requiredFeatures: constrain to farbled adapter set so
++              // native device.features stay coherent with adapter.features.
++              farbled.forEach(function(n) { reqOut.push(n); });
++              if (reqOut.length) {
++                newDesc.requiredFeatures = reqOut;
++                forced = true;
++              }
++            }
++          }
++          function finish(dev) {
++            return wrapDevice(dev, getFeat(), getLim(), getInfo());
++          }
++          var p = Promise.resolve(origRD.call(target, newDesc));
++          if (!forced) {
++            return p.then(finish);
++          }
++          return p.then(finish, function(_err) {
++            // If forcing farbled requiredFeatures fails, retry original desc
++            // but still expose shared adapter farbled caches on the device.
++            return Promise.resolve(origRD.call(target, desc)).then(finish);
 +          });
 +        };
 +      }
-+      var raw = Reflect.get(target, prop, receiver);
++      var raw;
++      try { raw = target[prop]; } catch (_e) { return undefined; }
 +      if (typeof raw === "function") {
 +        return raw.bind(target);
 +      }
@@ -561,6 +654,10 @@
 +            writable: true,
 +            value: installedWebGpu.origRequestAdapter,
 +          },
-         });
-       }
-     }
++        });
++      }
++    }
++
+     // AudioContext and OfflineAudioContext both expose AudioBuffer.
+     // Soft residual (pin 2 / PR #47 XOR FAIL f18c0b6): chrome-exported
+     // getChannelData + waived Float32Array.set stayed inert on OfflineAudio

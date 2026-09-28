@@ -10,7 +10,9 @@ Phase 4 depth (through **0034** lastSeeds eTLD diag) is **CLOSED** / Proof PASS.
 Phase 5 pin **0035 cookie firewall MVP** is **MERGED** / Proof XOR **PASS**.  
 Phase 5 pin **0036 fonts coherence** is **MERGED** / Proof XOR **PASS** (PR #67; see evidence below).
 Phase 5 pin **0037 speech coherence** is **MERGED** / Proof XOR **PASS** (PR #68; see evidence below).
-Phase 5 pin **0038 WebGPU coherence** is **IN PROGRESS** (PR pending Proof XOR — do not claim PASS).
+Phase 5 pin **0038 WebGPU coherence** is **IN PROGRESS** (PR [#69](https://github.com/alex-hinojosa/darkstr/pull/69) — do not claim PASS).
+
+**Proof XOR FAIL** on tip `bbe308d9d3a509a953b153f25e2fcacbc991ee24` (2026-09-28): `wrapDevice` wrapped native device features (n=1) instead of adapter farbled set (n=13); gate 3 feature-subset keep-masks collided across eTLD despite `webgpuSeed` diverge. Eng fix: `sharedFeatCache` (device reuses adapter farbled features/limits/info), seed-ranked feature drop, limits eager snapshot for WebIDL. Re-XOR pending — Builder does not ping Proof.
 
 ## Completed — 0036 Fonts coherence / fingerprint farbling
 
