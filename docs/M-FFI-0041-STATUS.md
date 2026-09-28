@@ -5,7 +5,7 @@
 **Patch:** [`../patches/0041-darkstr-ffi-retire-approach-b.patch`](../patches/0041-darkstr-ffi-retire-approach-b.patch)  
 **SoT file:** [`../patches/0041-files/DarkstrFfi.sys.mjs`](../patches/0041-files/DarkstrFfi.sys.mjs)  
 **PR:** [#72](https://github.com/alex-hinojosa/darkstr/pull/72) (open — do not merge)  
-**Tip:** `b593a152372ca391926348669f5f895ab7f353a8`  
+**Tip:** `fa721e73029dd2e51f2799d6a5ac77a77205b88d`  
 **Branch:** `builder/m-ffi-retire-approach-b-0041`  
 **Prerequisite:** Approach A **0040** Proof-green on main (PR [#71](https://github.com/alex-hinojosa/darkstr/pull/71) MERGED `f828a78`).  
 **Proof:** *open — Builder Mini apply + local smoke; do not ping Proof until Builder paste ready.*
