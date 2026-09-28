@@ -213,6 +213,7 @@ See [`SEED-COHERENCE.md`](SEED-COHERENCE.md).
 | Also mirrored | `LibreWolf.app/Contents/MacOS/` and `…/Resources/` (parity with 155) |
 | Symbols | `darkstr_ffi_abi_version`, `darkstr_ffi_persona_snapshot_json`, `darkstr_ffi_string_free` (`nm -gU`) |
 | Mini helper | [`PHASE-4-FFI-MINI-INSTALL.sh`](PHASE-4-FFI-MINI-INSTALL.sh) |
+| Approach A (0040) | **Proof-green on main** (PR #71) — Prefer A then B; B cdylib path still valid as fallback; see [`M-FFI-0040-STATUS.md`](M-FFI-0040-STATUS.md) |
 | DMG | **Skipped** (disk ~16 Gi free; keep 156 objdir) |
 
 ### Verify (no full package)

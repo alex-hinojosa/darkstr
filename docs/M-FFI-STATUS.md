@@ -16,15 +16,18 @@ Reviewed Rust→C ABI (`duppel-ffi`) consumed by Pollution chrome without hand-p
 | `darkstr_ffi.h` | **Landed** |
 | Train-pinned `patches/0008-darkstr-gecko-ffi-link.patch` (Approach **B**) | **This pin** |
 | Chrome `DarkstrFfi.sys.mjs` + `_readSnapshot` prefers FFI | **This pin** |
-| Approach A (gkrust path-dep into libxul) | **0040** — see [`M-FFI-0040-STATUS.md`](M-FFI-0040-STATUS.md) |
-| Mini apply + `mach` + symbol smoke EXIT recorded from authoring executor | **See M-FFI-0008-STATUS** |
+| Approach A (gkrust path-dep into libxul) | **0040 Proof-green on main** — PR [#71](https://github.com/alex-hinojosa/darkstr/pull/71) MERGED `f828a78`; see [`M-FFI-0040-STATUS.md`](M-FFI-0040-STATUS.md) |
+| Chrome Prefer A then B | **Landed** — in-process XUL/libxul first; Approach B cdylib fallback retained |
+| Mini apply + `mach` + symbol smoke EXIT recorded from authoring executor | **See M-FFI-0008-STATUS** (B) / **M-FFI-0040-STATUS** (A) |
 | `darkstr.nativePersonaHooks` default | **Still false** (unchanged) |
-| Headed Proof XOR / PM copy | **Not claimed** |
+| Approach B load-path retirement | **Open follow-up** — B retained in #71 merge |
+| Headed Prefer A / PM copy | **Not claimed** (optional headed soft-OK) |
 
 ## Honesty
 
 - Snapshot JSON matches `docs/SEED-COHERENCE.md` / `fixtures/seed-goldens.json` SoT (Rust `generate_persona`).
-- JS mulberry `_generateFromSeed` remains fallback when the cdylib is missing.
+- Chrome **prefers Approach A** (XUL/libxul in-process) then **Approach B** (cdylib); JS mulberry `_generateFromSeed` remains last-resort fallback.
+- Approach B load path is **retained**; retirement is an open follow-up (not done in #71).
 - No Cloudflare / TLS / JA3 / RFP metric customization.
 - Brand: darkstr — not official LibreWolf.
 
@@ -36,4 +39,4 @@ See [`M-FFI-0008-STATUS.md`](M-FFI-0008-STATUS.md).
 ## Follow-up
 
 - **0009**: [`M-FFI-0009-STATUS.md`](M-FFI-0009-STATUS.md).
-- **0040 Approach A**: [`M-FFI-0040-STATUS.md`](M-FFI-0040-STATUS.md).
+- **0040 Approach A**: [`M-FFI-0040-STATUS.md`](M-FFI-0040-STATUS.md) — **Proof PASS / MERGED** on main; Prefer A then B; B retirement still open.

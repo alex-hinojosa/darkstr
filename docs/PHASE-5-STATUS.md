@@ -13,7 +13,7 @@ Phase 5 pin **0037 speech coherence** is **MERGED** / Proof XOR **PASS** (PR #68
 Phase 5 pin **0038 WebGPU coherence** is **MERGED** / Proof XOR **PASS** (PR [#69](https://github.com/alex-hinojosa/darkstr/pull/69); see evidence below).
 
 Phase 5 pin **0039 FontFaceSet enumeration coherence** is **MERGED** / Proof XOR **PASS** (PR [#70](https://github.com/alex-hinojosa/darkstr/pull/70); see evidence below) — soft-residual polish extending 0036 `check`→enumeration; not a new depth surface.
-Phase 5 eng **depth backlog empty**; soft residuals remain (see backlog table). Native privacy-pane UI is PM-owned; Approach A FFI is in flight separately (do not touch from this close).
+Phase 5 eng **depth backlog empty**; soft residuals remain (see backlog table). Native privacy-pane UI is PM-owned. Approach A FFI (**0040**) is **Proof-green on main** (PR [#71](https://github.com/alex-hinojosa/darkstr/pull/71) MERGED `f828a78`) — Prefer A then B; B retirement open follow-up; hooks default-off. See [`M-FFI-0040-STATUS.md`](M-FFI-0040-STATUS.md).
 
 ## Completed — 0036 Fonts coherence / fingerprint farbling
 
@@ -319,7 +319,24 @@ webgpuSeed diverge, plainAdapterInfo non-empty / familiesCoherent).
 | — | FFI `libduppel_ffi` not in DMG `package-manifest.in` | Packaging residual (not depth) |
 | — | `document.fonts.ready` still host Promise | Soft (by design; not wrapped in 0039) |
 | — | Native privacy-pane UI | PM-owned |
-| — | Approach A FFI | In flight separately (do not touch from #70 close) |
+| — | Approach A FFI (**0040**) | **MERGED** / Proof **PASS** (PR #71 `f828a78`); Prefer A then B; **B retirement open follow-up** (load path retained); hooks default-off |
+| — | Approach B load-path retirement | Soft / open follow-up (do **not** delete in #71 close) |
+
+## Completed — 0040 Approach A FFI (gkrust → libxul)
+
+| Item | Status |
+|------|--------|
+| Pin | **0040** (M-FFI Approach A) |
+| PR | [#71](https://github.com/alex-hinojosa/darkstr/pull/71) **MERGED** as `f828a78d255aa3fad61c062ffd44912cd7e0b5c9` |
+| Tip at Proof | `73e7e4fcb5e7d630e4e20b71f3165ea63b3426f9` |
+| Branch | `builder/m-ffi-approach-a-libxul` |
+| Patch | [`patches/0040-darkstr-ffi-gkrust-libxul.patch`](../patches/0040-darkstr-ffi-gkrust-libxul.patch) |
+| Status docs | [`M-FFI-0040-STATUS.md`](M-FFI-0040-STATUS.md) / [`M-FFI-STATUS.md`](M-FFI-STATUS.md) |
+| Mini apply | **OK** — `./mach build --allow-subdirectory-build toolkit/library` EXIT 0 (~846s); `nm -gU XUL` → 3× `darkstr_ffi_*` |
+| Proof | **PASS** |
+| Evidence | `~/AgentDocs/proof/darkstr-pr71-0040-xor-20260928-074243/` + [PR comment](https://github.com/alex-hinojosa/darkstr/pull/71#issuecomment-5870086745) |
+
+**Prefer A then B** on main. Approach B cdylib load path **retained** (retirement open follow-up). `nativePersonaHooks` remains **default-off**.
 
 ## Completed — 0039 FontFaceSet enumeration coherence
 
@@ -365,7 +382,7 @@ All five FontFaceSet-enumeration XOR gates passed on Proof tip `4810eb6a2deea687
 
 - `document.fonts.ready` remains the host load-completion Promise (**not wrapped** by design).
 - DOM width fudge ≤0.1% (0036 accepted).
-- Remaining soft list (not this pin): Cookie 0035 `/echo` Cookie empty; Speech 0037 pref-off / empty voices before async; WebGPU 0038 Worker OOS / AdapterInfo.device empty; FFI dylib not in DMG `package-manifest.in`; Approach A FFI in flight separately; Native privacy-pane UI (PM).
+- Remaining soft list (not this pin): Cookie 0035 `/echo` Cookie empty; Speech 0037 pref-off / empty voices before async; WebGPU 0038 Worker OOS / AdapterInfo.device empty; FFI dylib not in DMG `package-manifest.in`; Approach A **0040** Proof-green (B retirement open); Native privacy-pane UI (PM).
 
 ### Out of scope (this pin)
 
@@ -408,9 +425,10 @@ Pin detail: [`MINI-PACKAGE-PIN.md`](MINI-PACKAGE-PIN.md). Builder may offer Proo
 What is **not** eng-owned next (do not invent pins):
 
 - **Native privacy-pane UI** — PM-owned
-- **Approach A FFI** — in flight separately (do not touch from #70 docs close)
+- **Approach A FFI (0040)** — **Proof-green on main** (PR #71); Prefer A then B; B load path retained; B retirement open follow-up; hooks default-off — see [`M-FFI-0040-STATUS.md`](M-FFI-0040-STATUS.md)
+- **Approach B load-path retirement** — open follow-up (do not start from this close)
 
-No new eng pins started from this close.
+No new eng pins started from this close (no B retirement / no new pins).
 
 ## Completed — 0035 Cookie firewall MVP
 
