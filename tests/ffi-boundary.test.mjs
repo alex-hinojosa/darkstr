@@ -61,3 +61,33 @@ test("control-plane crates still forbid unsafe", () => {
     assert.match(lib, /forbid\(unsafe_code\)/, name);
   }
 });
+
+test("0041 retires Approach B runtime load (A-only)", () => {
+  const patchPath = join(root, "patches/0041-darkstr-ffi-retire-approach-b.patch");
+  assert.ok(existsSync(patchPath));
+  const patch = readFileSync(patchPath, "utf8");
+  assert.match(patch, /^diff /m);
+  assert.match(patch, /0041: Retire B/);
+  assert.match(patch, /Approach A \(only runtime path\)/);
+  assert.match(patch, /cdylibCandidates/);
+  assert.ok(existsSync(join(root, "patches/0041-files/DarkstrFfi.sys.mjs")));
+  const sot = readFileSync(join(root, "patches/0041-files/DarkstrFfi.sys.mjs"), "utf8");
+  assert.match(sot, /0041: Retire B/);
+  assert.match(sot, /only runtime path/);
+  assert.doesNotMatch(sot, /cdylibCandidates/);
+  assert.doesNotMatch(sot, /kind: "cdylib"/);
+  assert.match(sot, /soft-fail → JS mulberry|JS seed/);
+  const status = readFileSync(join(root, "docs/M-FFI-0041-STATUS.md"), "utf8");
+  assert.match(status, /Retire Approach B/);
+  assert.match(status, /nativePersonaHooks/);
+  assert.match(status, /Still false|default-off/i);
+  const sh = readFileSync(join(root, "patches/scripts/apply-darkstr-patches.sh"), "utf8");
+  assert.match(sh, /0041-darkstr-ffi-retire-approach-b\.patch/);
+  assert.match(sh, /004\*\.patch/);
+  const install = readFileSync(join(root, "docs/PHASE-4-FFI-MINI-INSTALL.sh"), "utf8");
+  assert.match(install, /RETIRED for product|DARKSTR_FFI_ALLOW_B_INSTALL/);
+  // Crate may still declare cdylib for unit tests
+  const cargo = readFileSync(join(root, "crates/duppel-ffi/Cargo.toml"), "utf8");
+  assert.match(cargo, /cdylib/);
+});
+

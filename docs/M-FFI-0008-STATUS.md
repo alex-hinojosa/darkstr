@@ -94,3 +94,6 @@ Also: `docs/M-FFI-0008-MINI-VERIFY.sh` when present.
 
 **Still not claimed:** headed Proof XOR; Approach A libxul; PM copy; hooks default-on.
 
+## Supersession
+
+**0041** retires Approach B **runtime** load (chrome ctypes / `libduppel_ffi` candidate list). Product FFI path is Approach A only (`M-FFI-0040` + `M-FFI-0041`). This 0008 pin remains historical SoT for the third_party vendor + initial DarkstrFfi landing. Crate may still build `cdylib` for unit tests; `PHASE-4-FFI-MINI-INSTALL.sh` is gated off unless `DARKSTR_FFI_ALLOW_B_INSTALL=1`.

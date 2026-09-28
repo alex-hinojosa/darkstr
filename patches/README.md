@@ -28,6 +28,8 @@ Design pin: [`../docs/GECKO-HOOKS.md`](../docs/GECKO-HOOKS.md). Bridge: [`../doc
 
 Phase 5 depth pins (real patches): [`0035`](0035-darkstr-cookie-firewall.patch) cookie · [`0036`](0036-darkstr-fonts-coherence.patch) fonts · [`0037`](0037-darkstr-speech-coherence.patch) speech · [`0038`](0038-darkstr-webgpu-coherence.patch) WebGPU. Soft residual: [`0039`](0039-darkstr-fonts-enum-coherence.patch) FontFaceSet enum (extends 0036).
 
+FFI: [`0040`](0040-darkstr-ffi-gkrust-libxul.patch) Approach A gkrust→libxul (Proof-green). [`0041`](0041-darkstr-ffi-retire-approach-b.patch) retire Approach B cdylib/ctypes runtime load (A-only).
+
 
 ## Intended apply flow (real fork)
 

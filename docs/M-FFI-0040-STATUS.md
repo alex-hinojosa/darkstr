@@ -13,7 +13,7 @@
 | Option | Choice | Why |
 |--------|--------|-----|
 | **A** gkrust path-dep (`toolkit/library/rust/shared` + `extern crate` → libxul/XUL) | **Selected / Proof-green on main** | Rust persona ABI symbols live in libxul; chrome Prefer A via ctypes on XUL |
-| **B** release `cdylib` + chrome ctypes | **Fallback retained** | Prefer A then B; B load path **not** deleted in #71 merge; retirement is open follow-up |
+| **B** release `cdylib` + chrome ctypes | **Fallback retained in #71; retired in 0041** | Prefer A then B at #71 merge; see [`M-FFI-0041-STATUS.md`](M-FFI-0041-STATUS.md) |
 
 ## What this pin changes
 
@@ -36,7 +36,7 @@
 | Mini gkrust + XUL link + `nm` on XUL | **Yes** (Builder + Proof) |
 | Proof XOR PASS / merge on main | **Yes** — PR #71 MERGED `f828a78` |
 | Headed Prefer A (`loadSource=libxul`) | **Optional / soft-OK** (not executed; A symbols + Prefer A order verified) |
-| Approach B retirement (delete cdylib load path) | **No** — B retained; open follow-up |
+| Approach B retirement (delete cdylib load path) | **Follow-up 0041** — see M-FFI-0041-STATUS |
 | Cloudflare / TLS / JA3 / RFP metrics | **No** |
 
 ## Mini apply / build
@@ -68,9 +68,9 @@ nm -gU "$XUL" | grep darkstr_ffi_
 
 ## Soft residuals / B retirement plan
 
-1. **Prefer A then B** on main: chrome tries in-process XUL/libxul first, then Approach B cdylib.
-2. **B load path retained** in this merge — do **not** delete `build-and-install-ffi.sh` / PHASE-4 install / cdylib ctypes path yet.
-3. **B retirement** remains an **open follow-up** (optional keep as emergency ctypes path).
+1. **Prefer A then B** was the #71 merge state: chrome tried in-process XUL/libxul first, then Approach B cdylib.
+2. **B retirement** → follow-up pin **[`M-FFI-0041-STATUS.md`](M-FFI-0041-STATUS.md)** (retire cdylib/ctypes runtime load; A-only).
+3. `build-and-install-ffi.sh` / crate `cdylib` kept for unit tests; PHASE-4 install gated off for product (0041).
 4. `nativePersonaHooks` remains **default-off**.
 5. Disk: full XUL link is heavy — Builder recorded ~21→16 Gi during Mini LTO/link.
 

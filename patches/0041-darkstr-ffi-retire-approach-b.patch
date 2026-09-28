@@ -1,0 +1,137 @@
+# darkstr 0041 — Retire Approach B cdylib/ctypes runtime load (LibreWolf / Firefox 156.0.1-1)
+# Brand: darkstr — not official LibreWolf. Product FFI path is A-only (libxul/XUL).
+# Prerequisite: 0040 Approach A Proof-green on main. Do NOT flip nativePersonaHooks.
+# Do NOT remove Approach A. Soft-fail → JS mulberry when A missing.
+# Apply: patch -d "$DARKSTR_GECKO_ROOT" -p1 < patches/0041-darkstr-ffi-retire-approach-b.patch
+# Or SoT copy: cp patches/0041-files/DarkstrFfi.sys.mjs $DARKSTR_GECKO_ROOT/browser/components/
+# Rebuild: ./mach build --allow-subdirectory-build browser/components (+ install-dist_bin).
+# Chrome-only — no XUL/gkrust relink. Crate may still build cdylib for unit tests.
+#
+diff -ruN a/browser/components/DarkstrFfi.sys.mjs b/browser/components/DarkstrFfi.sys.mjs
+--- a/browser/components/DarkstrFfi.sys.mjs	2026-09-28 07:48:57
++++ b/browser/components/DarkstrFfi.sys.mjs	2026-09-28 07:48:57
+@@ -7,16 +7,20 @@
+  *
+  * Train: LibreWolf / Firefox 156.0.1-1. Brand: darkstr — not official LibreWolf.
+  *
+- * Approach A (prefer): declare darkstr_ffi_* from in-process libxul / XUL
+- *   (gkrust path-dep; symbols exported via toolkit/library/libxul.symbols).
+- * Approach B (fallback): side-loaded libduppel_ffi.{dylib,so,dll} via ctypes
+- *   from CurProcD / GreD / XREExeF parent (0008/0009).
++ * Approach A (only runtime path): declare darkstr_ffi_* from in-process
++ *   libxul / XUL (gkrust path-dep; symbols exported via toolkit/library/libxul.symbols).
+  *
+- * Honesty: fails soft when neither path works; callers keep JS seed fallback.
+- * nativePersonaHooks stays default-off. No Cloudflare/TLS/JA3/RFP metrics.
++ * Approach B (cdylib / ctypes side-load of libduppel_ffi) is **retired** for
++ * runtime load (0041). Keep crate `cdylib` for unit tests / offline builds only;
++ * product path must not require a side-loaded dylib.
+  *
++ * Honesty: fails soft when A symbols unavailable; callers keep JS seed
++ * (mulberry) fallback. nativePersonaHooks stays default-off.
++ * No Cloudflare/TLS/JA3/RFP metrics.
++ *
+  * 0009b: timed retry (no permanent lockout); darkstr.ffi.lastError debug pref.
+  * 0040: Prefer A (libxul-resident) over B (cdylib).
++ * 0041: Retire B runtime load — A-only; soft-fail → JS mulberry.
+  */
+ 
+ const lazy = {};
+@@ -33,13 +37,9 @@
+ let gFree = null;
+ let gLoadError = null;
+ let gNextRetryMs = 0;
+-/** @type {"libxul"|"cdylib"|null} */
++/** @type {"libxul"|null} */
+ let gLoadSource = null;
+ 
+-function libraryFileName() {
+-  return lazy.ctypes.libraryName("duppel_ffi");
+-}
+-
+ function joinPath(dir, name) {
+   if (!dir) {
+     return name;
+@@ -89,27 +89,6 @@
+   return paths;
+ }
+ 
+-/** Approach B: side-loaded cdylib next to the binary. */
+-function cdylibCandidates() {
+-  const name = libraryFileName();
+-  const paths = [];
+-  const pushDir = dirPath => {
+-    if (dirPath) {
+-      paths.push(joinPath(dirPath, name));
+-    }
+-  };
+-  for (const key of ["CurProcD", "GreD", "XCurProcD"]) {
+-    try {
+-      pushDir(Services.dirsvc.get(key, Ci.nsIFile).path);
+-    } catch (_e) {}
+-  }
+-  try {
+-    pushDir(Services.dirsvc.get("XREExeF", Ci.nsIFile).parent.path);
+-  } catch (_e) {}
+-  paths.push(name);
+-  return paths;
+-}
+-
+ function tryOpenPath(path) {
+   const lib = lazy.ctypes.open(path);
+   const abiVersion = lib.declare(
+@@ -149,10 +128,8 @@
+     return false;
+   }
+ 
+-  const stages = [
+-    { kind: "libxul", paths: inProcessCandidates() },
+-    { kind: "cdylib", paths: cdylibCandidates() },
+-  ];
++  // 0041: A-only — Approach B cdylib candidate list / ctypes load retired.
++  const stages = [{ kind: "libxul", paths: inProcessCandidates() }];
+   const tried = [];
+   for (const stage of stages) {
+     for (const path of stage.paths) {
+@@ -178,7 +155,7 @@
+   if (!gLoadError) {
+     setLoadError(`no candidates (tried=${tried.join("|") || "none"})`);
+   }
+-  console.warn("DarkstrFfi: load failed —", gLoadError);
++  console.warn("DarkstrFfi: load failed (A-only; B retired) —", gLoadError);
+   gNextRetryMs = Date.now() + 1500;
+   return false;
+ }
+@@ -241,7 +218,7 @@
+   return gLoadError;
+ }
+ 
+-/** @returns {"libxul"|"cdylib"|null} */
++/** @returns {"libxul"|null} */
+ export function loadSource() {
+   return gLoadSource;
+ }
+diff -ruN a/browser/components/DarkstrNativePersona.sys.mjs b/browser/components/DarkstrNativePersona.sys.mjs
+--- a/browser/components/DarkstrNativePersona.sys.mjs	2026-09-28 07:48:57
++++ b/browser/components/DarkstrNativePersona.sys.mjs	2026-09-28 07:48:58
+@@ -923,7 +923,7 @@
+       }
+     } catch (_e) {}
+ 
+-    // Seed path when snapshot pref empty: prefer Rust FFI SoT (0008), else JS mulberry.
++    // Seed path when snapshot pref empty: prefer Rust FFI SoT (A/libxul), else JS mulberry.
+     let seed = 0;
+     try {
+       seed = Services.prefs.getIntPref(SEED_PREF, 0);
+@@ -941,8 +941,9 @@
+   },
+ 
+   /**
+-   * Approach B: ctypes → libduppel_ffi in CurProcD/GreD (darkstr_ffi_* ABI).
+-   * Soft-fail when dylib missing so JS seed fallback remains.
++   * Approach A: ctypes → in-process libxul/XUL darkstr_ffi_* ABI (0040/0041).
++   * Soft-fail when A unavailable → JS mulberry seed fallback.
++   * Approach B cdylib runtime load retired (0041).
+    */
+   _readSnapshotFromFfi(seed, persist = true) {
+     try {
