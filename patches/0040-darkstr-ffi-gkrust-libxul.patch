@@ -1,0 +1,295 @@
+# darkstr 0040 — Approach A: gkrust path-dep duppel-ffi → libxul (LibreWolf / Firefox 156.0.1-1)
+# Brand: darkstr — not official LibreWolf. Prefer A (libxul-resident symbols) over B (cdylib).
+# Prerequisite: 0008 + 0009 (third_party/darkstr crates + DarkstrFfi). Do NOT flip nativePersonaHooks.
+# Apply: patch -d "$DARKSTR_GECKO_ROOT" -p1 < patches/0040-darkstr-ffi-gkrust-libxul.patch
+# Rebuild: ./mach build toolkit/library   (gkrust + XUL link). Cargo.lock included.
+# Symbol smoke: nm -gU obj-*/dist/bin/XUL | grep darkstr_ffi_
+# Honesty: Approach B remains fallback until Proof-green A; hooks default-off; no PM/Cloudflare claims.
+#
+--- a/toolkit/library/rust/shared/Cargo.toml
++++ b/toolkit/library/rust/shared/Cargo.toml
+@@ -47,6 +47,7 @@
+ storage = { path = "../../../../storage/rust" }
+ bookmark_sync = { path = "../../../components/places/bookmark_sync", optional = true }
+ buildid_reader_ffi = { path = "../../buildid_reader/ffi" }
++duppel-ffi = { path = "../../../../third_party/darkstr/duppel-ffi" }
+ chardetng_c = "1.0.0"
+ audio_thread_priority = { version = "0.37", default-features = false }
+ mdns_service = { path="../../../../dom/media/webrtc/transport/mdns_service", optional = true }
+--- a/toolkit/library/rust/shared/lib.rs
++++ b/toolkit/library/rust/shared/lib.rs
+@@ -16,6 +16,7 @@
+ #[cfg(feature = "moz_places")]
+ extern crate bookmark_sync;
+ extern crate buildid_reader_ffi;
++extern crate duppel_ffi;
+ extern crate cascade_bloom_filter;
+ extern crate cert_storage;
+ extern crate chardetng_c;
+--- a/toolkit/library/libxul.symbols
++++ b/toolkit/library/libxul.symbols
+@@ -1,5 +1,10 @@
+ XRE_GetBootstrap
+ uprofiler_get
++
++# darkstr Approach A — libxul-resident duppel-ffi C ABI (chrome ctypes Prefer A)
++darkstr_ffi_abi_version
++darkstr_ffi_persona_snapshot_json
++darkstr_ffi_string_free
+ #ifdef XP_IOS
+ MainProcessInit
+ ChildProcessInit
+--- a/browser/components/DarkstrFfi.sys.mjs
++++ b/browser/components/DarkstrFfi.sys.mjs
+@@ -3,18 +3,20 @@
+  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+ 
+ /**
+- * darkstr M-FFI-0008/0009 — privileged chrome loader for duppel-ffi C ABI (Approach B).
++ * darkstr M-FFI — privileged chrome loader for duppel-ffi C ABI.
+  *
+  * Train: LibreWolf / Firefox 156.0.1-1. Brand: darkstr — not official LibreWolf.
+- * Loads libduppel_ffi.{dylib,so,dll} from CurProcD / GreD / XREExeF parent via
+- * js-ctypes and calls darkstr_ffi_persona_snapshot_json.
+  *
+- * Honesty: fails soft when the dylib is missing or symbols unavailable;
+- * callers must keep JS seed fallback. nativePersonaHooks stays default-off.
+- * No Cloudflare/TLS/JA3/RFP metric customization.
++ * Approach A (prefer): declare darkstr_ffi_* from in-process libxul / XUL
++ *   (gkrust path-dep; symbols exported via toolkit/library/libxul.symbols).
++ * Approach B (fallback): side-loaded libduppel_ffi.{dylib,so,dll} via ctypes
++ *   from CurProcD / GreD / XREExeF parent (0008/0009).
+  *
+- * 0009b: do not permanently lock out after an early fail (browser startup race);
+- * expose last error on darkstr.ffi.lastError for headed debug.
++ * Honesty: fails soft when neither path works; callers keep JS seed fallback.
++ * nativePersonaHooks stays default-off. No Cloudflare/TLS/JA3/RFP metrics.
++ *
++ * 0009b: timed retry (no permanent lockout); darkstr.ffi.lastError debug pref.
++ * 0040: Prefer A (libxul-resident) over B (cdylib).
+  */
+ 
+ const lazy = {};
+@@ -23,6 +25,7 @@
+ });
+ 
+ const LAST_ERROR_PREF = "darkstr.ffi.lastError";
++const LOAD_SOURCE_PREF = "darkstr.ffi.loadSource";
+ 
+ let gLib = null;
+ let gAbiVersion = null;
+@@ -30,6 +33,8 @@
+ let gFree = null;
+ let gLoadError = null;
+ let gNextRetryMs = 0;
++/** @type {"libxul"|"cdylib"|null} */
++let gLoadSource = null;
+ 
+ function libraryFileName() {
+   return lazy.ctypes.libraryName("duppel_ffi");
+@@ -50,7 +55,42 @@
+   } catch (_e) {}
+ }
+ 
+-function candidatePaths() {
++function setLoadSource(src) {
++  gLoadSource = src;
++  try {
++    Services.prefs.setStringPref(LOAD_SOURCE_PREF, String(src || ""));
++  } catch (_e) {}
++}
++
++/** Approach A: libxul / XUL already in-process (Darwin file name is "XUL"). */
++function inProcessCandidates() {
++  const names = ["XUL", "libxul.dylib", "libxul.so", "libxul.dll"];
++  const paths = [];
++  const pushDir = dirPath => {
++    if (!dirPath) {
++      return;
++    }
++    for (const name of names) {
++      paths.push(joinPath(dirPath, name));
++    }
++  };
++  for (const key of ["CurProcD", "GreD", "XCurProcD"]) {
++    try {
++      pushDir(Services.dirsvc.get(key, Ci.nsIFile).path);
++    } catch (_e) {}
++  }
++  try {
++    pushDir(Services.dirsvc.get("XREExeF", Ci.nsIFile).parent.path);
++  } catch (_e) {}
++  // dyld already-loaded image names
++  for (const name of names) {
++    paths.push(name);
++  }
++  return paths;
++}
++
++/** Approach B: side-loaded cdylib next to the binary. */
++function cdylibCandidates() {
+   const name = libraryFileName();
+   const paths = [];
+   const pushDir = dirPath => {
+@@ -70,6 +110,36 @@
+   return paths;
+ }
+ 
++function tryOpenPath(path) {
++  const lib = lazy.ctypes.open(path);
++  const abiVersion = lib.declare(
++    "darkstr_ffi_abi_version",
++    lazy.ctypes.default_abi,
++    lazy.ctypes.uint32_t
++  );
++  const snapshot = lib.declare(
++    "darkstr_ffi_persona_snapshot_json",
++    lazy.ctypes.default_abi,
++    lazy.ctypes.char.ptr,
++    lazy.ctypes.uint32_t,
++    lazy.ctypes.char.ptr
++  );
++  const freeFn = lib.declare(
++    "darkstr_ffi_string_free",
++    lazy.ctypes.default_abi,
++    lazy.ctypes.void_t,
++    lazy.ctypes.char.ptr
++  );
++  const ver = abiVersion();
++  if (ver !== 1) {
++    try {
++      lib.close();
++    } catch (_e) {}
++    throw new Error(`unexpected ABI version ${ver}`);
++  }
++  return { lib, abiVersion, snapshot, freeFn };
++}
++
+ function ensureLoaded() {
+   if (gLib) {
+     return true;
+@@ -79,46 +149,30 @@
+     return false;
+   }
+ 
++  const stages = [
++    { kind: "libxul", paths: inProcessCandidates() },
++    { kind: "cdylib", paths: cdylibCandidates() },
++  ];
+   const tried = [];
+-  for (const path of candidatePaths()) {
+-    tried.push(path);
+-    try {
+-      gLib = lazy.ctypes.open(path);
+-      gAbiVersion = gLib.declare(
+-        "darkstr_ffi_abi_version",
+-        lazy.ctypes.default_abi,
+-        lazy.ctypes.uint32_t
+-      );
+-      gSnapshot = gLib.declare(
+-        "darkstr_ffi_persona_snapshot_json",
+-        lazy.ctypes.default_abi,
+-        lazy.ctypes.char.ptr,
+-        lazy.ctypes.uint32_t,
+-        lazy.ctypes.char.ptr
+-      );
+-      gFree = gLib.declare(
+-        "darkstr_ffi_string_free",
+-        lazy.ctypes.default_abi,
+-        lazy.ctypes.void_t,
+-        lazy.ctypes.char.ptr
+-      );
+-      const ver = gAbiVersion();
+-      if (ver !== 1) {
+-        setLoadError(`unexpected ABI version ${ver} at ${path}`);
+-        try {
+-          gLib.close();
+-        } catch (_e) {}
++  for (const stage of stages) {
++    for (const path of stage.paths) {
++      tried.push(`${stage.kind}:${path}`);
++      try {
++        const opened = tryOpenPath(path);
++        gLib = opened.lib;
++        gAbiVersion = opened.abiVersion;
++        gSnapshot = opened.snapshot;
++        gFree = opened.freeFn;
++        setLoadSource(stage.kind);
++        setLoadError("");
++        gNextRetryMs = 0;
++        return true;
++      } catch (e) {
++        setLoadError(`${stage.kind}:${path}: ${e}`);
+         gLib = null;
+         gAbiVersion = gSnapshot = gFree = null;
+-        continue;
++        gLoadSource = null;
+       }
+-      setLoadError("");
+-      gNextRetryMs = 0;
+-      return true;
+-    } catch (e) {
+-      setLoadError(`${path}: ${e}`);
+-      gLib = null;
+-      gAbiVersion = gSnapshot = gFree = null;
+     }
+   }
+   if (!gLoadError) {
+@@ -146,6 +200,11 @@
+   };
+ }
+ 
++/**
++ * @param {number} seed unsigned seed
++ * @param {string} os "macos"|"linux"|"windows"
++ * @returns {object|null}
++ */
+ export function personaSnapshotFromSeed(seed, os = "macos") {
+   if (!ensureLoaded()) {
+     return null;
+@@ -182,8 +241,14 @@
+   return gLoadError;
+ }
+ 
++/** @returns {"libxul"|"cdylib"|null} */
++export function loadSource() {
++  return gLoadSource;
++}
++
+ export var DarkstrFfi = {
+   personaSnapshotFromSeed,
+   abiVersion,
+   lastLoadError,
++  loadSource,
+ };
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -1994,9 +1994,20 @@
+ checksum = "bde03329ae10e79ede66c9ce4dc930aa8599043b0743008548680f25b91502d6"
+ dependencies = [
+  "dtoa",
++]
++
++[[package]]
++name = "duppel-ffi"
++version = "0.0.0"
++dependencies = [
++ "duppel-persona",
+ ]
+ 
+ [[package]]
++name = "duppel-persona"
++version = "0.0.0"
++
++[[package]]
+ name = "dwrote"
+ version = "0.11.5"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+@@ -2963,6 +2974,7 @@
+  "dom",
+  "dom_fragmentdirectives",
+  "dom_speculationrules",
++ "duppel-ffi",
+  "encoding_glue",
+  "etagere",
+  "fluent",

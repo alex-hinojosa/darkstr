@@ -216,6 +216,9 @@ patch_markers_present() {
         && grep -Fq "FFI snapshot miss" "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrNativePersona.sys.mjs" \
         && grep -Fq "Persist so about:config" "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrNativePersona.sys.mjs"
       ;;
+    0040-darkstr-ffi-gkrust-libxul.patch)
+      grep -Fq 'duppel-ffi = { path = "../../../../third_party/darkstr/duppel-ffi" }'         "${DARKSTR_GECKO_ROOT}/toolkit/library/rust/shared/Cargo.toml"         && grep -Fq 'extern crate duppel_ffi;'           "${DARKSTR_GECKO_ROOT}/toolkit/library/rust/shared/lib.rs"         && grep -Fq 'darkstr_ffi_abi_version'           "${DARKSTR_GECKO_ROOT}/toolkit/library/libxul.symbols"         && grep -Fq '0040: Prefer A'           "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrFfi.sys.mjs"         && grep -Fq 'name = "duppel-ffi"'           "${DARKSTR_GECKO_ROOT}/Cargo.lock"
+      ;;
     0010-darkstr-nav-languages-pageshow.patch)
       grep -Fq "pageshow" "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrNativePersona.sys.mjs" \
         && grep -Fq "pullAndApply" "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrNativePersonaChild.sys.mjs"
@@ -448,3 +451,4 @@ echo "Phase 4 WebGL ext+precision: patches/0032-darkstr-webgl-ext-precision.patc
 echo "Phase 4 langs cloneInto: patches/0033-darkstr-nav-languages-cloneinto.patch (page-compartment navigator.languages after SubsequentNav). Rebuild: browser/components only; no XUL relink (see docs/PHASE-4-LANGS-0033-MINI-APPLY.sh)."
 echo "Phase 4 lastSeeds eTLD diag: patches/0034-darkstr-depth-lastseeds-etld-diag.patch (lastSeeds mirrors install seeds when rotatePerSite). Rebuild: browser/components only; no XUL relink (see docs/PHASE-4-LASTSEEDS-0034-MINI-APPLY.sh)."
 echo "M-FFI-0008 gecko FFI link: patches/0008-darkstr-gecko-ffi-link.patch (Approach B cdylib). Build FFI: third_party/darkstr/build-and-install-ffi.sh --prefix \"\${DARKSTR_GECKO_OBJDIR:-obj-*}/dist/bin\". Rebuild chrome: ./mach build browser/components (see docs/M-FFI-0008-STATUS.md)."
+echo "M-FFI-0040 Approach A gkrust/libxul: patches/0040-darkstr-ffi-gkrust-libxul.patch. Rebuild: ./mach build toolkit/library; nm -gU obj-*/dist/bin/XUL | grep darkstr_ffi_ (see docs/M-FFI-0040-STATUS.md)."
