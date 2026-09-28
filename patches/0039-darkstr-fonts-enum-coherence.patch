@@ -1,0 +1,247 @@
+# darkstr Phase 5 soft residual 0039 — FontFaceSet enumeration coherence
+# Train: LibreWolf 156.0.1-1. Brand: darkstr — not official LibreWolf.
+# Extends 0036: wrap FontFaceSet values/keys/entries/forEach/@@iterator/size/load
+# with the same shouldHideFamily filter as document.fonts.check.
+# document.fonts.ready NOT wrapped (host load Promise).
+# Apply: patch -d "$DARKSTR_GECKO_ROOT" -p1 < patches/0039-darkstr-fonts-enum-coherence.patch
+# Or copy SoT: patches/0039-files/DarkstrDepthHooksChild.sys.mjs
+# Chrome JS only — no XUL relink. No full mach package/DMG.
+#
+--- a/browser/components/DarkstrDepthHooksChild.sys.mjs	2026-09-28 07:09:03
++++ b/browser/components/DarkstrDepthHooksChild.sys.mjs	2026-09-28 07:09:13
+@@ -10,8 +10,11 @@
+  *   (fudge∈[0.999,1.0); zeros stay zero) + AnalyserNode / copyFromChannel.
+  * Soft residual (0036): fonts coherence — Canvas/Offscreen measureText width,
+  *   document.fonts.check (Firefox-plausible baseline; seed-tied hide of extras),
+- *   DOM offsetWidth/clientWidth/getBoundingClientRect width fudge. Seed via
+- *   depth fontSeed (eTLD-effective). Default-on with depth hooks. No Chrome
++ *   DOM offsetWidth/clientWidth/getBoundingClientRect width fudge.
++ * Soft residual (0039): FontFaceSet enumeration coherence — values/keys/entries/
++ *   forEach/@@iterator/size/load filtered by the same shouldHideFamily as check;
++ *   document.fonts.ready left as host Promise (load-completion, not a font list).
++ *   Seed via depth fontSeed (eTLD-effective). Default-on with depth hooks. No Chrome
+  *   font-list cosplay.
+  * Soft residual (0037): speechSynthesis.getVoices coherence — seed-tied
+  *   filter/reorder of host native voices only (no invented Chrome voices).
+@@ -770,11 +773,13 @@
+       }
+     }
+ 
+-    // Soft residual (0036): fonts coherence / fingerprint farbling.
++    // Soft residual (0036)+0039: fonts coherence / fingerprint farbling.
+     // Brave-inspired, Firefox/LibreWolf/Gecko persona only — no Chrome font lists.
+     // Surfaces: measureText width (Canvas2D + OffscreenCanvas2D), document.fonts.check,
++    // FontFaceSet values/keys/entries/forEach/@@iterator/size/load (0039),
+     // DOM offsetWidth/clientWidth/getBoundingClientRect width. Silence-safe fudge
+     // [0.999,1.0); width 0 stays 0. Double-read stable (constant per fontSeed).
++    // document.fonts.ready is NOT wrapped (host load Promise; not a font list).
+     // Default-on with depth hooks (same gate as audio/WebGL).
+     if (pageWindow.CanvasRenderingContext2D?.prototype?.measureText ||
+         pageWindow.document?.fonts?.check ||
+@@ -935,8 +940,162 @@
+   hooks.check = wrappedCheck;
+   hooks.origCheck = origCheck;
+   hooks.checkProto = ffsProto;
++}
++
++// --- Soft residual (0039): FontFaceSet enumeration coherence ---
++// Same shouldHideFamily as check. Filter values/keys/entries/forEach/@@iterator/
++// size/load. ready stays host Promise (async populate notification only).
++function faceFamily(face) {
++  try {
++    if (!face) { return ""; }
++    return normalizeFamily(face.family || "");
++  } catch (_e) { return ""; }
++}
++function keepFace(face) {
++  var fam = faceFamily(face);
++  if (!fam) { return true; } // keep anonymous / empty rather than invent
++  return !shouldHideFamily(fam);
+ }
++function makeFaceIterator(faces, asEntry) {
++  var i = 0;
++  return {
++    next: function() {
++      if (i >= faces.length) {
++        return { value: undefined, done: true };
++      }
++      var face = faces[i++];
++      if (asEntry) {
++        return { value: [face, face], done: false };
++      }
++      return { value: face, done: false };
++    },
++    [Symbol.iterator]: function() { return this; }
++  };
++}
++if (ffsProto) {
++  var origValues = typeof ffsProto.values === "function" ? ffsProto.values : null;
++  var origEntries = typeof ffsProto.entries === "function" ? ffsProto.entries : null;
++  var origForEach = typeof ffsProto.forEach === "function" ? ffsProto.forEach : null;
++  var origLoad = typeof ffsProto.load === "function" ? ffsProto.load : null;
++  var sizeDesc = Object.getOwnPropertyDescriptor(ffsProto, "size");
++  var origSizeGet = sizeDesc && typeof sizeDesc.get === "function" ? sizeDesc.get : null;
++
++  // Capture natives before wrapping so collectKeptFaces can use forEach safely.
++  var nativeForEach = origForEach;
++  var nativeValues = origValues;
+ 
++  function keptFromThis() {
++    var kept = [];
++    try {
++      if (nativeForEach) {
++        nativeForEach.call(this, function(face) {
++          if (keepFace(face)) { kept.push(face); }
++        });
++        return kept;
++      }
++    } catch (_e) {}
++    try {
++      if (nativeValues) {
++        var it = nativeValues.call(this);
++        if (it && typeof it.next === "function") {
++          for (;;) {
++            var n = it.next();
++            if (!n || n.done) { break; }
++            if (keepFace(n.value)) { kept.push(n.value); }
++          }
++        }
++      }
++    } catch (_e2) {}
++    return kept;
++  }
++
++  if (origValues) {
++    var wrappedValues = function() {
++      return makeFaceIterator(keptFromThis.call(this), false);
++    };
++    Object.defineProperty(ffsProto, "values", {
++      configurable: true, enumerable: true, writable: true, value: wrappedValues
++    });
++    // keys and @@iterator are IDL aliases of values on Gecko FontFaceSet
++    try {
++      Object.defineProperty(ffsProto, "keys", {
++        configurable: true, enumerable: true, writable: true, value: wrappedValues
++      });
++    } catch (_e) {}
++    try {
++      Object.defineProperty(ffsProto, Symbol.iterator, {
++        configurable: true, enumerable: false, writable: true, value: wrappedValues
++      });
++    } catch (_e2) {}
++    hooks.values = wrappedValues;
++    hooks.origValues = origValues;
++    hooks.valuesProto = ffsProto;
++  }
++
++  if (origEntries) {
++    var wrappedEntries = function() {
++      return makeFaceIterator(keptFromThis.call(this), true);
++    };
++    Object.defineProperty(ffsProto, "entries", {
++      configurable: true, enumerable: true, writable: true, value: wrappedEntries
++    });
++    hooks.entries = wrappedEntries;
++    hooks.origEntries = origEntries;
++    hooks.entriesProto = ffsProto;
++  }
++
++  if (origForEach) {
++    var wrappedForEach = function(cb, thisArg) {
++      if (typeof cb !== "function") {
++        return origForEach.apply(this, arguments);
++      }
++      var kept = keptFromThis.call(this);
++      for (var i = 0; i < kept.length; i++) {
++        cb.call(thisArg, kept[i], kept[i], this);
++      }
++    };
++    Object.defineProperty(ffsProto, "forEach", {
++      configurable: true, enumerable: true, writable: true, value: wrappedForEach
++    });
++    hooks.forEach = wrappedForEach;
++    hooks.origForEach = origForEach;
++    hooks.forEachProto = ffsProto;
++  }
++
++  if (origSizeGet) {
++    var wrappedSize = function() {
++      return keptFromThis.call(this).length;
++    };
++    Object.defineProperty(ffsProto, "size", {
++      configurable: true, enumerable: true, get: wrappedSize
++    });
++    hooks.size = wrappedSize;
++    hooks.origSize = origSizeGet;
++    hooks.sizeProto = ffsProto;
++  }
++
++  if (origLoad) {
++    var wrappedLoad = function(font, text) {
++      var p = origLoad.apply(this, arguments);
++      if (!p || typeof p.then !== "function") { return p; }
++      return p.then(function(faces) {
++        if (!faces || typeof faces.length !== "number") { return faces; }
++        var out = [];
++        for (var i = 0; i < faces.length; i++) {
++          if (keepFace(faces[i])) { out.push(faces[i]); }
++        }
++        return out;
++      });
++    };
++    Object.defineProperty(ffsProto, "load", {
++      configurable: true, enumerable: true, writable: true, value: wrappedLoad
++    });
++    hooks.load = wrappedLoad;
++    hooks.origLoad = origLoad;
++    hooks.loadProto = ffsProto;
++  }
++}
++
+ // --- DOM metric probes (offsetWidth / clientWidth / getBoundingClientRect) ---
+ var elProto = typeof HTMLElement !== "undefined" ? HTMLElement.prototype : null;
+ if (elProto) {
+@@ -1060,7 +1219,43 @@
+         installedFonts.origCheck,
+         "method"
+       );
++      // Soft residual (0039): FontFaceSet enumeration hooks
+       pushPageHook(
++        installedFonts.valuesProto,
++        "values",
++        installedFonts.values,
++        installedFonts.origValues,
++        "method"
++      );
++      pushPageHook(
++        installedFonts.entriesProto,
++        "entries",
++        installedFonts.entries,
++        installedFonts.origEntries,
++        "method"
++      );
++      pushPageHook(
++        installedFonts.forEachProto,
++        "forEach",
++        installedFonts.forEach,
++        installedFonts.origForEach,
++        "method"
++      );
++      pushPageHook(
++        installedFonts.sizeProto,
++        "size",
++        installedFonts.size,
++        installedFonts.origSize,
++        "getter"
++      );
++      pushPageHook(
++        installedFonts.loadProto,
++        "load",
++        installedFonts.load,
++        installedFonts.origLoad,
++        "method"
++      );
++      pushPageHook(
+         installedFonts.owProto,
+         "offsetWidth",
+         installedFonts.ow,

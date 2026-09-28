@@ -12,7 +12,8 @@ Phase 5 pin **0036 fonts coherence** is **MERGED** / Proof XOR **PASS** (PR #67;
 Phase 5 pin **0037 speech coherence** is **MERGED** / Proof XOR **PASS** (PR #68; see evidence below).
 Phase 5 pin **0038 WebGPU coherence** is **MERGED** / Proof XOR **PASS** (PR [#69](https://github.com/alex-hinojosa/darkstr/pull/69); see evidence below).
 
-Phase 5 eng **depth backlog is empty**. Native privacy-pane UI is PM-owned; Approach A FFI remains deferred — no new eng pins invented from this close.
+Phase 5 eng **depth backlog was empty** after 0038. Soft-residual polish pin **0039** (FontFaceSet enum coherence) is **IN FLIGHT** (this PR) — not a new depth surface; extends 0036 check→enumeration.
+Native privacy-pane UI is PM-owned; Approach A FFI remains deferred.
 
 ## Completed — 0036 Fonts coherence / fingerprint farbling
 
@@ -75,19 +76,19 @@ All five font-coherence XOR gates passed on Proof tip `d01038b7d64c3dd95e581263d
 **Soft residuals (not FAIL):**
 
 - DOM width fudge may shift pixel-perfect layouts by **≤0.1%** when hooks are armed.
-- `document.fonts.ready` / `FontFaceSet` iteration and full enumeration are not wrapped (only `check`).
+- ~~`document.fonts.ready` / `FontFaceSet` iteration and full enumeration are not wrapped (only `check`)~~ → **0039** wraps enumeration (`values`/`keys`/`entries`/`forEach`/`@@iterator`/`size`/`load`); `ready` stays host Promise (by design).
 
 ### Out of scope (this pin)
 
 - speech / WebGPU
 - Native-Compatible privacy-pane UI (PM)
-- FontFaceSet full enumeration filtering (soft residual — `check` covered)
+- ~~FontFaceSet full enumeration filtering~~ → **0039** (in flight)
 - gfx-level font whitelist (Tor-style) — page-compartment only
 
 ### Residual risks
 
 - DOM width fudge may shift pixel-perfect layouts by ≤0.1% when hooks armed.
-- `document.fonts` iteration / `ready` not wrapped (only `check`).
+- ~~`document.fonts` iteration not wrapped~~ → **0039**. `ready` stays host Promise.
 - Not anti-detect / not Cloudflare bypass.
 
 ## Apply status (Mini) — 0036 — 2026-09-24 ~20:56 CDT
@@ -308,7 +309,68 @@ webgpuSeed diverge, plainAdapterInfo non-empty / familiesCoherent).
 
 ## Next eng backlog
 
-**Phase 5 eng depth backlog is empty.** Pin **0038** was the last depth pin (WebGPU); closed Proof-green / MERGED.
+**Phase 5 eng depth backlog empty after 0038.** Soft-residual polish:
+
+| Pin | Residual | Status |
+|-----|----------|--------|
+| **0039** | FontFaceSet enum coherence (extends 0036 `check`) | **IN FLIGHT** (this PR) |
+| — | Cookie 0035 `/echo` Cookie header empty | Open (necko/QI investigation; not this pin) |
+| — | Speech 0037 pref-off / empty voices before async | Soft / do not invent API |
+| — | WebGPU 0038 Worker OOS / AdapterInfo.device empty | Soft / do not invent |
+| — | FFI `libduppel_ffi` not in DMG `package-manifest.in` | Packaging residual (not depth) |
+| — | Native privacy-pane UI | PM-owned |
+| — | Approach A FFI | Deferred |
+
+## In flight — 0039 FontFaceSet enumeration coherence
+
+| Item | Status |
+|------|--------|
+| Pin | **0039** |
+| Branch | `builder/phase5-fonts-enum-0039` |
+| Patch | [`patches/0039-darkstr-fonts-enum-coherence.patch`](../patches/0039-darkstr-fonts-enum-coherence.patch) |
+| Apply SoT | [`patches/0039-files/DarkstrDepthHooksChild.sys.mjs`](../patches/0039-files/DarkstrDepthHooksChild.sys.mjs) |
+| Mini helper | [`scripts/apply-0039-fonts-enum-coherence-mini.sh`](../scripts/apply-0039-fonts-enum-coherence-mini.sh) / [`PHASE-5-FONTS-0039-MINI-APPLY.sh`](PHASE-5-FONTS-0039-MINI-APPLY.sh) |
+| Mini apply | **OK** 2026-09-28 ~07:09 CDT (markers + mach build browser/components + moz-src symlinks) |
+| Extends | **0036** `shouldHideFamily` / `fontSeed` (no new seed) |
+
+### Design summary
+
+Same arm gate and `fontSeed` as 0036. Page-compartment wraps on `FontFaceSet.prototype`:
+
+1. **`values` / `keys` / `@@iterator`** — yield only faces whose `family` passes `shouldHideFamily` (baseline passthrough; non-baseline seed-tied keep/drop).
+2. **`entries` / `forEach`** — same filter; `forEach` callback sees kept faces only.
+3. **`size`** — count of kept faces (coherent with iteration).
+4. **`load()`** — filter resolved `FontFace[]` with the same predicate.
+5. **`ready`** — **not wrapped** (host load-completion Promise; not a font list). Soft residual closed for enumeration only.
+
+Homogeneous / hooks-off: idle. No Chrome-only font lists. Double-read stable (constant per `fontSeed` + host set).
+
+### Proof gates (for Proof ACK — do not ping from Builder)
+
+1. Hooks-off / Homogeneous → idle (host FontFaceSet enumeration)
+2. Pollution+hooks: enumeration digests coherent with `document.fonts.check` hide set; double-read stable
+3. Different eTLD+1 with rotatePerSite → digests / fontSeed diverge
+4. Same eTLD two tabs → same digests/seed
+5. Golden lock seed-42 coherent; no Chrome-only font names; `document.fonts.ready` still a Promise
+
+### Out of scope (this pin)
+
+- Cookie `/echo` header empty → separate follow-up
+- FFI package-manifest / DMG packaging
+- `document.fonts.ready` Promise wrapping / inventing faces
+- gfx-level font whitelist
+- Speech / WebGPU soft residuals
+
+
+## Apply status (Mini) — 0039 — 2026-09-28 ~07:09 CDT
+
+- Tree: LibreWolf **156.0.1-1** (`$DARKSTR_GECKO_ROOT`)
+- Markers already present (Builder applied source edits); patch skip OK
+- `./mach build --allow-subdirectory-build browser/components` — **OK** (~7s)
+- `make install-dist_bin` — Kept existing; moz-src symlinks refreshed
+- Symlinks: `dist/LibreWolf.app/.../moz-src/browser/components/DarkstrDepthHooksChild.sys.mjs` → source (`Soft residual (0039)` / `keptFromThis` / `makeFaceIterator` present; SHA match)
+- Apply log: `~/src/darkstr-gecko/darkstr-apply-0039-20260928-070940.log`
+- Disk free after apply: ~21 Gi (Data volume)
 
 ## Ship note — Mini `./mach package` DMG (2026-09-28 ~06:59 CDT)
 
