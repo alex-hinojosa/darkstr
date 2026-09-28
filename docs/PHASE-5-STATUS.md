@@ -326,6 +326,8 @@ webgpuSeed diverge, plainAdapterInfo non-empty / familiesCoherent).
 | Item | Status |
 |------|--------|
 | Pin | **0039** |
+| PR | [#70](https://github.com/alex-hinojosa/darkstr/pull/70) **OPEN** (do not merge from Builder) |
+| Tip | `01fbf27e60d37de0733a57cbdc64adec53891b22` |
 | Branch | `builder/phase5-fonts-enum-0039` |
 | Patch | [`patches/0039-darkstr-fonts-enum-coherence.patch`](../patches/0039-darkstr-fonts-enum-coherence.patch) |
 | Apply SoT | [`patches/0039-files/DarkstrDepthHooksChild.sys.mjs`](../patches/0039-files/DarkstrDepthHooksChild.sys.mjs) |
