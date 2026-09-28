@@ -1,7 +1,7 @@
 # Cookie sandbox / firewall
 
 **Brand:** darkstr — not official LibreWolf.  
-**Status:** **0035 MVP in-flight** (Phase 5). Prior art: backlog one-pager (PR #34, 2026-09-16).
+**Status:** **0035 MVP MERGED** (Phase 5). Soft residual **0042** (outbound `/echo` Cookie QI) in-flight. Prior art: backlog one-pager (PR #34, 2026-09-16).
 
 ## Idea
 
@@ -43,6 +43,7 @@ See [`PHASE-5-STATUS.md`](PHASE-5-STATUS.md) for Proof gates and residuals.
 
 1. **First-party login** — allowlist must be right or auth breaks.
 2. **CookieService race** — chrome header strip may lose a race; C++ dual-jar follow-up if needed.
+2b. **Outbound Cookie empty (0035 soft)** — fixed in **0042**: QI `nsIHttpChannel` before `setRequestHeader`; surface errors (was silent catch).
 3. **Detectability** — synthetic values that ignore `Set-Cookie` semantics are an FP signal (honesty: not anti-detect).
 4. **CHIPS / Storage Access API** — stock Firefox already partitions; disagreeing filters are worse than none.
 5. **Honesty copy** — Settings must say isolate/filter, not “we don’t use cookies.”

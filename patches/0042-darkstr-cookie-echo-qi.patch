@@ -1,0 +1,106 @@
+# darkstr 0042 — Cookie firewall /echo Cookie header QI fix (chrome JS)
+# Train: LibreWolf / Firefox 156.0.1-1 (FIREFOX_156_0_1_RELEASE).
+# Soft residual after 0035 Proof PASS: outbound fetch Cookie request header was
+# empty while sandbox jar + document.cookie held synthetic tokens.
+# Root cause: http-on-modify-request observer used subject without QI to
+# nsIHttpChannel; setRequestHeader failures swallowed by empty catch.
+# Fix: QueryInterface(Ci.nsIHttpChannel) (match NativePersona) + surface
+# set/QI errors on darkstr.cookieFirewall.lastCookieErr; verify via
+# lastCookieOut / lastCookieSet for Proof soft XOR.
+# Default-off unchanged. Not anti-detect / not Cloudflare bypass.
+#
+--- a/browser/components/DarkstrCookieFirewall.sys.mjs
++++ b/browser/components/DarkstrCookieFirewall.sys.mjs
+@@ -33,6 +33,10 @@
+  *
+  * Residual: CookieService may race Set-Cookie before header strip on some
+  * paths; full dual-jar C++ CookieService hook is a follow-up. Not anti-detect.
++ *
++ * Soft residual (0042): outbound Cookie on content fetch was empty under 0035
++ * because http-on-modify-request subject was used without QI to nsIHttpChannel
++ * and setRequestHeader failures were swallowed. Pin: QI + surface set errors.
+  */
+ 
+ const MODE_PREF = "darkstr.mode";
+@@ -47,6 +51,11 @@
+ const LAST_DECISION_PREF = "darkstr.cookieFirewall.lastDecision";
+ const LAST_INSTALL_PREF = "darkstr.cookieFirewall.lastInstall";
+ const LAST_ERROR_PREF = "darkstr.cookieFirewall.lastError";
++const LAST_HTTP_TOPIC_PREF = "darkstr.cookieFirewall.lastHttpTopic";
++const LAST_HTTP_ETLD_PREF = "darkstr.cookieFirewall.lastHttpEtld";
++const LAST_COOKIE_OUT_PREF = "darkstr.cookieFirewall.lastCookieOut";
++const LAST_COOKIE_SET_PREF = "darkstr.cookieFirewall.lastCookieSet";
++const LAST_COOKIE_ERR_PREF = "darkstr.cookieFirewall.lastCookieErr";
+ 
+ const SNAPSHOT_PREF = "darkstr.persona.snapshot";
+ const SEED_PREF = "darkstr.persona.seed";
+@@ -612,13 +621,29 @@
+     }
+   },
+ 
+-  _onHttp(channel, topic) {
++  _onHttp(subject, topic) {
+     const plan = this.getPlan();
+     if (!plan.armed) {
++      return;
++    }
++    let channel = subject;
++    try {
++      channel = subject.QueryInterface(Ci.nsIHttpChannel);
++    } catch (_e) {
++      try {
++        Services.prefs.setStringPref(
++          LAST_COOKIE_ERR_PREF,
++          "qi-fail:" + String(_e).slice(0, 200)
++        );
++      } catch (_e2) {}
+       return;
+     }
+     const uri = this._channelUri(channel);
+     const etld = this._etldPlus1FromUri(uri);
++    try {
++      Services.prefs.setStringPref(LAST_HTTP_TOPIC_PREF, String(topic || ""));
++      Services.prefs.setStringPref(LAST_HTTP_ETLD_PREF, String(etld || ""));
++    } catch (_e) {}
+     const decision = this.decisionForEtld(etld, plan);
+     if (decision !== "sandbox") {
+       this._writeDiag(etld, 0, decision);
+@@ -629,10 +654,37 @@
+ 
+     if (topic === "http-on-modify-request") {
+       const cookie = this.getCookieStringForEtld(etld);
++      try {
++        Services.prefs.setStringPref(
++          LAST_COOKIE_OUT_PREF,
++          String(cookie || "").slice(0, 500)
++        );
++      } catch (_e) {}
+       try {
+         // Replace outbound Cookie with sandbox view (empty if none).
+         channel.setRequestHeader("Cookie", cookie || "", false);
+-      } catch (_e) {}
++        let verify = "";
++        try {
++          verify = channel.getRequestHeader("Cookie");
++        } catch (_e) {
++          verify = "<missing>";
++        }
++        try {
++          Services.prefs.setStringPref(
++            LAST_COOKIE_SET_PREF,
++            String(verify || "").slice(0, 500)
++          );
++          Services.prefs.setStringPref(LAST_COOKIE_ERR_PREF, "");
++        } catch (_e2) {}
++      } catch (e) {
++        try {
++          Services.prefs.setStringPref(
++            LAST_COOKIE_ERR_PREF,
++            "set-fail:" + String(e).slice(0, 400)
++          );
++          Services.prefs.setStringPref(LAST_COOKIE_SET_PREF, "");
++        } catch (_e2) {}
++      }
+       return;
+     }
+ 

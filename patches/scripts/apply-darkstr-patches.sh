@@ -219,6 +219,14 @@ patch_markers_present() {
     0040-darkstr-ffi-gkrust-libxul.patch)
       grep -Fq 'duppel-ffi = { path = "../../../../third_party/darkstr/duppel-ffi" }'         "${DARKSTR_GECKO_ROOT}/toolkit/library/rust/shared/Cargo.toml"         && grep -Fq 'extern crate duppel_ffi;'           "${DARKSTR_GECKO_ROOT}/toolkit/library/rust/shared/lib.rs"         && grep -Fq 'darkstr_ffi_abi_version'           "${DARKSTR_GECKO_ROOT}/toolkit/library/libxul.symbols"         && grep -Fq '0040: Prefer A'           "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrFfi.sys.mjs"         && grep -Fq 'name = "duppel-ffi"'           "${DARKSTR_GECKO_ROOT}/Cargo.lock"
       ;;
+    0042-darkstr-cookie-echo-qi.patch)
+      grep -Fq 'Soft residual (0042)' \
+        "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrCookieFirewall.sys.mjs" 2>/dev/null \
+        && grep -Fq 'QueryInterface(Ci.nsIHttpChannel)' \
+          "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrCookieFirewall.sys.mjs" 2>/dev/null \
+        && grep -Fq 'lastCookieOut' \
+          "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrCookieFirewall.sys.mjs" 2>/dev/null
+      ;;
     0041-darkstr-ffi-retire-approach-b.patch)
       grep -Fq '0041: Retire B' \
         "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrFfi.sys.mjs" \
@@ -464,4 +472,5 @@ echo "Phase 4 langs cloneInto: patches/0033-darkstr-nav-languages-cloneinto.patc
 echo "Phase 4 lastSeeds eTLD diag: patches/0034-darkstr-depth-lastseeds-etld-diag.patch (lastSeeds mirrors install seeds when rotatePerSite). Rebuild: browser/components only; no XUL relink (see docs/PHASE-4-LASTSEEDS-0034-MINI-APPLY.sh)."
 echo "M-FFI-0008 gecko FFI link: patches/0008-darkstr-gecko-ffi-link.patch (historical Approach B cdylib; runtime load retired in 0041). Product path is A-only (0040/0041). Rebuild chrome: ./mach build browser/components (see docs/M-FFI-0008-STATUS.md / M-FFI-0041-STATUS.md)."
 echo "M-FFI-0040 Approach A gkrust/libxul: patches/0040-darkstr-ffi-gkrust-libxul.patch. Rebuild: ./mach build toolkit/library; nm -gU obj-*/dist/bin/XUL | grep darkstr_ffi_ (see docs/M-FFI-0040-STATUS.md)."
+echo "Phase-5-0042 cookie /echo QI: patches/0042-darkstr-cookie-echo-qi.patch (Soft residual after 0035; QI nsIHttpChannel + lastCookieOut/Set/Err). Rebuild: ./mach build --allow-subdirectory-build browser/components (see docs/PHASE-5-STATUS.md)."
 echo "M-FFI-0041 retire Approach B: patches/0041-darkstr-ffi-retire-approach-b.patch (A-only runtime; soft-fail → JS mulberry). Rebuild: ./mach build --allow-subdirectory-build browser/components then make install-dist_bin (see docs/M-FFI-0041-STATUS.md)."
