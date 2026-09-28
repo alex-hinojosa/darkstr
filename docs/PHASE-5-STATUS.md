@@ -198,7 +198,7 @@ All five speech-coherence XOR gates passed on Proof tip `f1ae094082f7c626a10caa9
 | Item | Status |
 |------|--------|
 | Pin | **0038** |
-| PR | (open — see branch `builder/phase5-webgpu-0038`) **DO NOT MERGE** until Proof XOR PASS |
+| PR | [#69](https://github.com/alex-hinojosa/darkstr/pull/69) **DO NOT MERGE** until Proof XOR PASS |
 | Branch | `builder/phase5-webgpu-0038` |
 | Patch | [`patches/0038-darkstr-webgpu-coherence.patch`](../patches/0038-darkstr-webgpu-coherence.patch) |
 | Mini helper | [`scripts/apply-0038-webgpu-coherence-mini.sh`](../scripts/apply-0038-webgpu-coherence-mini.sh) / [`PHASE-5-WEBGPU-0038-MINI-APPLY.sh`](PHASE-5-WEBGPU-0038-MINI-APPLY.sh) |
@@ -276,7 +276,17 @@ when API already exposed; idle when pref-off).
 - Host with very few features → subset may equal full list (entropy soft).
 - Not anti-detect / not Cloudflare bypass.
 
-## Apply status (Mini) — 0038 — pending rebuild note in commit / PR
+## Apply status (Mini) — 0038 — 2026-09-28 ~01:31 CDT
+
+- Tree: LibreWolf **156.0.1-1** (`$DARKSTR_GECKO_ROOT`)
+- Markers already present (Builder applied source edits); patch skip OK
+- `./mach build --allow-subdirectory-build browser/components` — **OK** (~8s)
+- `make install-dist_bin` — Kept existing; moz-src symlinks refreshed
+- Symlinks: `dist/LibreWolf.app/.../moz-src/browser/components/DarkstrDepthHooks*.sys.mjs` → source (`webgpuSeed` / Soft residual 0038 / `installWebGpuInPage` present)
+- PR [#69](https://github.com/alex-hinojosa/darkstr/pull/69) open — **DO NOT MERGE** until Proof XOR PASS
+- Apply log: `~/src/darkstr-gecko/darkstr-apply-0038-20260928-013139.log`
+- Disk free after apply: ~31 Gi (Data volume)
+- LibreWolf `dom.webgpu.enabled` default remains **false** (unchanged)
 
 ## Next eng backlog
 
