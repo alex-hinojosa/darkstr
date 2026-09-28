@@ -15,6 +15,7 @@ Phase 5 pin **0038 WebGPU coherence** is **MERGED** / Proof XOR **PASS** (PR [#6
 Phase 5 pin **0039 FontFaceSet enumeration coherence** is **MERGED** / Proof XOR **PASS** (PR [#70](https://github.com/alex-hinojosa/darkstr/pull/70); see evidence below) — soft-residual polish extending 0036 `check`→enumeration; not a new depth surface.
 Phase 5 eng **depth backlog empty**; soft residuals remain (see backlog table). Native privacy-pane UI is PM-owned. Approach A FFI (**0040**) is **Proof-green on main** (PR [#71](https://github.com/alex-hinojosa/darkstr/pull/71) MERGED `f828a78`). Approach B runtime load (**0041**) is **Proof-green / MERGED** (PR [#72](https://github.com/alex-hinojosa/darkstr/pull/72) `f961d39`) — **A-only**; soft historical dylib inert; hooks default-off. See [`M-FFI-0040-STATUS.md`](M-FFI-0040-STATUS.md) / [`M-FFI-0041-STATUS.md`](M-FFI-0041-STATUS.md).
 Phase 5 soft residual pin **0042 Cookie `/echo` QI** is **MERGED** / Proof XOR **PASS** (PR [#73](https://github.com/alex-hinojosa/darkstr/pull/73) `cda3c91`) — outbound sandbox Cookie closed; soft residual from 0035 empty `/echo` Cookie **closed**.
+Phase 5 soft residual pin **0043** Worker/SharedWorker WebGPU (0038 OOS) is **IN FLIGHT** (Builder) — DedicatedWorker+SharedWorker via 0018 blob + 0038-parity wrap; ServiceWorker still OOS; AdapterInfo.device empty stays soft / do not invent.
 
 ## Completed — 0036 Fonts coherence / fingerprint farbling
 
@@ -310,19 +311,94 @@ webgpuSeed diverge, plainAdapterInfo non-empty / familiesCoherent).
 
 ## Next eng backlog
 
-**Phase 5 eng depth backlog empty after 0039.** Soft residual **0042** Cookie `/echo` QI **CLOSED** / Proof-green. Remaining softs only (no new eng pins from this close):
+**Phase 5 eng depth backlog empty after 0039.** Soft residual **0042** Cookie `/echo` QI **CLOSED** / Proof-green. Soft residual **0043** Worker WebGPU **IN FLIGHT**. Remaining softs:
 
 | Pin | Residual | Status |
 |-----|----------|--------|
 | **0042** | Cookie 0035 `/echo` Cookie header empty | Soft → **CLOSED** / Proof **PASS** / MERGED `cda3c91` (PR [#73](https://github.com/alex-hinojosa/darkstr/pull/73); QI nsIHttpChannel) |
+| **0043** | WebGPU 0038 Worker/SharedWorker OOS | Soft → **IN FLIGHT** (Builder); DedicatedWorker+SharedWorker via 0018 blob; ServiceWorker still OOS; AdapterInfo.device empty stays soft |
 | — | Speech 0037 pref-off / empty voices before async | Soft / do not invent API |
-| — | WebGPU 0038 Worker OOS / AdapterInfo.device empty | Soft / do not invent |
+| — | WebGPU AdapterInfo.device empty | Soft / do not invent |
+| — | WebGPU ServiceWorker OOS | Soft / register ≠ Worker blob; do not invent |
 | — | FFI `libduppel_ffi` not in DMG `package-manifest.in` | Soft / **moot** for product A-only path (XUL carries symbols); historical B dylib inert |
 | — | `document.fonts.ready` still host Promise | Soft (by design; not wrapped in 0039) |
 | — | Native privacy-pane UI | PM-owned |
 | — | Approach A FFI (**0040**) | **MERGED** / Proof **PASS** (PR #71 `f828a78`); A-only after **0041**; hooks default-off |
 | — | Approach B load-path retirement (**0041**) | **MERGED** / Proof **PASS** (PR #72 `f961d39`); B runtime load retired; soft historical dylib inert |
 | — | Soft historical `libduppel_ffi.dylib` in dist/bin | Soft / inert (chrome A-only does not load) |
+
+## In flight — 0043 Worker/SharedWorker WebGPU coherence
+
+| Item | Status |
+|------|--------|
+| Pin | **0043** (soft residual after 0038 Worker OOS) |
+| PR | *(open — Builder)* |
+| Tip at Proof | *(pending)* |
+| Branch | `builder/phase5-webgpu-worker-0043` |
+| Patch | [`patches/0043-darkstr-webgpu-worker-coherence.patch`](../patches/0043-darkstr-webgpu-worker-coherence.patch) |
+| Apply SoT | [`patches/0043-files/`](../patches/0043-files/) (`DarkstrWorkerHooks.sys.mjs`, `DarkstrWorkerHooksChild.sys.mjs`) |
+| Mini helper | [`scripts/apply-0043-webgpu-worker-coherence-mini.sh`](../scripts/apply-0043-webgpu-worker-coherence-mini.sh) / [`PHASE-5-WEBGPU-WORKER-0043-MINI-APPLY.sh`](PHASE-5-WEBGPU-WORKER-0043-MINI-APPLY.sh) |
+| Extends | **0018** Worker blob + **0038** window WebGPU parity |
+| Mini apply | **OK** 2026-09-28 ~08:13 CDT (SoT + mach build browser/components; moz-src symlink SHA match) |
+| Proof | *(do not ping — Builder ships only)* |
+| Local verify | `~/src/darkstr-gecko/artifacts/pr-0043-webgpu-worker-local-verify-20260928-081330/local-verify.json` — LOCAL_MARKERS_PASS (SHA `08785ac5…` / `2d9ca83e…`) |
+
+### Design summary
+
+0038 wrapped window `navigator.gpu.requestAdapter` with seed-tied features/limits/AdapterInfo
+(plain objects + `defineProperty` overlay; idle when API absent). Worker/ServiceWorker were
+**OOS**. Firefox exposes the same `NavigatorGPU` mixin on `WorkerNavigator`
+(`WorkerNavigator includes NavigatorGPU`; `Exposed=(Window, Worker)`).
+
+**Chosen path (clean, no Chrome invent):**
+
+1. Plumb Depth `webgpuSeed` (+ gpu vendor/renderer) through `DarkstrWorkerHooks` payload
+   (same SoT as window 0038 / sticky eTLD+1).
+2. Extend 0018 blob preamble (`buildWebGpuOverrides`) so DedicatedWorker + SharedWorker
+   (and nested Worker depth ≤2) run the 0038-parity wrap in the worker compartment when
+   `navigator.gpu.requestAdapter` exists.
+3. Idle when `navigator.gpu` absent / Homogeneous / hooks-off / `dom.webgpu.enabled=false`
+   (LibreWolf default unchanged).
+4. **ServiceWorker still OOS** — SW scripts install via `navigator.serviceWorker.register`,
+   not `new Worker()`; wrapping register+script rewrite is a different CSP/integrity surface
+   and was already honesty-excluded in 0018. Do not invent a SW path in this pin.
+5. **AdapterInfo.device** stays `""` (Firefox-plausible; do not invent).
+
+### Proof soft gates (for Proof ACK — do not ping from Builder)
+
+1. Hooks-off / Homogeneous / `dom.webgpu.enabled=false` → Worker WebGPU idle (no wrap tell)
+2. Pollution+hooks + WebGPU on: DedicatedWorker `requestAdapter` digests match window 0038
+   for same seed (adapter↔device coherent; plainAdapterInfo non-empty / familiesCoherent)
+3. Different eTLD+1 with rotatePerSite → worker digests / webgpuSeed diverge
+4. Same eTLD two tabs → same worker digests / webgpuSeed
+5. SharedWorker same-origin blob path also farbled; ServiceWorker **not** claimed
+
+### Out of scope (this pin)
+
+- ServiceWorker / Worklets WebGPU
+- Flipping LibreWolf `dom.webgpu.enabled` default
+- Inventing Chrome adapters or filling AdapterInfo.device
+- Speech empty-before-async invent
+- C++/gfx WebGPU farbling
+
+### Residual risks
+
+- Blob preamble size grows (0038 wrap inlined); nested Worker still depth-limited to 2.
+- Host with tiny feature lists → subset may equal full list (entropy soft; same as 0038).
+- ServiceWorker WebGPU remains an observable soft residual until a separate honest pin.
+
+---
+
+## Apply status (Mini) — 0043 — 2026-09-28 ~08:13 CDT (local markers)
+
+- Tree: LibreWolf **156.0.1-1** (`$DARKSTR_GECKO_ROOT`)
+- SoT markers: `Soft residual (0043)` / `buildWebGpuOverrides` / `deriveWebGpuSeed` / `webgpuSeed` present
+- `./mach build --allow-subdirectory-build browser/components` — **OK** (~7s)
+- `make install-dist_bin` — Kept existing; moz-src symlinks refreshed
+- Symlinks: `dist/LibreWolf.app/.../moz-src/browser/components/DarkstrWorkerHooks*.sys.mjs` → source (SHA match repo SoT)
+- Local verify: markers + node IIFE parse **PASS**; headed WebGPU Worker XOR left for Proof (do not ping)
+- Apply log: `~/src/darkstr-gecko/darkstr-apply-0043-*.log`
+- Disk free after apply: ~18 Gi (Data volume)
 
 ## Completed — 0042 Cookie `/echo` QI soft residual
 
@@ -365,8 +441,10 @@ All four 0042 Cookie `/echo` QI XOR gates passed on Proof tip `beb44f8fc03276483
 
 **Remaining soft residuals (not FAIL; no new eng pins from this close):**
 
+- **0043** WebGPU Worker/SharedWorker (0038 OOS) — **IN FLIGHT** (see below)
 - Speech 0037: SpeechRecognition pref-off; empty voices before async populate
-- WebGPU 0038: Worker WebGPU OOS; AdapterInfo.device empty
+- WebGPU AdapterInfo.device empty (do not invent)
+- WebGPU ServiceWorker OOS (register ≠ Worker blob)
 - FFI dylib not in DMG `package-manifest.in` (**moot** A-only after 0041)
 - Soft historical `libduppel_ffi.dylib` inert
 - DOM font width fudge ≤0.1% (0036 accepted)
