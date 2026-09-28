@@ -14,6 +14,7 @@ Phase 5 pin **0038 WebGPU coherence** is **MERGED** / Proof XOR **PASS** (PR [#6
 
 Phase 5 pin **0039 FontFaceSet enumeration coherence** is **MERGED** / Proof XOR **PASS** (PR [#70](https://github.com/alex-hinojosa/darkstr/pull/70); see evidence below) — soft-residual polish extending 0036 `check`→enumeration; not a new depth surface.
 Phase 5 eng **depth backlog empty**; soft residuals remain (see backlog table). Native privacy-pane UI is PM-owned. Approach A FFI (**0040**) is **Proof-green on main** (PR [#71](https://github.com/alex-hinojosa/darkstr/pull/71) MERGED `f828a78`). Approach B runtime load (**0041**) is **Proof-green / MERGED** (PR [#72](https://github.com/alex-hinojosa/darkstr/pull/72) `f961d39`) — **A-only**; soft historical dylib inert; hooks default-off. See [`M-FFI-0040-STATUS.md`](M-FFI-0040-STATUS.md) / [`M-FFI-0041-STATUS.md`](M-FFI-0041-STATUS.md).
+Phase 5 soft residual pin **0042 Cookie `/echo` QI** is **MERGED** / Proof XOR **PASS** (PR [#73](https://github.com/alex-hinojosa/darkstr/pull/73) `cda3c91`) — outbound sandbox Cookie closed; soft residual from 0035 empty `/echo` Cookie **closed**.
 
 ## Completed — 0036 Fonts coherence / fingerprint farbling
 
@@ -309,11 +310,11 @@ webgpuSeed diverge, plainAdapterInfo non-empty / familiesCoherent).
 
 ## Next eng backlog
 
-**Phase 5 eng depth backlog empty after 0039.** Soft residuals only (no new eng pins from this close):
+**Phase 5 eng depth backlog empty after 0039.** Soft residual **0042** Cookie `/echo` QI **CLOSED** / Proof-green. Remaining softs only (no new eng pins from this close):
 
 | Pin | Residual | Status |
 |-----|----------|--------|
-| **0042** | Cookie 0035 `/echo` Cookie header empty | Soft → **pin in-flight** (QI nsIHttpChannel; see In-flight 0042) |
+| **0042** | Cookie 0035 `/echo` Cookie header empty | Soft → **CLOSED** / Proof **PASS** / MERGED `cda3c91` (PR [#73](https://github.com/alex-hinojosa/darkstr/pull/73); QI nsIHttpChannel) |
 | — | Speech 0037 pref-off / empty voices before async | Soft / do not invent API |
 | — | WebGPU 0038 Worker OOS / AdapterInfo.device empty | Soft / do not invent |
 | — | FFI `libduppel_ffi` not in DMG `package-manifest.in` | Soft / **moot** for product A-only path (XUL carries symbols); historical B dylib inert |
@@ -323,21 +324,21 @@ webgpuSeed diverge, plainAdapterInfo non-empty / familiesCoherent).
 | — | Approach B load-path retirement (**0041**) | **MERGED** / Proof **PASS** (PR #72 `f961d39`); B runtime load retired; soft historical dylib inert |
 | — | Soft historical `libduppel_ffi.dylib` in dist/bin | Soft / inert (chrome A-only does not load) |
 
-## In-flight — 0042 Cookie `/echo` QI soft residual
+## Completed — 0042 Cookie `/echo` QI soft residual
 
 | Item | Status |
 |------|--------|
 | Pin | **0042** (soft residual after 0035) |
-| PR | [#73](https://github.com/alex-hinojosa/darkstr/pull/73) **OPEN** (do not merge from Builder) |
+| PR | [#73](https://github.com/alex-hinojosa/darkstr/pull/73) **MERGED** as `cda3c914b388de1e89c3be48ea29340efcbdae16` |
+| Tip at Proof | `beb44f8fc032764834d8f40ccab7f7d27e27ace5` |
 | Branch | `builder/phase5-cookie-echo-qi-0042` |
 | Patch | [`patches/0042-darkstr-cookie-echo-qi.patch`](../patches/0042-darkstr-cookie-echo-qi.patch) |
 | Apply SoT | [`patches/0042-files/DarkstrCookieFirewall.sys.mjs`](../patches/0042-files/DarkstrCookieFirewall.sys.mjs) |
 | Mini helper | [`scripts/apply-0042-cookie-echo-qi-mini.sh`](../scripts/apply-0042-cookie-echo-qi-mini.sh) / [`PHASE-5-COOKIE-0042-MINI-APPLY.sh`](PHASE-5-COOKIE-0042-MINI-APPLY.sh) |
 | Extends | **0035** Cookie firewall HTTP outbound path |
 | Mini apply | **OK** 2026-09-28 ~08:00 CDT (SoT + mach build browser/components; moz-src symlink live) |
-| Tip (Builder) | `8e57928307eb0078c4d3fcee7388c4c5773ff81f` |
-| Local verify | **PASS** — `fetch('/echo', {credentials:'include'})` Cookie header = sandbox synthetic `net_probe=8ad45765c6b3be31` (was empty under 0035); `lastCookieOut` == `lastCookieSet`; `lastCookieErr` empty |
-| Proof | pending (do not ping from Builder) |
+| Proof | **PASS** |
+| Evidence | `~/AgentDocs/proof/darkstr-pr73-0042-xor-20260928-080445/` + [PR comment](https://github.com/alex-hinojosa/darkstr/pull/73#issuecomment-5870487975) |
 
 ### Root cause (plain)
 
@@ -351,12 +352,43 @@ webgpuSeed diverge, plainAdapterInfo non-empty / familiesCoherent).
 
 Default-off / arm gate / synthetic seed path unchanged. Not anti-detect.
 
-### Proof soft gates (for Proof ACK — do not ping)
+### Proof soft gates — PASS
 
-1. Hooks-off / `enabled=false` → real cookies idle (regression)
-2. Armed: after `/set` ingest, `fetch('/echo', {credentials:'include'})` Cookie header carries sandbox synthetic (not empty; not `NETWORK_REAL`)
-3. `lastCookieOut` matches `lastCookieSet`; `lastCookieErr` empty on success path
-4. Script + jar still coherent with 0035 gates 2–5
+1. Hooks-off / `enabled=false` → real cookies idle (0035 regression) — **PASS**
+2. Armed: after `/set` ingest, `fetch('/echo', {credentials:'include'})` Cookie header = sandbox synthetic `net_probe=8ad45765c6b3be31` (not empty; not `NETWORK_REAL`) — **PASS**
+3. `lastCookieOut` matches `lastCookieSet`; `lastCookieErr` empty on success — **PASS**
+4. Script + jar still coherent with 0035 gates 2–5 — **PASS**
+
+### Proof result — PASS
+
+All four 0042 Cookie `/echo` QI XOR gates passed on Proof tip `beb44f8fc032764834d8f40ccab7f7d27e27ace5` (2026-09-28 ~08:07 CDT). Soft residual from 0035 (empty outbound `/echo` Cookie) **closed**.
+
+**Remaining soft residuals (not FAIL; no new eng pins from this close):**
+
+- Speech 0037: SpeechRecognition pref-off; empty voices before async populate
+- WebGPU 0038: Worker WebGPU OOS; AdapterInfo.device empty
+- FFI dylib not in DMG `package-manifest.in` (**moot** A-only after 0041)
+- Soft historical `libduppel_ffi.dylib` inert
+- DOM font width fudge ≤0.1% (0036 accepted)
+- `document.fonts.ready` host Promise (0039 by design)
+- Native privacy-pane UI (PM)
+
+### Out of scope (this pin)
+
+- Speculative necko C++ / dual-jar CookieService
+- Speech / WebGPU soft residuals
+- Native privacy-pane UI (PM)
+- New eng depth pins
+
+## Apply status (Mini) — 0042 — 2026-09-28 ~08:00 CDT (Proof PASS) / merge ~08:08 CDT
+
+- Tree: LibreWolf **156.0.1-1** (`$DARKSTR_GECKO_ROOT`)
+- SoT markers: `QueryInterface(Ci.nsIHttpChannel)` + `lastCookieOut` / `lastCookieSet` / `lastCookieErr` present
+- `./mach build --allow-subdirectory-build browser/components` — **OK**
+- moz-src symlink SHA match (`ba078a2a…` CookieFirewall parent)
+- PR [#73](https://github.com/alex-hinojosa/darkstr/pull/73) **MERGED** as `cda3c914b388de1e89c3be48ea29340efcbdae16`; Proof XOR **PASS** on tip `beb44f8fc032764834d8f40ccab7f7d27e27ace5`
+- Evidence: `~/AgentDocs/proof/darkstr-pr73-0042-xor-20260928-080445/`
+- Local verify + Proof: `echo.cookie_header = "net_probe=8ad45765c6b3be31"`; `lastCookieOut` == `lastCookieSet`; `lastCookieErr` empty
 
 ## Completed — 0040 Approach A FFI (gkrust → libxul)
 
@@ -434,11 +466,11 @@ All five FontFaceSet-enumeration XOR gates passed on Proof tip `4810eb6a2deea687
 
 - `document.fonts.ready` remains the host load-completion Promise (**not wrapped** by design).
 - DOM width fudge ≤0.1% (0036 accepted).
-- Remaining soft list (not this pin): Cookie 0035 `/echo` Cookie empty (**0042** in-flight); Speech 0037 pref-off / empty voices before async; WebGPU 0038 Worker OOS / AdapterInfo.device empty; FFI dylib not in DMG `package-manifest.in` (**moot** A-only); soft historical `libduppel_ffi.dylib` inert; Approach A **0040** + B retire **0041** Proof-green/MERGED; Native privacy-pane UI (PM).
+- Remaining soft list (not this pin): ~~Cookie 0035 `/echo` Cookie empty (**0042**)~~ → **0042 CLOSED** / Proof PASS / MERGED `cda3c91`; Speech 0037 pref-off / empty voices before async; WebGPU 0038 Worker OOS / AdapterInfo.device empty; FFI dylib not in DMG `package-manifest.in` (**moot** A-only); soft historical `libduppel_ffi.dylib` inert; Approach A **0040** + B retire **0041** Proof-green/MERGED; Native privacy-pane UI (PM).
 
 ### Out of scope (this pin)
 
-- Cookie `/echo` header empty → **0042** (QI fix in-flight)
+- ~~Cookie `/echo` header empty → **0042**~~ → **0042 CLOSED** / Proof PASS (PR #73)
 - FFI package-manifest / DMG packaging
 - `document.fonts.ready` Promise wrapping / inventing faces
 - gfx-level font whitelist
@@ -534,10 +566,10 @@ Evidence: `~/AgentDocs/proof/pr66-0035-cookie-firewall-xor-20260924-134154/`
 
 All five cookie-firewall XOR gates passed on Proof tip `d35c5fd8fdec6fba20cf1c08c1f270b8f550ecf3`.
 
-**Soft observation:** the outbound `/echo` Cookie request header was empty (not
+**Soft observation (historical):** the outbound `/echo` Cookie request header was empty (not
 `NETWORK_REAL`). The sandbox jar and script surfaces held the synthetic
-`net_probe`; this is a soft note only and does not change the PASS verdict.
-**Follow-up:** pin **0042** (QI + surface set errors) — see In-flight 0042.
+`net_probe`; this was a soft note only and did not change the 0035 PASS verdict.
+**Follow-up:** pin **0042** (QI + surface set errors) — **CLOSED** / Proof **PASS** / MERGED `cda3c91` (PR [#73](https://github.com/alex-hinojosa/darkstr/pull/73)).
 
 ### Out of scope (this pin) — 0035
 
