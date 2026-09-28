@@ -328,13 +328,14 @@ webgpuSeed diverge, plainAdapterInfo non-empty / familiesCoherent).
 | Item | Status |
 |------|--------|
 | Pin | **0042** (soft residual after 0035) |
+| PR | [#73](https://github.com/alex-hinojosa/darkstr/pull/73) **OPEN** (do not merge from Builder) |
 | Branch | `builder/phase5-cookie-echo-qi-0042` |
 | Patch | [`patches/0042-darkstr-cookie-echo-qi.patch`](../patches/0042-darkstr-cookie-echo-qi.patch) |
 | Apply SoT | [`patches/0042-files/DarkstrCookieFirewall.sys.mjs`](../patches/0042-files/DarkstrCookieFirewall.sys.mjs) |
 | Mini helper | [`scripts/apply-0042-cookie-echo-qi-mini.sh`](../scripts/apply-0042-cookie-echo-qi-mini.sh) / [`PHASE-5-COOKIE-0042-MINI-APPLY.sh`](PHASE-5-COOKIE-0042-MINI-APPLY.sh) |
 | Extends | **0035** Cookie firewall HTTP outbound path |
 | Mini apply | **OK** 2026-09-28 ~08:00 CDT (SoT + mach build browser/components; moz-src symlink live) |
-| Tip (Builder) | `58b1b8af8434c44606c5c01f74813460245429a1` |
+| Tip (Builder) | `ab1e6a6924c555569952c237dc90ae0e6a72c1f8` |
 | Local verify | **PASS** — `fetch('/echo', {credentials:'include'})` Cookie header = sandbox synthetic `net_probe=8ad45765c6b3be31` (was empty under 0035); `lastCookieOut` == `lastCookieSet`; `lastCookieErr` empty |
 | Proof | pending (do not ping from Builder) |
 
