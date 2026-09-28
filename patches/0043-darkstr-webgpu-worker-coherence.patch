@@ -1,13 +1,8 @@
-# darkstr 0043 — Worker / SharedWorker WebGPU coherence (chrome JS)
-# Train: LibreWolf / Firefox 156.0.1-1 (FIREFOX_156_0_1_RELEASE).
-# Soft residual after 0038 Proof PASS: WorkerNavigator.gpu was OOS (window path only).
-# Pattern: extend 0018 Worker/SharedWorker blob preamble with 0038-parity
-# installWebGpuInPage logic (plain AdapterInfo/features/limits; defineProperty
-# overlay; idle when navigator.gpu absent / dom.webgpu.enabled default false).
-# webgpuSeed plumbed through DarkstrWorkerHooks payload from Depth plan seeds.
-# ServiceWorker / Worklets still NOT claimed (register ≠ Worker blob wrap).
-# AdapterInfo.device stays empty (do not invent). Not anti-detect / not Cloudflare.
-# Apply SoT: patches/0043-files/ (preferred over unified diff on Mini).
+# darkstr 0043 Worker/SharedWorker WebGPU coherence (+ re-XOR)
+# Apply SoT: patches/0043-files via scripts/apply-0043-webgpu-worker-coherence-mini.sh
+# Marker: Soft residual (0043 re-XOR) / overridesContent / depthSeedsForBrowsingContext
+# re-XOR: Cu.cloneInto overrides into content (chrome-string Blob threw → native gpu);
+#         workerPayloadForBrowsingContext uses Depth eTLD seeds FIRST under rotatePerSite.
 #
 --- a/browser/components/DarkstrWorkerHooks.sys.mjs
 +++ b/browser/components/DarkstrWorkerHooks.sys.mjs

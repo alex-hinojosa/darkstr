@@ -11,6 +11,9 @@
  * as window 0038 (plain AdapterInfo/features/limits; idle when navigator.gpu
  * absent). ServiceWorker still OOS (register ≠ Worker blob). Brand: darkstr —
  * not official LibreWolf.
+ * Soft residual (0043 re-XOR): contentBlob/contentConstruct — chrome Array
+ * parts to content Blob threw Permission denied Symbol.iterator (native gpu
+ * fallback). Cu.cloneInto overrides + refresh payloadKey on eTLD rotate.
  *
  * Fission note: waive content window + Cu.exportFunction replacements.
  * pageshow reinstall; surface lastError via InstallStatus IPC.
@@ -20,7 +23,10 @@ const installedByWindow = new WeakMap();
 
 function errorText(error) {
   try {
-    return String(error?.stack || error?.message || error || "unknown error");
+    const name = error?.name ? String(error.name) : "";
+    const msg = error?.message != null ? String(error.message) : String(error || "unknown error");
+    const stack = error?.stack ? String(error.stack) : "";
+    return `${name}:${msg} || ${stack}`.slice(0, 1000);
   } catch (_e) {
     return "unknown error";
   }
@@ -39,6 +45,43 @@ function contentWindowFor(rawWindow) {
     }
   } catch (_e) {}
   throw new Error("unable to obtain waived content window");
+}
+
+function contentBlob(pageWindow, sourceText) {
+  // Soft residual (0043 re-XOR): Blob parts + options must be content-compartment
+  // sequences. A chrome Array closed over by Cu.exportFunction throws
+  // "Permission denied to access property Symbol.iterator" when content Blob
+  // iterates parts — runtime-Worker fallback left gpu native (Proof FAIL).
+  const src = String(sourceText);
+  let parts;
+  try {
+    parts = new pageWindow.Array(1);
+    parts[0] = src;
+  } catch (_e) {
+    parts = Cu.cloneInto([src], pageWindow);
+  }
+  let opts;
+  try {
+    opts = new pageWindow.Object();
+    opts.type = "application/javascript";
+  } catch (_e2) {
+    opts = Cu.cloneInto({ type: "application/javascript" }, pageWindow);
+  }
+  return new pageWindow.Blob(parts, opts);
+}
+
+function contentConstruct(Ctor, pageWindow, args) {
+  // Reflect.construct args list must also be a content sequence under Xray.
+  let list;
+  try {
+    list = new pageWindow.Array(args.length);
+    for (let i = 0; i < args.length; i++) {
+      list[i] = args[i];
+    }
+  } catch (_e) {
+    list = Cu.cloneInto(args, pageWindow);
+  }
+  return Reflect.construct(Ctor, list);
 }
 
 function methodIsInstalled(replacement) {
@@ -198,6 +241,21 @@ function buildWebGpuOverrides(depth) {
   var ALWAYS_KEEP_FEATURES = { "core-features-and-limits": 1 };
   function wrapFeatures(nativeFeatures) {
     if (!nativeFeatures) { return nativeFeatures; }
+    // Soft residual (0043 re-XOR): idempotent — Window DepthHooks may share
+    // GPU.prototype with Worker; a second wrapFeatures on plain farbled feats
+    // dropped timestamp-query (14→13) and broke window↔worker digest parity.
+    try {
+      if (nativeFeatures && nativeFeatures.__darkstrFeats) {
+        return nativeFeatures;
+      }
+      // DepthHooks window wrap may share GPU.prototype and already return a
+      // plain {has,forEach,size} object (Object.prototype / null). Re-subsetting
+      // drops another seed-ranked feature (14→13) and breaks digest parity.
+      var featsProto = Object.getPrototypeOf(nativeFeatures);
+      if (featsProto === Object.prototype || featsProto === null) {
+        return nativeFeatures;
+      }
+    } catch (_idem) {}
     var all = [];
     try {
       if (typeof nativeFeatures.forEach === "function") {
@@ -267,7 +325,8 @@ function buildWebGpuOverrides(depth) {
           cb.call(thisArg, kept[j2], kept[j2], this);
         }
       },
-      get size() { return kept.length; }
+      get size() { return kept.length; },
+      __darkstrFeats: true
     };
   }
   var FUDGE_LIMIT_KEYS = {
@@ -292,6 +351,15 @@ function buildWebGpuOverrides(depth) {
   }
   function wrapLimits(nativeLimits) {
     if (!nativeLimits) { return nativeLimits; }
+    try {
+      if (nativeLimits && nativeLimits.__darkstrLimits) {
+        return nativeLimits;
+      }
+      var limProto = Object.getPrototypeOf(nativeLimits);
+      if (limProto === Object.prototype || limProto === null) {
+        return nativeLimits;
+      }
+    } catch (_idemL) {}
     var snapped = Object.create(null);
     var snapKeys = Object.keys(FUDGE_LIMIT_KEYS).concat([
       "minUniformBufferOffsetAlignment", "minStorageBufferOffsetAlignment",
@@ -309,9 +377,23 @@ function buildWebGpuOverrides(depth) {
         snapped[sk] = fudgeLimit(sk, Number(sv));
       }
     }
+    snapped.__darkstrLimits = true;
     return snapped;
   }
   function wrapInfo(nativeInfo) {
+    try {
+      if (nativeInfo && nativeInfo.__darkstrInfo) {
+        return nativeInfo;
+      }
+      var infoProto = Object.getPrototypeOf(nativeInfo);
+      if (
+        nativeInfo &&
+        typeof nativeInfo.vendor === "string" &&
+        (infoProto === Object.prototype || infoProto === null)
+      ) {
+        return nativeInfo;
+      }
+    } catch (_idemI) {}
     var base = PERSONA_INFO;
     var out = {
       vendor: String(base.vendor || ""),
@@ -332,6 +414,7 @@ function buildWebGpuOverrides(depth) {
         out.subgroupMaxSize = nativeInfo.subgroupMaxSize;
       }
     } catch (_e2) {}
+    out.__darkstrInfo = true;
     return out;
   }
   function wrapDevice(device, sharedFeatures, sharedLimits, sharedInfo) {
@@ -384,6 +467,16 @@ function buildWebGpuOverrides(depth) {
   }
   function wrapAdapter(adapter) {
     if (!adapter) { return adapter; }
+    try {
+      if (adapter.__darkstrWebGpuWrapped) {
+        return adapter;
+      }
+    } catch (_idemA) {}
+    try {
+      Object.defineProperty(adapter, "__darkstrWebGpuWrapped", {
+        configurable: true, value: true
+      });
+    } catch (_mark) {}
     var featCache = null;
     var limCache = null;
     var infoCache = null;
@@ -459,6 +552,19 @@ function buildWebGpuOverrides(depth) {
   }
   if (gpuProto && typeof gpuProto.requestAdapter === "function") {
     var origRA = gpuProto.requestAdapter;
+    try {
+      if (origRA && origRA.__darkstrWebGpuRA) {
+        // Our RA already on this proto — still ensure instance own-property.
+        if (gpuObj) {
+          try {
+            Object.defineProperty(gpuObj, "requestAdapter", {
+              configurable: true, enumerable: true, writable: true, value: origRA
+            });
+          } catch (_reInst) {}
+        }
+        return;
+      }
+    } catch (_have) {}
     var wrappedRA = function(options) {
       var self = this;
       return Promise.resolve(origRA.apply(self, arguments)).then(function(adapter) {
@@ -466,12 +572,27 @@ function buildWebGpuOverrides(depth) {
         return wrapAdapter(adapter);
       });
     };
-    try {
-      Object.defineProperty(gpuProto, "requestAdapter", {
-        configurable: true, enumerable: true, writable: true, value: wrappedRA
-      });
-    } catch (_def) {
-      try { gpuProto.requestAdapter = wrappedRA; } catch (_e2) {}
+    try { wrappedRA.__darkstrWebGpuRA = true; } catch (_markRA) {}
+    // Prefer own-property on the navigator.gpu instance (WorkerNavigator.gpu is
+    // SameObject) so we do not stack on a Window DepthHooks proto wrap when
+    // GPU.prototype is process-shared with the page.
+    var instOk = false;
+    if (gpuObj) {
+      try {
+        Object.defineProperty(gpuObj, "requestAdapter", {
+          configurable: true, enumerable: true, writable: true, value: wrappedRA
+        });
+        instOk = true;
+      } catch (_inst) { instOk = false; }
+    }
+    if (!instOk) {
+      try {
+        Object.defineProperty(gpuProto, "requestAdapter", {
+          configurable: true, enumerable: true, writable: true, value: wrappedRA
+        });
+      } catch (_def) {
+        try { gpuProto.requestAdapter = wrappedRA; } catch (_e2) {}
+      }
     }
   }
 })();`;
@@ -563,9 +684,27 @@ function replaceConstructor(pageWindow, name, implementation, replacements) {
   return original;
 }
 
+function payloadKey(payload) {
+  // Soft residual (0043 re-XOR): refresh blob overrides when eTLD depth seeds
+  // change (rotatePerSite). already-installed must not keep seed-42 sticky.
+  const d = payload?.depth;
+  return [
+    payload?.persona?.userAgent || "",
+    d && typeof d.canvasSeed === "number" ? d.canvasSeed >>> 0 : "",
+    d && typeof d.webgpuSeed === "number" ? d.webgpuSeed >>> 0 : "",
+    d?.gpu?.vendor || "",
+    d?.gpu?.renderer || "",
+  ].join("|");
+}
+
 function installWorkerHooks(rawWindow, payload, onRuntimeError) {
   const prior = installedByWindow.get(rawWindow);
-  if (prior && prior.replacements.every(methodIsInstalled)) {
+  const key = payloadKey(payload);
+  if (
+    prior &&
+    prior.replacements.every(methodIsInstalled) &&
+    prior.payloadKey === key
+  ) {
     return "already-installed";
   }
   if (prior) {
@@ -578,6 +717,17 @@ function installWorkerHooks(rawWindow, payload, onRuntimeError) {
   }
   const replacements = [];
   const overrides = buildAllOverrides(payload);
+  // Soft residual (0043 re-XOR): chrome-compartment override strings closed over
+  // by Cu.exportFunction throw under content Blob construction (runtime-Worker
+  // fallback → native WorkerNavigator.gpu; Proof DedicatedWorker≠window).
+  // Clone into the content compartment once at install (0038 pageWindow.Function
+  // parity — content-side bytes only).
+  let overridesContent;
+  try {
+    overridesContent = Cu.cloneInto(String(overrides), pageWindow);
+  } catch (_cloneErr) {
+    overridesContent = String(overrides);
+  }
 
   try {
     if (typeof pageWindow.Worker === "function") {
@@ -587,32 +737,44 @@ function installWorkerHooks(rawWindow, payload, onRuntimeError) {
         function (url, opts) {
           try {
             if (!isSameOriginOrBlob(pageWindow, url)) {
-              return Reflect.construct(OrigWorker, [url, opts]);
+              return contentConstruct(OrigWorker, pageWindow, [url, opts]);
             }
             const isModule = opts && opts.type === "module";
             const origUrl = new pageWindow.URL(url, pageWindow.location.href)
               .href;
+            const preamble = String(overridesContent);
             if (isModule) {
-              const blob = new pageWindow.Blob(
-                [overrides + `;\nawait import(${JSON.stringify(origUrl)});`],
-                { type: "application/javascript" }
+              const blob = contentBlob(
+                pageWindow,
+                preamble + `;
+await import(${JSON.stringify(origUrl)});`
               );
-              return Reflect.construct(OrigWorker, [
+              let moduleOpts;
+              try {
+                moduleOpts = Cu.cloneInto(
+                  Object.assign({}, opts || {}, { type: "module" }),
+                  pageWindow
+                );
+              } catch (_eOpts) {
+                moduleOpts = opts;
+              }
+              return contentConstruct(OrigWorker, pageWindow, [
                 pageWindow.URL.createObjectURL(blob),
-                Object.assign({}, opts || {}, { type: "module" }),
+                moduleOpts,
               ]);
             }
-            const blob = new pageWindow.Blob(
-              [overrides + `;\nimportScripts(${JSON.stringify(origUrl)});`],
-              { type: "application/javascript" }
+            const blob = contentBlob(
+              pageWindow,
+              preamble + `;
+importScripts(${JSON.stringify(origUrl)});`
             );
-            return Reflect.construct(OrigWorker, [
+            return contentConstruct(OrigWorker, pageWindow, [
               pageWindow.URL.createObjectURL(blob),
               opts,
             ]);
           } catch (error) {
             onRuntimeError("Worker", error);
-            return Reflect.construct(OrigWorker, [url, opts]);
+            return contentConstruct(OrigWorker, pageWindow, [url, opts]);
           }
         },
         replacements
@@ -626,21 +788,29 @@ function installWorkerHooks(rawWindow, payload, onRuntimeError) {
         function (url, nameOrOpts) {
           try {
             if (!isSameOriginOrBlob(pageWindow, url)) {
-              return Reflect.construct(OrigSharedWorker, [url, nameOrOpts]);
+              return contentConstruct(OrigSharedWorker, pageWindow, [
+                url,
+                nameOrOpts,
+              ]);
             }
             const origUrl = new pageWindow.URL(url, pageWindow.location.href)
               .href;
-            const blob = new pageWindow.Blob(
-              [overrides + `;\nimportScripts(${JSON.stringify(origUrl)});`],
-              { type: "application/javascript" }
+            const preamble = String(overridesContent);
+            const blob = contentBlob(
+              pageWindow,
+              preamble + `;
+importScripts(${JSON.stringify(origUrl)});`
             );
-            return Reflect.construct(OrigSharedWorker, [
+            return contentConstruct(OrigSharedWorker, pageWindow, [
               pageWindow.URL.createObjectURL(blob),
               nameOrOpts,
             ]);
           } catch (error) {
             onRuntimeError("SharedWorker", error);
-            return Reflect.construct(OrigSharedWorker, [url, nameOrOpts]);
+            return contentConstruct(OrigSharedWorker, pageWindow, [
+              url,
+              nameOrOpts,
+            ]);
           }
         },
         replacements
@@ -651,7 +821,7 @@ function installWorkerHooks(rawWindow, payload, onRuntimeError) {
       throw new Error("Worker and SharedWorker constructors unavailable");
     }
 
-    installedByWindow.set(rawWindow, { replacements });
+    installedByWindow.set(rawWindow, { replacements, payloadKey: key });
     return "installed";
   } catch (error) {
     for (const replacement of replacements.slice().reverse()) {

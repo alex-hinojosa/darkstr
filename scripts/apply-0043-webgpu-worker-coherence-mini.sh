@@ -15,19 +15,23 @@ test -f "${PATCH}"
 test -f "${OVERLAY}/DarkstrWorkerHooks.sys.mjs"
 test -f "${OVERLAY}/DarkstrWorkerHooksChild.sys.mjs"
 
-if grep -Fq 'Soft residual (0043)' "${COMP}/DarkstrWorkerHooksChild.sys.mjs" 2>/dev/null \
-  && grep -Fq 'buildWebGpuOverrides' "${COMP}/DarkstrWorkerHooksChild.sys.mjs" 2>/dev/null \
-  && grep -Fq 'webgpuSeed' "${COMP}/DarkstrWorkerHooks.sys.mjs" 2>/dev/null \
-  && grep -Fq 'deriveWebGpuSeed' "${COMP}/DarkstrWorkerHooks.sys.mjs" 2>/dev/null; then
-  echo "0043 markers already present — skip apply"
+# Soft residual (0043 re-XOR): always sync overlay when re-XOR markers missing
+# (cloneInto overridesContent / depthSeedsForBrowsingContext / payloadKey).
+if grep -Fq 'Soft residual (0043 re-XOR)' "${COMP}/DarkstrWorkerHooksChild.sys.mjs" 2>/dev/null \
+  && grep -Fq 'overridesContent' "${COMP}/DarkstrWorkerHooksChild.sys.mjs" 2>/dev/null \
+  && grep -Fq 'depthSeedsForBrowsingContext' "${COMP}/DarkstrWorkerHooks.sys.mjs" 2>/dev/null \
+  && grep -Fq 'buildWebGpuOverrides' "${COMP}/DarkstrWorkerHooksChild.sys.mjs" 2>/dev/null; then
+  echo "0043 re-XOR markers already present — skip apply"
 else
-  echo "0043 syncing SoT overlay files…"
+  echo "0043 syncing SoT overlay files (re-XOR)…"
   cp -f "${OVERLAY}/DarkstrWorkerHooks.sys.mjs" "${COMP}/DarkstrWorkerHooks.sys.mjs"
   cp -f "${OVERLAY}/DarkstrWorkerHooksChild.sys.mjs" "${COMP}/DarkstrWorkerHooksChild.sys.mjs"
 fi
-grep -Fq 'Soft residual (0043)' "${COMP}/DarkstrWorkerHooks.sys.mjs"
-grep -Fq 'Soft residual (0043)' "${COMP}/DarkstrWorkerHooksChild.sys.mjs"
+grep -Fq 'Soft residual (0043 re-XOR)' "${COMP}/DarkstrWorkerHooks.sys.mjs"
+grep -Fq 'Soft residual (0043 re-XOR)' "${COMP}/DarkstrWorkerHooksChild.sys.mjs"
 grep -Fq 'buildWebGpuOverrides' "${COMP}/DarkstrWorkerHooksChild.sys.mjs"
+grep -Fq 'overridesContent' "${COMP}/DarkstrWorkerHooksChild.sys.mjs"
+grep -Fq 'depthSeedsForBrowsingContext' "${COMP}/DarkstrWorkerHooks.sys.mjs"
 grep -Fq 'deriveWebGpuSeed' "${COMP}/DarkstrWorkerHooks.sys.mjs"
 grep -Fq 'webgpuSeed' "${COMP}/DarkstrWorkerHooks.sys.mjs"
 grep -Fq 'WorkerNavigator.gpu' "${COMP}/DarkstrWorkerHooksChild.sys.mjs"

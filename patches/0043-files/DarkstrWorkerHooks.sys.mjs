@@ -18,6 +18,10 @@
  * AdapterInfo/features/limits; idle when navigator.gpu absent / pref off).
  * ServiceWorker / Worklets still NOT claimed (register path ≠ Worker blob wrap;
  * no Chrome invent). AdapterInfo.device stays empty (do not invent).
+ * Soft residual (0043 re-XOR): workerPayloadForBrowsingContext uses
+ * DepthHooks.depthSeedsForBrowsingContext(bc) FIRST (eTLD-effective under
+ * rotatePerSite — same SoT as window 0038). Persist delivered seeds to
+ * darkstr.worker.lastPayload so Proof gate 3 sees rotating webgpuSeed.
  *
  * Pattern: JSWindowActor patches window.Worker / window.SharedWorker (same as
  * Phase 1 WebExt misc.js) — workers have no window, so constructor wrap + blob
@@ -430,8 +434,47 @@ export var DarkstrWorkerHooks = {
       } catch (_e2) {}
     }
     const persona = plan.payload.persona;
-    const depth = plan.payload.depth || null;
-    return {
+    // Soft residual (0043 re-XOR): prefer Depth eTLD-effective seeds (rotate
+    // path FIRST via depthSeedsForBrowsingContext) — global plan.payload.depth
+    // is seed-42 sticky and collapsed Proof gate 3 worker digests/webgpuSeed.
+    let depth = null;
+    try {
+      const { DarkstrDepthHooks } = ChromeUtils.importESModule(
+        "moz-src:///browser/components/DarkstrDepthHooks.sys.mjs"
+      );
+      const bcSeeds =
+        DarkstrDepthHooks.depthSeedsForBrowsingContext &&
+        DarkstrDepthHooks.depthSeedsForBrowsingContext(bc);
+      if (bcSeeds && typeof bcSeeds.canvasSeed === "number") {
+        const audioSeed = bcSeeds.audioSeed >>> 0;
+        const canvasSeed = bcSeeds.canvasSeed >>> 0;
+        depth = {
+          canvasSeed,
+          audioSeed,
+          webgpuSeed: readWebGpuSeed(bcSeeds, canvasSeed, audioSeed),
+          gpu: normalizeGpu(bcSeeds.gpu) || {
+            vendor: "Apple",
+            renderer: "Apple M1",
+          },
+        };
+      }
+    } catch (_eDepth) {}
+    if (!depth && plan.payload.depth) {
+      const d = plan.payload.depth;
+      depth = {
+        canvasSeed: d.canvasSeed >>> 0,
+        audioSeed: d.audioSeed >>> 0,
+        webgpuSeed:
+          d.webgpuSeed != null
+            ? d.webgpuSeed >>> 0
+            : readWebGpuSeed(d, d.canvasSeed >>> 0, d.audioSeed >>> 0),
+        gpu: {
+          vendor: d.gpu.vendor,
+          renderer: d.gpu.renderer,
+        },
+      };
+    }
+    const out = {
       persona: {
         userAgent: persona.userAgent,
         platform: persona.platform,
@@ -441,25 +484,28 @@ export var DarkstrWorkerHooks = {
           ? persona.languages.slice()
           : ["en-US", "en"],
       },
-      depth: depth
-        ? {
-            canvasSeed: depth.canvasSeed >>> 0,
-            audioSeed: depth.audioSeed >>> 0,
-            webgpuSeed:
-              depth.webgpuSeed != null
-                ? depth.webgpuSeed >>> 0
-                : readWebGpuSeed(
-                    depth,
-                    depth.canvasSeed >>> 0,
-                    depth.audioSeed >>> 0
-                  ),
-            gpu: {
-              vendor: depth.gpu.vendor,
-              renderer: depth.gpu.renderer,
-            },
-          }
-        : null,
+      depth,
     };
+    // Mirror Depth lastSeeds: persist seeds actually handed to content so
+    // darkstr.worker.lastPayload.webgpuSeed rotates with eTLD under rotatePerSite.
+    try {
+      if (out.depth && typeof out.depth.webgpuSeed === "number") {
+        Services.prefs.setStringPref(
+          LAST_PAYLOAD_PREF,
+          JSON.stringify({
+            ua: out.persona.userAgent,
+            platform: out.persona.platform,
+            hw: out.persona.hardwareConcurrency,
+            mem: out.persona.deviceMemory,
+            langs: out.persona.languages,
+            canvasSeed: out.depth.canvasSeed ?? null,
+            webgpuSeed: out.depth.webgpuSeed >>> 0,
+            gpu: out.depth.gpu ?? null,
+          })
+        );
+      }
+    } catch (_ePay) {}
+    return out;
   },
 
   _readWorkerPayload() {
