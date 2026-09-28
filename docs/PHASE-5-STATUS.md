@@ -23,7 +23,7 @@ Phase 5 soft residual pin **0043** Worker/SharedWorker WebGPU (0038 OOS) is **OP
 |------|--------|
 | Pin | **0036** |
 | PR | [#67](https://github.com/alex-hinojosa/darkstr/pull/67) **MERGED** as `a49cf98b3f120e5c0d14336f2411c9638d4c0cff` |
-| Tip at Proof |  |
+| Tip at Proof | `d01038b7d64c3dd95e581263dca2fa47381b8d7c` |
 | Branch | `builder/phase5-fonts-0036` |
 | Patch | [`patches/0036-darkstr-fonts-coherence.patch`](../patches/0036-darkstr-fonts-coherence.patch) |
 | Mini helper | [`scripts/apply-0036-fonts-coherence-mini.sh`](../scripts/apply-0036-fonts-coherence-mini.sh) / [`PHASE-5-FONTS-0036-MINI-APPLY.sh`](PHASE-5-FONTS-0036-MINI-APPLY.sh) |
@@ -109,7 +109,7 @@ All five font-coherence XOR gates passed on Proof tip `d01038b7d64c3dd95e581263d
 |------|--------|
 | Pin | **0037** |
 | PR | [#68](https://github.com/alex-hinojosa/darkstr/pull/68) **MERGED** as `fda34a4890ab9b5a8eeae7b5862e6ffddd5c8464` |
-| Tip at Proof | `67fe87dee8de63016368bae9412ec84a8128032e` |
+| Tip at Proof | `f1ae094082f7c626a10caa9356d60a309977e971` |
 | Branch | `builder/phase5-speech-0037` |
 | Patch | [`patches/0037-darkstr-speech-coherence.patch`](../patches/0037-darkstr-speech-coherence.patch) |
 | Mini helper | [`scripts/apply-0037-speech-coherence-mini.sh`](../scripts/apply-0037-speech-coherence-mini.sh) / [`PHASE-5-SPEECH-0037-MINI-APPLY.sh`](PHASE-5-SPEECH-0037-MINI-APPLY.sh) |
@@ -333,7 +333,7 @@ webgpuSeed diverge, plainAdapterInfo non-empty / familiesCoherent).
 |------|--------|
 | Pin | **0043** (soft residual after 0038 Worker OOS) |
 | PR | [#74](https://github.com/alex-hinojosa/darkstr/pull/74) **OPEN** |
-| Tip at Proof | `e9598edd55ca05330248ce7b94858112c73c533e` |
+| Tip at Proof | `98755c0d9e77afdc5e5f0ce34372a69b344750c5` (feat; branch HEAD may include docs align — Proof use PR head) |
 | Branch | `builder/phase5-webgpu-worker-0043` |
 | Patch | [`patches/0043-darkstr-webgpu-worker-coherence.patch`](../patches/0043-darkstr-webgpu-worker-coherence.patch) |
 | Apply SoT | [`patches/0043-files/`](../patches/0043-files/) (`DarkstrWorkerHooks.sys.mjs`, `DarkstrWorkerHooksChild.sys.mjs`) |
