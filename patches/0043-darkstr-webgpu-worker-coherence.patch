@@ -1,0 +1,497 @@
+# darkstr 0043 Worker/SharedWorker WebGPU coherence (+ re-XOR)
+# Apply SoT: patches/0043-files via scripts/apply-0043-webgpu-worker-coherence-mini.sh
+# Marker: Soft residual (0043 re-XOR) / overridesContent / depthSeedsForBrowsingContext
+# re-XOR: Cu.cloneInto overrides into content (chrome-string Blob threw → native gpu);
+#         workerPayloadForBrowsingContext uses Depth eTLD seeds FIRST under rotatePerSite.
+#
+--- a/browser/components/DarkstrWorkerHooks.sys.mjs
++++ b/browser/components/DarkstrWorkerHooks.sys.mjs
+@@ -11,13 +11,19 @@
+  * Mirrors public control plane (no Rust FFI required in this drop):
+  *   duppel_bridge::DepthSurface::{DedicatedWorker,SharedWorker}
+  *   duppel_bridge::HookApplicatorSurface::WorkerGlobals
+- *   seed_source = persona_snapshot (+ depth seeds for OffscreenCanvas/WebGL in workers)
++ *   seed_source = persona_snapshot (+ depth seeds for OffscreenCanvas/WebGL/WebGPU in workers)
++ *
++ * Soft residual (0043): WorkerNavigator.gpu / DedicatedWorker+SharedWorker WebGPU
++ * surfaces get the same seed-tied coherence as window 0038 (webgpuSeed + plain
++ * AdapterInfo/features/limits; idle when navigator.gpu absent / pref off).
++ * ServiceWorker / Worklets still NOT claimed (register path ≠ Worker blob wrap;
++ * no Chrome invent). AdapterInfo.device stays empty (do not invent).
+  *
+  * Pattern: JSWindowActor patches window.Worker / window.SharedWorker (same as
+  * Phase 1 WebExt misc.js) — workers have no window, so constructor wrap + blob
+- * importScripts/import injects navigator + OffscreenCanvas/WebGL into the worker
+- * global. Nested Worker wrap depth-limited to 2. Cross-origin workers pass through
+- * (CSP-safe). ServiceWorker / Worklets NOT claimed.
++ * importScripts/import injects navigator + OffscreenCanvas/WebGL/WebGPU into the
++ * worker global. Nested Worker wrap depth-limited to 2. Cross-origin workers pass
++ * through (CSP-safe). ServiceWorker / Worklets NOT claimed.
+  *
+  * Gates (default-off — idle unless explicitly allowed):
+  *   pollution_active = mode=="pollution" && !nativeCompatible
+@@ -41,6 +47,26 @@
+ const LAST_PAYLOAD_PREF = "darkstr.worker.lastPayload";
+ const LAST_ERROR_PREF = "darkstr.worker.lastError";
+ const LAST_INSTALL_PREF = "darkstr.worker.lastInstall";
++
++
++function deriveWebGpuSeed(speechOrCanvasSeed, audioSeed) {
++  // Soft residual (0043): match DepthHooks deriveWebGpuSeed (speechSeed ⊕ audio).
++  // Worker fallback may lack speechSeed — canvasSeed is an acceptable substitute
++  // only when Depth plan did not supply webgpuSeed (rare offline path).
++  return (speechOrCanvasSeed ^ Math.imul(audioSeed >>> 0, 0xc2b2ae35)) >>> 0;
++}
++
++function readWebGpuSeed(obj, speechOrCanvasSeed, audioSeed) {
++  if (!obj || typeof obj !== "object") {
++    return deriveWebGpuSeed(speechOrCanvasSeed >>> 0, audioSeed >>> 0);
++  }
++  for (const key of ["webgpuSeed", "webgpu_seed"]) {
++    if (typeof obj[key] === "number" && Number.isFinite(obj[key])) {
++      return obj[key] >>> 0;
++    }
++  }
++  return deriveWebGpuSeed(speechOrCanvasSeed >>> 0, audioSeed >>> 0);
++}
+ 
+ const GPU_BY_OS = {
+   macos: [
+@@ -419,6 +445,14 @@
+         ? {
+             canvasSeed: depth.canvasSeed >>> 0,
+             audioSeed: depth.audioSeed >>> 0,
++            webgpuSeed:
++              depth.webgpuSeed != null
++                ? depth.webgpuSeed >>> 0
++                : readWebGpuSeed(
++                    depth,
++                    depth.canvasSeed >>> 0,
++                    depth.audioSeed >>> 0
++                  ),
+             gpu: {
+               vendor: depth.gpu.vendor,
+               renderer: depth.gpu.renderer,
+@@ -453,9 +487,13 @@
+       const plan = DarkstrDepthHooks.getPlan?.();
+       const seeds = plan?.armed ? plan.seeds : null;
+       if (seeds && typeof seeds.canvasSeed === "number") {
++        const audioSeed = seeds.audioSeed >>> 0;
++        const canvasSeed = seeds.canvasSeed >>> 0;
++        // Soft residual (0043): prefer Depth plan webgpuSeed (0038 SoT).
+         depth = {
+-          canvasSeed: seeds.canvasSeed >>> 0,
+-          audioSeed: seeds.audioSeed >>> 0,
++          canvasSeed,
++          audioSeed,
++          webgpuSeed: readWebGpuSeed(seeds, canvasSeed, audioSeed),
+           gpu: normalizeGpu(seeds.gpu) || {
+             vendor: "Apple",
+             renderer: "Apple M1",
+@@ -503,7 +541,12 @@
+         const audioSeed = readU32Field(parsed, "audioSeed", "audio_seed");
+         const gpu = normalizeGpu(parsed.gpu);
+         if (canvasSeed !== null && audioSeed !== null && gpu) {
+-          return { canvasSeed, audioSeed, gpu };
++          return {
++            canvasSeed,
++            audioSeed,
++            webgpuSeed: readWebGpuSeed(parsed, canvasSeed, audioSeed),
++            gpu,
++          };
+         }
+       }
+     } catch (_e) {}
+@@ -587,9 +630,12 @@
+     void pickFrom([0, 1], rng);
+     const canvasSeed = (rng() * 0xffffffff) >>> 0;
+     const audioSeed = (rng() * 0xffffffff) >>> 0;
++    // Soft residual (0043): webgpuSeed after canvas/audio (Depth 0038 parity).
++    const webgpuSeed = (rng() * 0xffffffff) >>> 0;
+     return {
+       canvasSeed,
+       audioSeed,
++      webgpuSeed,
+       gpu: gpu2 || gpu,
+     };
+   },
+@@ -610,6 +656,7 @@
+             mem: payload.persona.deviceMemory,
+             langs: payload.persona.languages,
+             canvasSeed: payload.depth?.canvasSeed ?? null,
++            webgpuSeed: payload.depth?.webgpuSeed ?? null,
+             gpu: payload.depth?.gpu ?? null,
+           })
+         );
+--- a/browser/components/DarkstrWorkerHooksChild.sys.mjs
++++ b/browser/components/DarkstrWorkerHooksChild.sys.mjs
+@@ -5,9 +5,12 @@
+ /**
+  * darkstr Phase 3 pin 3 — JSWindowActor child.
+  * Wrap DedicatedWorker / SharedWorker constructors so worker globals stay
+- * persona-coherent (navigator + OffscreenCanvas/WebGL depth). Phase 1 parity
+- * via blob importScripts / dynamic import; ServiceWorker NOT claimed.
+- * Brand: darkstr — not official LibreWolf.
++ * persona-coherent (navigator + OffscreenCanvas/WebGL/WebGPU depth). Phase 1
++ * parity via blob importScripts / dynamic import; ServiceWorker NOT claimed.
++ * Soft residual (0043): WorkerNavigator.gpu wraps with same seed-tied coherence
++ * as window 0038 (plain AdapterInfo/features/limits; idle when navigator.gpu
++ * absent). ServiceWorker still OOS (register ≠ Worker blob). Brand: darkstr —
++ * not official LibreWolf.
+  *
+  * Fission note: waive content window + Cu.exportFunction replacements.
+  * pageshow reinstall; surface lastError via InstallStatus IPC.
+@@ -134,6 +137,343 @@
+   var __gv=${JSON.stringify(vendor)},__gr=${JSON.stringify(renderer)};
+   if(typeof WebGLRenderingContext!=='undefined'){var _gp=WebGLRenderingContext.prototype.getParameter;WebGLRenderingContext.prototype.getParameter=function(p){if(p===0x9245)return __gv;if(p===0x9246)return __gr;return _gp.call(this,p);};}
+   if(typeof WebGL2RenderingContext!=='undefined'){var _gp2=WebGL2RenderingContext.prototype.getParameter;WebGL2RenderingContext.prototype.getParameter=function(p){if(p===0x9245)return __gv;if(p===0x9246)return __gr;return _gp2.call(this,p);};}
++})();`;
++}
++
++
++/**
++ * Soft residual (0043): inject 0038-parity WebGPU wrap into worker globals.
++ * Idle when navigator.gpu / requestAdapter absent (LibreWolf dom.webgpu.enabled
++ * default false — no invent). Plain objects + defineProperty overlay (0038
++ * Xray/Marionette lessons). Never invent Chrome adapter brands. AdapterInfo.device
++ * stays "". ServiceWorker NOT claimed here.
++ */
++function buildWebGpuOverrides(depth) {
++  if (!depth || typeof depth.webgpuSeed !== "number") {
++    return "";
++  }
++  const seed = depth.webgpuSeed >>> 0;
++  const vendor = depth.gpu?.vendor || "Apple";
++  const renderer = depth.gpu?.renderer || "Apple M1";
++  // Body mirrors DepthHooksChild installWebGpuInPage (window 0038) — kept in the
++  // worker compartment via blob preamble (no chrome Xray channel).
++  return `
++;(function(){
++  try {
++    if (typeof navigator === "undefined" || !navigator || !navigator.gpu ||
++        typeof navigator.gpu.requestAdapter !== "function") {
++      return;
++    }
++  } catch (_abs) { return; }
++  var SEED = ${seed} >>> 0;
++  var VENDOR = ${JSON.stringify(vendor)};
++  var RENDERER = ${JSON.stringify(renderer)};
++  function hashStr(s) {
++    var h = SEED;
++    var str = String(s || "");
++    for (var i = 0; i < str.length; i++) {
++      h = Math.imul(h ^ str.charCodeAt(i), 0x01000193) >>> 0;
++    }
++    return h >>> 0;
++  }
++  function mapAdapterInfo() {
++    var v = VENDOR.toLowerCase();
++    var r = String(RENDERER || "");
++    var desc = r;
++    if (/apple/i.test(v) || /apple/i.test(r)) {
++      return { vendor: "apple", architecture: "common-3", device: "", description: desc || "Apple GPU" };
++    }
++    if (/intel/i.test(v) || /intel/i.test(r)) {
++      return { vendor: "intel", architecture: "gen-12lp", device: "", description: desc || "Intel Graphics" };
++    }
++    if (/nvidia/i.test(v) || /nvidia/i.test(r)) {
++      return { vendor: "nvidia", architecture: "gpu", device: "", description: desc || "NVIDIA GPU" };
++    }
++    if (/amd/i.test(v) || /radeon/i.test(r)) {
++      return { vendor: "amd", architecture: "gcn", device: "", description: desc || "AMD GPU" };
++    }
++    return { vendor: "apple", architecture: "common-3", device: "", description: desc || "Apple GPU" };
++  }
++  var PERSONA_INFO = mapAdapterInfo();
++  var ALWAYS_KEEP_FEATURES = { "core-features-and-limits": 1 };
++  function wrapFeatures(nativeFeatures) {
++    if (!nativeFeatures) { return nativeFeatures; }
++    var all = [];
++    try {
++      if (typeof nativeFeatures.forEach === "function") {
++        nativeFeatures.forEach(function(name) { all.push(String(name)); });
++      } else if (typeof nativeFeatures.values === "function") {
++        var it = nativeFeatures.values();
++        var step;
++        while (!(step = it.next()).done) { all.push(String(step.value)); }
++      }
++    } catch (_e) { return nativeFeatures; }
++    var always = [];
++    var optional = [];
++    for (var i = 0; i < all.length; i++) {
++      if (ALWAYS_KEEP_FEATURES[all[i]]) { always.push(all[i]); }
++      else { optional.push(all[i]); }
++    }
++    optional.sort(function(a, b) {
++      var ra = hashStr("rank:" + a);
++      var rb = hashStr("rank:" + b);
++      if (ra !== rb) { return ra < rb ? -1 : 1; }
++      if (a < b) { return -1; }
++      if (a > b) { return 1; }
++      return 0;
++    });
++    var drop = 0;
++    if (optional.length > 0) {
++      drop = 1 + (SEED % Math.min(3, optional.length));
++      if (drop > optional.length) { drop = optional.length; }
++      if (optional.length >= 2 && drop >= optional.length) { drop = optional.length - 1; }
++    }
++    var kept = always.concat(optional.slice(drop));
++    if (!kept.length && all.length) { kept.push(all[0]); }
++    var seen = Object.create(null);
++    var uniq = [];
++    for (var k = 0; k < kept.length; k++) {
++      if (!seen[kept[k]]) { seen[kept[k]] = 1; uniq.push(kept[k]); }
++    }
++    kept = uniq;
++    var set = Object.create(null);
++    for (var j = 0; j < kept.length; j++) { set[kept[j]] = 1; }
++    return {
++      has: function(name) { return !!set[String(name)]; },
++      values: function() {
++        var idx = 0;
++        return {
++          next: function() {
++            if (idx >= kept.length) { return { done: true, value: undefined }; }
++            return { done: false, value: kept[idx++] };
++          },
++          [Symbol.iterator]: function() { return this; }
++        };
++      },
++      keys: function() { return this.values(); },
++      entries: function() {
++        var idx = 0;
++        return {
++          next: function() {
++            if (idx >= kept.length) { return { done: true, value: undefined }; }
++            var kk = kept[idx++];
++            return { done: false, value: [kk, kk] };
++          },
++          [Symbol.iterator]: function() { return this; }
++        };
++      },
++      forEach: function(cb, thisArg) {
++        for (var j2 = 0; j2 < kept.length; j2++) {
++          cb.call(thisArg, kept[j2], kept[j2], this);
++        }
++      },
++      get size() { return kept.length; }
++    };
++  }
++  var FUDGE_LIMIT_KEYS = {
++    maxTextureDimension1D: 1, maxTextureDimension2D: 1, maxTextureDimension3D: 1,
++    maxTextureArrayLayers: 1, maxBindGroups: 1,
++    maxSampledTexturesPerShaderStage: 1, maxSamplersPerShaderStage: 1,
++    maxStorageBuffersPerShaderStage: 1, maxUniformBuffersPerShaderStage: 1,
++    maxUniformBufferBindingSize: 1, maxStorageBufferBindingSize: 1,
++    maxBufferSize: 1, maxVertexBuffers: 1, maxVertexAttributes: 1,
++    maxColorAttachments: 1, maxComputeWorkgroupStorageSize: 1,
++    maxComputeInvocationsPerWorkgroup: 1, maxComputeWorkgroupsPerDimension: 1
++  };
++  function fudgeLimit(key, nativeVal) {
++    var n = Number(nativeVal);
++    if (!isFinite(n) || n <= 0) { return nativeVal; }
++    if (!FUDGE_LIMIT_KEYS[key]) { return nativeVal; }
++    var fudge = 0.99 + ((hashStr("lim:" + key) % 1000) / 100000);
++    var out = Math.floor(n * fudge);
++    if (out < 1) { out = 1; }
++    if (out > n) { out = n; }
++    return out;
++  }
++  function wrapLimits(nativeLimits) {
++    if (!nativeLimits) { return nativeLimits; }
++    var snapped = Object.create(null);
++    var snapKeys = Object.keys(FUDGE_LIMIT_KEYS).concat([
++      "minUniformBufferOffsetAlignment", "minStorageBufferOffsetAlignment",
++      "maxBindGroupsPlusVertexBuffers",
++      "maxDynamicUniformBuffersPerPipelineLayout",
++      "maxDynamicStorageBuffersPerPipelineLayout",
++      "maxComputeWorkgroupSizeX", "maxComputeWorkgroupSizeY", "maxComputeWorkgroupSizeZ",
++      "maxInterStageShaderVariables", "maxColorAttachmentBytesPerSample"
++    ]);
++    for (var si = 0; si < snapKeys.length; si++) {
++      var sk = snapKeys[si];
++      var sv;
++      try { sv = nativeLimits[sk]; } catch (_se) { continue; }
++      if (typeof sv === "number" || typeof sv === "bigint") {
++        snapped[sk] = fudgeLimit(sk, Number(sv));
++      }
++    }
++    return snapped;
++  }
++  function wrapInfo(nativeInfo) {
++    var base = PERSONA_INFO;
++    var out = {
++      vendor: String(base.vendor || ""),
++      architecture: String(base.architecture || ""),
++      device: String(base.device || ""),
++      description: String(base.description || "")
++    };
++    try {
++      if (nativeInfo && typeof nativeInfo.isFallbackAdapter === "boolean") {
++        out.isFallbackAdapter = nativeInfo.isFallbackAdapter;
++      }
++    } catch (_e) {}
++    try {
++      if (nativeInfo && typeof nativeInfo.subgroupMinSize === "number") {
++        out.subgroupMinSize = nativeInfo.subgroupMinSize;
++      }
++      if (nativeInfo && typeof nativeInfo.subgroupMaxSize === "number") {
++        out.subgroupMaxSize = nativeInfo.subgroupMaxSize;
++      }
++    } catch (_e2) {}
++    return out;
++  }
++  function wrapDevice(device, sharedFeatures, sharedLimits, sharedInfo) {
++    if (!device) { return device; }
++    var featCache = sharedFeatures || null;
++    var limCache = sharedLimits || null;
++    var infoCache = sharedInfo || null;
++    function ensureFeat() {
++      if (!featCache) { featCache = wrapFeatures(device.features); }
++      return featCache;
++    }
++    function ensureLim() {
++      if (!limCache) { limCache = wrapLimits(device.limits); }
++      return limCache;
++    }
++    function ensureInfo() {
++      if (!infoCache) { infoCache = wrapInfo(device.adapterInfo); }
++      return infoCache;
++    }
++    var overlaid = false;
++    try {
++      var f = ensureFeat();
++      var l = ensureLim();
++      var i = ensureInfo();
++      Object.defineProperty(device, "features", {
++        configurable: true, enumerable: true, get: function() { return f; }
++      });
++      Object.defineProperty(device, "limits", {
++        configurable: true, enumerable: true, get: function() { return l; }
++      });
++      Object.defineProperty(device, "adapterInfo", {
++        configurable: true, enumerable: true, get: function() { return i; }
++      });
++      overlaid = true;
++    } catch (_defErr) { overlaid = false; }
++    if (overlaid) { return device; }
++    return new Proxy(device, {
++      get: function(target, prop, receiver) {
++        if (typeof prop === "symbol") { return Reflect.get(target, prop, target); }
++        var key = String(prop);
++        if (key === "features") { return ensureFeat(); }
++        if (key === "limits") { return ensureLim(); }
++        if (key === "adapterInfo") { return ensureInfo(); }
++        var raw;
++        try { raw = target[prop]; } catch (_e) { return undefined; }
++        if (typeof raw === "function") { return raw.bind(target); }
++        return raw;
++      }
++    });
++  }
++  function wrapAdapter(adapter) {
++    if (!adapter) { return adapter; }
++    var featCache = null;
++    var limCache = null;
++    var infoCache = null;
++    function getFeat() {
++      if (!featCache) { featCache = wrapFeatures(adapter.features); }
++      return featCache;
++    }
++    function getLim() {
++      if (!limCache) { limCache = wrapLimits(adapter.limits); }
++      return limCache;
++    }
++    function getInfo() {
++      if (!infoCache) { infoCache = wrapInfo(adapter.info); }
++      return infoCache;
++    }
++    return new Proxy(adapter, {
++      get: function(target, prop, receiver) {
++        if (typeof prop === "symbol") { return Reflect.get(target, prop, target); }
++        var key = String(prop);
++        if (key === "features") { return getFeat(); }
++        if (key === "limits") { return getLim(); }
++        if (key === "info") { return getInfo(); }
++        if (key === "requestDevice") {
++          var origRD = target.requestDevice;
++          return function(desc) {
++            var farbled = getFeat();
++            var newDesc;
++            if (desc === undefined || desc === null) { newDesc = {}; }
++            else {
++              try { newDesc = Object.assign({}, desc); }
++              catch (_eAssign) { newDesc = desc; }
++            }
++            if (newDesc && typeof newDesc === "object") {
++              var reqIn = newDesc.requiredFeatures;
++              var reqOut = [];
++              if (reqIn && typeof reqIn.length === "number" && reqIn.length > 0) {
++                for (var ri = 0; ri < reqIn.length; ri++) {
++                  var fn = String(reqIn[ri]);
++                  if (!farbled.has(fn)) {
++                    return Promise.reject(new TypeError(
++                      "Failed to execute 'requestDevice' on 'GPUAdapter': " +
++                      "Invalid feature call. Missing feature: " + fn
++                    ));
++                  }
++                  reqOut.push(fn);
++                }
++                newDesc.requiredFeatures = reqOut;
++              }
++            }
++            function finish(dev) {
++              return wrapDevice(dev, getFeat(), getLim(), getInfo());
++            }
++            return Promise.resolve(origRD.call(target, newDesc)).then(finish);
++          };
++        }
++        var raw;
++        try { raw = target[prop]; } catch (_e) { return undefined; }
++        if (typeof raw === "function") { return raw.bind(target); }
++        return raw;
++      }
++    });
++  }
++  var gpuObj = null;
++  try {
++    if (typeof navigator !== "undefined" && navigator && navigator.gpu) {
++      gpuObj = navigator.gpu;
++    }
++  } catch (_e) {}
++  var gpuProto = null;
++  if (gpuObj) { gpuProto = Object.getPrototypeOf(gpuObj); }
++  if (!gpuProto && typeof GPU !== "undefined" && GPU.prototype) {
++    gpuProto = GPU.prototype;
++  }
++  if (gpuProto && typeof gpuProto.requestAdapter === "function") {
++    var origRA = gpuProto.requestAdapter;
++    var wrappedRA = function(options) {
++      var self = this;
++      return Promise.resolve(origRA.apply(self, arguments)).then(function(adapter) {
++        if (!adapter) { return null; }
++        return wrapAdapter(adapter);
++      });
++    };
++    try {
++      Object.defineProperty(gpuProto, "requestAdapter", {
++        configurable: true, enumerable: true, writable: true, value: wrappedRA
++      });
++    } catch (_def) {
++      try { gpuProto.requestAdapter = wrappedRA; } catch (_e2) {}
++    }
++  }
+ })();`;
+ }
+ 
+@@ -163,7 +503,8 @@
+ function buildAllOverrides(payload) {
+   const nav = buildNavigatorOverrides(payload.persona);
+   const depth = buildDepthOverrides(payload.depth);
+-  const leaf = nav + depth;
++  const webgpu = buildWebGpuOverrides(payload.depth);
++  const leaf = nav + depth + webgpu;
+   return leaf + buildNestedWorkerWrapper(leaf);
+ }
+ 
