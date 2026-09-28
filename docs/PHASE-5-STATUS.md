@@ -12,8 +12,8 @@ Phase 5 pin **0036 fonts coherence** is **MERGED** / Proof XOR **PASS** (PR #67;
 Phase 5 pin **0037 speech coherence** is **MERGED** / Proof XOR **PASS** (PR #68; see evidence below).
 Phase 5 pin **0038 WebGPU coherence** is **MERGED** / Proof XOR **PASS** (PR [#69](https://github.com/alex-hinojosa/darkstr/pull/69); see evidence below).
 
-Phase 5 eng **depth backlog was empty** after 0038. Soft-residual polish pin **0039** (FontFaceSet enum coherence) is **IN FLIGHT** (this PR) — not a new depth surface; extends 0036 check→enumeration.
-Native privacy-pane UI is PM-owned; Approach A FFI remains deferred.
+Phase 5 pin **0039 FontFaceSet enumeration coherence** is **MERGED** / Proof XOR **PASS** (PR [#70](https://github.com/alex-hinojosa/darkstr/pull/70); see evidence below) — soft-residual polish extending 0036 `check`→enumeration; not a new depth surface.
+Phase 5 eng **depth backlog empty**; soft residuals remain (see backlog table). Native privacy-pane UI is PM-owned; Approach A FFI is in flight separately (do not touch from this close).
 
 ## Completed — 0036 Fonts coherence / fingerprint farbling
 
@@ -82,7 +82,7 @@ All five font-coherence XOR gates passed on Proof tip `d01038b7d64c3dd95e581263d
 
 - speech / WebGPU
 - Native-Compatible privacy-pane UI (PM)
-- ~~FontFaceSet full enumeration filtering~~ → **0039** (in flight)
+- ~~FontFaceSet full enumeration filtering~~ → **0039** **CLOSED** / Proof PASS (PR #70)
 - gfx-level font whitelist (Tor-style) — page-compartment only
 
 ### Residual risks
@@ -309,30 +309,32 @@ webgpuSeed diverge, plainAdapterInfo non-empty / familiesCoherent).
 
 ## Next eng backlog
 
-**Phase 5 eng depth backlog empty after 0038.** Soft-residual polish:
+**Phase 5 eng depth backlog empty after 0039.** Soft residuals only (no new eng pins from this close):
 
 | Pin | Residual | Status |
 |-----|----------|--------|
-| **0039** | FontFaceSet enum coherence (extends 0036 `check`) | **IN FLIGHT** (this PR) |
-| — | Cookie 0035 `/echo` Cookie header empty | Open (necko/QI investigation; not this pin) |
+| — | Cookie 0035 `/echo` Cookie header empty | Soft / open (necko/QI; not this close) |
 | — | Speech 0037 pref-off / empty voices before async | Soft / do not invent API |
 | — | WebGPU 0038 Worker OOS / AdapterInfo.device empty | Soft / do not invent |
 | — | FFI `libduppel_ffi` not in DMG `package-manifest.in` | Packaging residual (not depth) |
+| — | `document.fonts.ready` still host Promise | Soft (by design; not wrapped in 0039) |
 | — | Native privacy-pane UI | PM-owned |
-| — | Approach A FFI | Deferred |
+| — | Approach A FFI | In flight separately (do not touch from #70 close) |
 
-## In flight — 0039 FontFaceSet enumeration coherence
+## Completed — 0039 FontFaceSet enumeration coherence
 
 | Item | Status |
 |------|--------|
 | Pin | **0039** |
-| PR | [#70](https://github.com/alex-hinojosa/darkstr/pull/70) **OPEN** (do not merge from Builder) |
-| Tip | `01fbf27e60d37de0733a57cbdc64adec53891b22` |
+| PR | [#70](https://github.com/alex-hinojosa/darkstr/pull/70) **MERGED** as `5f8e8ceb2cf3f00b10734a56e726dc61a952b130` |
+| Tip at Proof | `4810eb6a2deea687e8ee406dcf7606da65e7edfe` |
 | Branch | `builder/phase5-fonts-enum-0039` |
 | Patch | [`patches/0039-darkstr-fonts-enum-coherence.patch`](../patches/0039-darkstr-fonts-enum-coherence.patch) |
 | Apply SoT | [`patches/0039-files/DarkstrDepthHooksChild.sys.mjs`](../patches/0039-files/DarkstrDepthHooksChild.sys.mjs) |
 | Mini helper | [`scripts/apply-0039-fonts-enum-coherence-mini.sh`](../scripts/apply-0039-fonts-enum-coherence-mini.sh) / [`PHASE-5-FONTS-0039-MINI-APPLY.sh`](PHASE-5-FONTS-0039-MINI-APPLY.sh) |
 | Mini apply | **OK** 2026-09-28 ~07:09 CDT (markers + mach build browser/components + moz-src symlinks) |
+| Proof | **PASS** |
+| Evidence | `~/AgentDocs/proof/darkstr-pr70-0039-xor-20260928-071747/` + [PR comment](https://github.com/alex-hinojosa/darkstr/pull/70#issuecomment-5869690371) |
 | Extends | **0036** `shouldHideFamily` / `fontSeed` (no new seed) |
 
 ### Design summary
@@ -355,6 +357,16 @@ Homogeneous / hooks-off: idle. No Chrome-only font lists. Double-read stable (co
 4. Same eTLD two tabs → same digests/seed
 5. Golden lock seed-42 coherent; no Chrome-only font names; `document.fonts.ready` still a Promise
 
+### Proof result — PASS
+
+All five FontFaceSet-enumeration XOR gates passed on Proof tip `4810eb6a2deea687e8ee406dcf7606da65e7edfe` (2026-09-28 ~07:17 CDT).
+
+**Soft residuals (not FAIL):**
+
+- `document.fonts.ready` remains the host load-completion Promise (**not wrapped** by design).
+- DOM width fudge ≤0.1% (0036 accepted).
+- Remaining soft list (not this pin): Cookie 0035 `/echo` Cookie empty; Speech 0037 pref-off / empty voices before async; WebGPU 0038 Worker OOS / AdapterInfo.device empty; FFI dylib not in DMG `package-manifest.in`; Approach A FFI in flight separately; Native privacy-pane UI (PM).
+
 ### Out of scope (this pin)
 
 - Cookie `/echo` header empty → separate follow-up
@@ -364,13 +376,15 @@ Homogeneous / hooks-off: idle. No Chrome-only font lists. Double-read stable (co
 - Speech / WebGPU soft residuals
 
 
-## Apply status (Mini) — 0039 — 2026-09-28 ~07:09 CDT
+## Apply status (Mini) — 0039 — 2026-09-28 ~07:09 CDT (Proof PASS) / merge ~07:19 CDT
 
 - Tree: LibreWolf **156.0.1-1** (`$DARKSTR_GECKO_ROOT`)
 - Markers already present (Builder applied source edits); patch skip OK
 - `./mach build --allow-subdirectory-build browser/components` — **OK** (~7s)
 - `make install-dist_bin` — Kept existing; moz-src symlinks refreshed
 - Symlinks: `dist/LibreWolf.app/.../moz-src/browser/components/DarkstrDepthHooksChild.sys.mjs` → source (`Soft residual (0039)` / `keptFromThis` / `makeFaceIterator` present; SHA match)
+- PR [#70](https://github.com/alex-hinojosa/darkstr/pull/70) **MERGED** as `5f8e8ceb2cf3f00b10734a56e726dc61a952b130`; Proof XOR **PASS** on tip `4810eb6a2deea687e8ee406dcf7606da65e7edfe`
+- Evidence: `~/AgentDocs/proof/darkstr-pr70-0039-xor-20260928-071747/`
 - Apply log: `~/src/darkstr-gecko/darkstr-apply-0039-20260928-070940.log`
 - Disk free after apply: ~21 Gi (Data volume)
 
@@ -394,7 +408,7 @@ Pin detail: [`MINI-PACKAGE-PIN.md`](MINI-PACKAGE-PIN.md). Builder may offer Proo
 What is **not** eng-owned next (do not invent pins):
 
 - **Native privacy-pane UI** — PM-owned
-- **Approach A FFI** — deferred
+- **Approach A FFI** — in flight separately (do not touch from #70 docs close)
 
 No new eng pins started from this close.
 
