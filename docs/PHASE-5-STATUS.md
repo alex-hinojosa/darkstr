@@ -333,15 +333,15 @@ webgpuSeed diverge, plainAdapterInfo non-empty / familiesCoherent).
 |------|--------|
 | Pin | **0043** (soft residual after 0038 Worker OOS) |
 | PR | [#74](https://github.com/alex-hinojosa/darkstr/pull/74) **OPEN** |
-| Tip at Proof | `a999042c994bb1d0064150e1dd9d3696ef8dd0eb` |
+| Tip at Proof | `70ab6a48744025863e1fd4c85b7e45200554bbeb` |
 | Branch | `builder/phase5-webgpu-worker-0043` |
 | Patch | [`patches/0043-darkstr-webgpu-worker-coherence.patch`](../patches/0043-darkstr-webgpu-worker-coherence.patch) |
 | Apply SoT | [`patches/0043-files/`](../patches/0043-files/) (`DarkstrWorkerHooks.sys.mjs`, `DarkstrWorkerHooksChild.sys.mjs`) |
 | Mini helper | [`scripts/apply-0043-webgpu-worker-coherence-mini.sh`](../scripts/apply-0043-webgpu-worker-coherence-mini.sh) / [`PHASE-5-WEBGPU-WORKER-0043-MINI-APPLY.sh`](PHASE-5-WEBGPU-WORKER-0043-MINI-APPLY.sh) |
 | Extends | **0018** Worker blob + **0038** window WebGPU parity |
-| Mini apply | **OK** 2026-09-28 ~08:13 CDT (SoT + mach build browser/components; moz-src symlink SHA match) |
+| Mini apply | **OK** 2026-09-28 ~08:42 CDT re-XOR (contentBlob + eTLD depthSeeds + idempotent wrap; moz-src symlink SHA match) |
 | Proof | *(do not ping — Builder ships only)* |
-| Local verify | `~/src/darkstr-gecko/artifacts/pr-0043-webgpu-worker-local-verify-20260928-081330/local-verify.json` — LOCAL_MARKERS_PASS (SHA `08785ac5…` / `2d9ca83e…`) |
+| Local verify | re-XOR LOCAL_MARKERS_PASS — WorkerHooks `6e773cdb…` / Child `42b1f83a…` (Soft residual (0043 re-XOR) / contentBlob / depthSeedsForBrowsingContext) |
 
 ### Design summary
 
@@ -389,10 +389,10 @@ webgpuSeed diverge, plainAdapterInfo non-empty / familiesCoherent).
 
 ---
 
-## Apply status (Mini) — 0043 — 2026-09-28 ~08:13 CDT (local markers)
+## Apply status (Mini) — 0043 — 2026-09-28 ~08:42 CDT (re-XOR local markers)
 
 - Tree: LibreWolf **156.0.1-1** (`$DARKSTR_GECKO_ROOT`)
-- SoT markers: `Soft residual (0043)` / `buildWebGpuOverrides` / `deriveWebGpuSeed` / `webgpuSeed` present
+- SoT markers: `Soft residual (0043 re-XOR)` / `contentBlob` / `depthSeedsForBrowsingContext` / `buildWebGpuOverrides` / `webgpuSeed` present
 - `./mach build --allow-subdirectory-build browser/components` — **OK** (~7s)
 - `make install-dist_bin` — Kept existing; moz-src symlinks refreshed
 - Symlinks: `dist/LibreWolf.app/.../moz-src/browser/components/DarkstrWorkerHooks*.sys.mjs` → source (SHA match repo SoT)
