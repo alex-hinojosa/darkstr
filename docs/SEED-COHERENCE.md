@@ -127,3 +127,10 @@ device; seed-ranked features subset; soft `max*` limits; AdapterInfo mapped from
 persona; `requestDevice` reuses adapter farbled features/limits/info via
 `sharedFeatCache` for adapter↔device coherence). LibreWolf `dom.webgpu.enabled` default **false** — hooks idle when
 `navigator.gpu` absent (soft-coherence; no API invention).
+
+**re-XOR (after Proof FAIL on 5319de7):** under `rotatePerSite`, depth seeds
+(incl. `webgpuSeed`) are derived from the eTLD-effective seed **first** (not
+snap-canvas fallthrough to global plan.seeds). Page wrappers return **plain**
+AdapterInfo/limits objects and `defineProperty`-overlay device features/limits/
+adapterInfo so Marionette/Xray probes observe sharedFeatCache (adapter↔device).
+

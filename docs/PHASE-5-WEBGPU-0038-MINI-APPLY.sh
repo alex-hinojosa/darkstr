@@ -11,13 +11,17 @@ echo "DARKSTR_GECKO_ROOT=${DARKSTR_GECKO_ROOT}"
 df -h "${DARKSTR_GECKO_ROOT}" | tail -1 || true
 test -f "${PATCH}"
 
-if grep -Fq 'Soft residual (0038)' "${COMP}/DarkstrDepthHooksChild.sys.mjs" 2>/dev/null \
-  && grep -Fq 'webgpuSeed' "${COMP}/DarkstrDepthHooks.sys.mjs" 2>/dev/null \
-  && grep -Fq 'installWebGpuInPage' "${COMP}/DarkstrDepthHooksChild.sys.mjs" 2>/dev/null \
-  && grep -Fq 'sharedFeatCache' "${COMP}/DarkstrDepthHooksChild.sys.mjs" 2>/dev/null; then
-  echo "0038 markers already present (incl. sharedFeatCache a↔d fix) — skip patch apply"
+OVERLAY="${REPO}/patches/0038-files"
+if grep -Fq 'plainAdapterInfo' "${COMP}/DarkstrDepthHooksChild.sys.mjs" 2>/dev/null \
+  && grep -Fq 'a2dDefineProperty' "${COMP}/DarkstrDepthHooksChild.sys.mjs" 2>/dev/null \
+  && grep -Fq 'rotate path FIRST' "${COMP}/DarkstrDepthHooks.sys.mjs" 2>/dev/null; then
+  echo "0038 re-XOR markers present (plainAdapterInfo + rotate-first) — skip apply"
+elif [[ -f "${OVERLAY}/DarkstrDepthHooksChild.sys.mjs" && -f "${OVERLAY}/DarkstrDepthHooks.sys.mjs" ]]; then
+  echo "0038 syncing tip overlay files (plainAdapterInfo / rotate-first)…"
+  cp -f "${OVERLAY}/DarkstrDepthHooks.sys.mjs" "${COMP}/DarkstrDepthHooks.sys.mjs"
+  cp -f "${OVERLAY}/DarkstrDepthHooksChild.sys.mjs" "${COMP}/DarkstrDepthHooksChild.sys.mjs"
 else
-  # --forward: skips landed hunks if partially present
+  # Fallback: --forward patch (may no-op if older markers present)
   patch -d "${DARKSTR_GECKO_ROOT}" -p1 --forward --batch < "${PATCH}" || true
 fi
 grep -Fq 'Soft residual (0038)' "${COMP}/DarkstrDepthHooksChild.sys.mjs"
@@ -27,6 +31,9 @@ grep -Fq 'deriveWebGpuSeed' "${COMP}/DarkstrDepthHooks.sys.mjs"
 grep -Fq 'wrapAdapter' "${COMP}/DarkstrDepthHooksChild.sys.mjs"
 grep -Fq 'sharedFeatCache' "${COMP}/DarkstrDepthHooksChild.sys.mjs"
 grep -Fq 'wrapDevice(dev, getFeat()' "${COMP}/DarkstrDepthHooksChild.sys.mjs"
+grep -Fq 'plainAdapterInfo' "${COMP}/DarkstrDepthHooksChild.sys.mjs"
+grep -Fq 'a2dDefineProperty' "${COMP}/DarkstrDepthHooksChild.sys.mjs"
+grep -Fq 'rotate path FIRST' "${COMP}/DarkstrDepthHooks.sys.mjs"
 
 cd "${DARKSTR_GECKO_ROOT}"
 export MACH_SYSTEM_ASSERTED_COMPATIBLE_WITH_MACH_SITE=1

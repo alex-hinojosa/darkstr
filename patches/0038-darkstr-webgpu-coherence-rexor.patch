@@ -1,0 +1,398 @@
+# darkstr 0038 re-XOR delta — plainAdapterInfo + a2dDefineProperty + rotate path FIRST
+# Apply SoT: patches/0038-files via scripts/apply-0038-webgpu-coherence-mini.sh
+# Marker: plainAdapterInfo / a2dDefineProperty / rotate path FIRST
+
+--- a/browser/components/DarkstrDepthHooks.sys.mjs	2026-09-28 01:54:02
++++ b/browser/components/DarkstrDepthHooks.sys.mjs	2026-09-28 01:54:02
+@@ -343,12 +343,14 @@
+       return null;
+     }
+     // SubsequentNav arm: reuse NativePersona first-doc gate when available.
+-    // When 0030 rotatePerSite is active, derive canvasSeed/audioSeed/gpu from the
+-    // eTLD-effective persona seed (_seedForEtld) — same SoT as sticky rotation.
++    // When 0030 rotatePerSite is active, ALWAYS derive depth seeds (incl.
++    // webgpuSeed) from eTLD-effective persona seed — same SoT as sticky
++    // rotation. Do NOT prefer snap canvas/audio first under rotate: FFI/persona
++    // snaps may omit them and a fallthrough to global plan.seeds (seed-42)
++    // collapses webgpuSeed across eTLD (Proof gate 3 FAIL).
+     // Golden lock (snapshot pref non-empty OR rotatePerSite=false) keeps global
+-    // plan.seeds from _readDepthSeeds (Proof seed-42 coherent).
+-    // Soft residual (0034): persist returned seeds to darkstr.depth.lastSeeds so
+-    // diag matches the install seeds used for farbling (not stuck on global plan).
++    // plan.seeds / snap depth fields from _readDepthSeeds (Proof seed-42).
++    // Soft residual (0034): persist returned seeds to darkstr.depth.lastSeeds.
+     try {
+       const { DarkstrNativePersona } = ChromeUtils.importESModule(
+         "moz-src:///browser/components/DarkstrNativePersona.sys.mjs"
+@@ -358,37 +360,58 @@
+         if (!snap) {
+           return null;
+         }
+-        // Prefer depth fields already on the resolved snapshot (pasted/FFI).
+-        const snapCanvas = readU32Field(snap, "canvasSeed", "canvas_seed");
+-        const snapAudio = readU32Field(snap, "audioSeed", "audio_seed");
+-        const snapGpu = normalizeGpu(snap.gpu);
+-        if (snapCanvas !== null && snapAudio !== null && snapGpu) {
+-          const snapFont = readFontSeed(snap, snapCanvas, snapAudio);
+-          const snapSpeech = readSpeechSeed(snap, snapFont, snapCanvas);
+-          const out = {
+-            canvasSeed: snapCanvas >>> 0,
+-            audioSeed: snapAudio >>> 0,
+-            fontSeed: snapFont,
+-            speechSeed: snapSpeech,
+-            webgpuSeed: readWebGpuSeed(snap, snapSpeech, snapAudio),
+-            gpu: { vendor: snapGpu.vendor, renderer: snapGpu.renderer },
+-          };
+-          this._writeLastSeeds(out);
+-          return out;
++
++        let rotating = false;
++        try {
++          const npPlan = DarkstrNativePersona.getPlan
++            ? DarkstrNativePersona.getPlan()
++            : null;
++          rotating = !!(
++            DarkstrNativePersona._rotationActive &&
++            DarkstrNativePersona._rotationActive(npPlan)
++          );
++        } catch (_rotErr) {
++          rotating = false;
+         }
+-        const npPlan = DarkstrNativePersona.getPlan
+-          ? DarkstrNativePersona.getPlan()
+-          : null;
+-        if (
+-          DarkstrNativePersona._rotationActive &&
+-          DarkstrNativePersona._rotationActive(npPlan)
+-        ) {
++
++        // Soft residual (0038 Proof FAIL fix): rotate path FIRST.
++        if (rotating) {
+           let etld = null;
+-          if (DarkstrNativePersona._etldPlus1FromBrowsingContext) {
+-            etld = DarkstrNativePersona._etldPlus1FromBrowsingContext(bc);
++          try {
++            if (DarkstrNativePersona._etldPlus1FromBrowsingContext) {
++              etld = DarkstrNativePersona._etldPlus1FromBrowsingContext(bc);
++            }
++          } catch (_eEtld) {}
++          if (!etld) {
++            try {
++              const last = Services.prefs.getStringPref(
++                "darkstr.persona.lastEtld",
++                ""
++              );
++              if (last && String(last).trim()) {
++                etld = String(last).trim();
++              }
++            } catch (_eLast) {}
+           }
++          let seed = 0;
+           if (etld && DarkstrNativePersona._seedForEtld) {
+-            const seed = DarkstrNativePersona._seedForEtld(etld) >>> 0;
++            try {
++              seed = DarkstrNativePersona._seedForEtld(etld) >>> 0;
++            } catch (_eSeed) {
++              seed = 0;
++            }
++          }
++          if (!seed) {
++            try {
++              seed = Services.prefs.getIntPref(
++                "darkstr.persona.effectiveSeed",
++                0
++              ) >>> 0;
++            } catch (_eEff) {
++              seed = 0;
++            }
++          }
++          if (seed) {
+             const derived = this._generateDepthFromSeed(seed);
+             if (derived) {
+               const out = {
+@@ -407,6 +430,25 @@
+             }
+           }
+         }
++
++        // Non-rotate / golden: prefer depth fields already on resolved snapshot.
++        const snapCanvas = readU32Field(snap, "canvasSeed", "canvas_seed");
++        const snapAudio = readU32Field(snap, "audioSeed", "audio_seed");
++        const snapGpu = normalizeGpu(snap.gpu);
++        if (snapCanvas !== null && snapAudio !== null && snapGpu) {
++          const snapFont = readFontSeed(snap, snapCanvas, snapAudio);
++          const snapSpeech = readSpeechSeed(snap, snapFont, snapCanvas);
++          const out = {
++            canvasSeed: snapCanvas >>> 0,
++            audioSeed: snapAudio >>> 0,
++            fontSeed: snapFont,
++            speechSeed: snapSpeech,
++            webgpuSeed: readWebGpuSeed(snap, snapSpeech, snapAudio),
++            gpu: { vendor: snapGpu.vendor, renderer: snapGpu.renderer },
++          };
++          this._writeLastSeeds(out);
++          return out;
++        }
+       }
+     } catch (_e) {
+       // Fallback: phase mirror when NativePersona unavailable.
+--- a/browser/components/DarkstrDepthHooksChild.sys.mjs	2026-09-28 01:40:25
++++ b/browser/components/DarkstrDepthHooksChild.sys.mjs	2026-09-28 01:53:22
+@@ -1342,27 +1342,51 @@
+ // Map depth WebGL gpu persona → Firefox-plausible WebGPU AdapterInfo.
+ // Never invent Chrome/Google adapter brands.
+ function mapAdapterInfo() {
++  // Soft residual (0038 Proof FAIL fix): plain non-empty vendor/architecture so
++  // Proof familyOf(info.vendor) matches WebGL UNMASKED family. description
++  // mirrors depth gpu renderer (Firefox-plausible; never Chrome/ANGLE brands).
+   var v = VENDOR.toLowerCase();
+-  var r = RENDERER;
++  var r = String(RENDERER || "");
++  var desc = r;
+   if (/apple/i.test(v) || /apple/i.test(r)) {
+     return {
+       vendor: "apple",
+-      architecture: /M[2-9]|M1[0-9]/i.test(r) ? "common-3" : "common-3",
++      architecture: "common-3",
+       device: "",
+-      description: ""
++      description: desc || "Apple GPU"
+     };
+   }
+   if (/intel/i.test(v) || /intel/i.test(r)) {
+-    return { vendor: "intel", architecture: "gen-12lp", device: "", description: "" };
++    return {
++      vendor: "intel",
++      architecture: "gen-12lp",
++      device: "",
++      description: desc || "Intel Graphics"
++    };
+   }
+   if (/nvidia/i.test(v) || /nvidia/i.test(r)) {
+-    return { vendor: "nvidia", architecture: "", device: "", description: "" };
++    return {
++      vendor: "nvidia",
++      architecture: "gpu",
++      device: "",
++      description: desc || "NVIDIA GPU"
++    };
+   }
+   if (/amd/i.test(v) || /radeon/i.test(r)) {
+-    return { vendor: "amd", architecture: "", device: "", description: "" };
++    return {
++      vendor: "amd",
++      architecture: "gcn",
++      device: "",
++      description: desc || "AMD GPU"
++    };
+   }
+   // Host-OS unknown: Apple-family is the Mini SoT / Firefox-on-macOS default.
+-  return { vendor: "apple", architecture: "common-3", device: "", description: "" };
++  return {
++    vendor: "apple",
++    architecture: "common-3",
++    device: "",
++    description: desc || "Apple GPU"
++  };
+ }
+ var PERSONA_INFO = mapAdapterInfo();
+ var ALWAYS_KEEP_FEATURES = {
+@@ -1483,8 +1507,9 @@
+ }
+ function wrapLimits(nativeLimits) {
+   if (!nativeLimits) { return nativeLimits; }
+-  // Eager snapshot via native `this` — Proxy receiver breaks WebIDL getters
+-  // (Proof soft: adapter.limits / device.limits read as {}).
++  // Soft residual (0038 Proof FAIL fix): return a PLAIN eager snapshot object —
++  // Proxy(GPUSupportedLimits) is Xray-transparent under Marionette probes, so
++  // farbled max* never surface. Plain object matches wrapFeatures success path.
+   var snapped = Object.create(null);
+   var snapKeys = Object.keys(FUDGE_LIMIT_KEYS).concat([
+     "minUniformBufferOffsetAlignment",
+@@ -1503,79 +1528,88 @@
+     var sv;
+     try { sv = nativeLimits[sk]; } catch (_se) { continue; }
+     if (typeof sv === "number" || typeof sv === "bigint") {
+-      snapped[sk] = fudgeLimit(sk, sv);
++      snapped[sk] = fudgeLimit(sk, Number(sv));
+     }
+   }
+-  return new Proxy(nativeLimits, {
+-    get: function(target, prop, receiver) {
+-      if (typeof prop === "symbol") {
+-        return Reflect.get(target, prop, target);
+-      }
+-      var key = String(prop);
+-      if (key === "then") { return undefined; }
+-      if (Object.prototype.hasOwnProperty.call(snapped, key)) {
+-        return snapped[key];
+-      }
+-      var raw;
+-      try { raw = target[prop]; } catch (_e) { return undefined; }
+-      if (typeof raw === "function") {
+-        return raw.bind(target);
+-      }
+-      if (typeof raw === "number" || typeof raw === "bigint") {
+-        return fudgeLimit(key, raw);
+-      }
+-      return raw;
+-    }
+-  });
++  return snapped;
+ }
+ function wrapInfo(nativeInfo) {
+-  // Prefer persona-mapped Firefox-plausible strings; preserve isFallbackAdapter /
+-  // subgroup* from host when present (do not invent Chrome-only fields).
++  // Soft residual (0038 Proof FAIL fix): PLAIN object — Proxy(GPUAdapterInfo) is
++  // Xray-transparent under Proof Marionette probes (vendor/architecture read as
++  // empty native strings → familiesCoherent=false). Never invent Chrome brands.
+   var base = PERSONA_INFO;
+-  return new Proxy(nativeInfo || {}, {
+-    get: function(target, prop, receiver) {
+-      if (typeof prop === "symbol") {
+-        return Reflect.get(target, prop, target);
+-      }
+-      var key = String(prop);
+-      if (key === "vendor") { return base.vendor; }
+-      if (key === "architecture") { return base.architecture; }
+-      if (key === "device") { return base.device; }
+-      if (key === "description") { return base.description; }
+-      // Pass through isFallbackAdapter / subgroupMinSize / subgroupMaxSize / etc.
+-      try {
+-        return target[prop];
+-      } catch (_e) {
+-        return undefined;
+-      }
++  var out = {
++    vendor: String(base.vendor || ""),
++    architecture: String(base.architecture || ""),
++    device: String(base.device || ""),
++    description: String(base.description || "")
++  };
++  try {
++    if (nativeInfo && typeof nativeInfo.isFallbackAdapter === "boolean") {
++      out.isFallbackAdapter = nativeInfo.isFallbackAdapter;
+     }
+-  });
++  } catch (_e) {}
++  try {
++    if (nativeInfo && typeof nativeInfo.subgroupMinSize === "number") {
++      out.subgroupMinSize = nativeInfo.subgroupMinSize;
++    }
++    if (nativeInfo && typeof nativeInfo.subgroupMaxSize === "number") {
++      out.subgroupMaxSize = nativeInfo.subgroupMaxSize;
++    }
++  } catch (_e2) {}
++  return out;
+ }
+ // 0038 Proof FAIL fix: wrapDevice MUST reuse adapter farbled features/limits/info
++// plainAdapterInfo + a2dDefineProperty (0038 re-XOR)
+ // (sharedFeatCache) — native default requestDevice() exposes a reduced set (n=1).
++// Soft residual (0038 re-XOR): Proxy(GPUDevice) is Xray-transparent under
++// Marionette — defineProperty overlay first so features/limits/adapterInfo are
++// own plain values; Proxy fallback still returns plain shared caches.
+ function wrapDevice(device, sharedFeatures, sharedLimits, sharedInfo) {
+   if (!device) { return device; }
+   var featCache = sharedFeatures || null;
+   var limCache = sharedLimits || null;
+   var infoCache = sharedInfo || null;
++  function ensureFeat() {
++    if (!featCache) { featCache = wrapFeatures(device.features); }
++    return featCache;
++  }
++  function ensureLim() {
++    if (!limCache) { limCache = wrapLimits(device.limits); }
++    return limCache;
++  }
++  function ensureInfo() {
++    if (!infoCache) { infoCache = wrapInfo(device.adapterInfo); }
++    return infoCache;
++  }
++  var overlaid = false;
++  try {
++    var f = ensureFeat();
++    var l = ensureLim();
++    var i = ensureInfo();
++    Object.defineProperty(device, "features", {
++      configurable: true, enumerable: true, get: function() { return f; }
++    });
++    Object.defineProperty(device, "limits", {
++      configurable: true, enumerable: true, get: function() { return l; }
++    });
++    Object.defineProperty(device, "adapterInfo", {
++      configurable: true, enumerable: true, get: function() { return i; }
++    });
++    overlaid = true;
++  } catch (_defErr) {
++    overlaid = false;
++  }
++  if (overlaid) { return device; }
+   return new Proxy(device, {
+     get: function(target, prop, receiver) {
+       if (typeof prop === "symbol") {
+         return Reflect.get(target, prop, target);
+       }
+       var key = String(prop);
+-      if (key === "features") {
+-        if (!featCache) { featCache = wrapFeatures(target.features); }
+-        return featCache;
+-      }
+-      if (key === "limits") {
+-        if (!limCache) { limCache = wrapLimits(target.limits); }
+-        return limCache;
+-      }
+-      if (key === "adapterInfo") {
+-        if (!infoCache) { infoCache = wrapInfo(target.adapterInfo); }
+-        return infoCache;
+-      }
++      if (key === "features") { return ensureFeat(); }
++      if (key === "limits") { return ensureLim(); }
++      if (key === "adapterInfo") { return ensureInfo(); }
+       var raw;
+       try { raw = target[prop]; } catch (_e) { return undefined; }
+       if (typeof raw === "function") {
+@@ -1615,11 +1649,9 @@
+         var origRD = target.requestDevice;
+         return function(desc) {
+           var farbled = getFeat();
+-          var forced = false;
+           var newDesc;
+           if (desc === undefined || desc === null) {
+             newDesc = {};
+-            forced = true;
+           } else {
+             try {
+               newDesc = Object.assign({}, desc);
+@@ -1644,28 +1676,15 @@
+                 reqOut.push(fn);
+               }
+               newDesc.requiredFeatures = reqOut;
+-            } else {
+-              // No/partial requiredFeatures: constrain to farbled adapter set so
+-              // native device.features stay coherent with adapter.features.
+-              farbled.forEach(function(n) { reqOut.push(n); });
+-              if (reqOut.length) {
+-                newDesc.requiredFeatures = reqOut;
+-                forced = true;
+-              }
+             }
++            // Soft residual (0038 re-XOR): do NOT force full farbled set as
++            // requiredFeatures — native rejects large sets and Marionette still
++            // saw n=1. Overlay sharedFeatCache in wrapDevice instead.
+           }
+           function finish(dev) {
+             return wrapDevice(dev, getFeat(), getLim(), getInfo());
+           }
+-          var p = Promise.resolve(origRD.call(target, newDesc));
+-          if (!forced) {
+-            return p.then(finish);
+-          }
+-          return p.then(finish, function(_err) {
+-            // If forcing farbled requiredFeatures fails, retry original desc
+-            // but still expose shared adapter farbled caches on the device.
+-            return Promise.resolve(origRD.call(target, desc)).then(finish);
+-          });
++          return Promise.resolve(origRD.call(target, newDesc)).then(finish);
+         };
+       }
+       var raw;

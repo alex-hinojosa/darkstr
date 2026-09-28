@@ -10,9 +10,9 @@ Phase 4 depth (through **0034** lastSeeds eTLD diag) is **CLOSED** / Proof PASS.
 Phase 5 pin **0035 cookie firewall MVP** is **MERGED** / Proof XOR **PASS**.  
 Phase 5 pin **0036 fonts coherence** is **MERGED** / Proof XOR **PASS** (PR #67; see evidence below).
 Phase 5 pin **0037 speech coherence** is **MERGED** / Proof XOR **PASS** (PR #68; see evidence below).
-Phase 5 pin **0038 WebGPU coherence** is **IN PROGRESS** (PR [#69](https://github.com/alex-hinojosa/darkstr/pull/69) — do not claim PASS).
+Phase 5 pin **0038 WebGPU coherence** is **IN PROGRESS (re-XOR: plainAdapterInfo + rotate-first)** (PR [#69](https://github.com/alex-hinojosa/darkstr/pull/69) — do not claim PASS).
 
-**Proof XOR FAIL** on tip `bbe308d9d3a509a953b153f25e2fcacbc991ee24` (2026-09-28): `wrapDevice` wrapped native device features (n=1) instead of adapter farbled set (n=13); gate 3 feature-subset keep-masks collided across eTLD despite `webgpuSeed` diverge. Eng fix: `sharedFeatCache` (device reuses adapter farbled features/limits/info), seed-ranked feature drop, limits eager snapshot for WebIDL. Re-XOR pending — Builder does not ping Proof.
+**Proof XOR FAIL** on tip `5319de7e846a791174867889a37f2ab42b3d527a` (2026-09-28 re-XOR): a↔d still n=15 vs n=1 (Proxy(GPUDevice) Xray-transparent under Marionette); AdapterInfo empty; `webgpuSeed` stuck at seed-42 across eTLD (depth fallthrough to plan.seeds). Eng fix: plain AdapterInfo/limits + `defineProperty` device overlay (`plainAdapterInfo` / `a2dDefineProperty`); rotate-first depth seed derivation. Apply SoT: `patches/0038-files/`. Local Mini verify PASS — Builder does not ping Proof.
 
 ## Completed — 0036 Fonts coherence / fingerprint farbling
 
@@ -173,7 +173,7 @@ All five speech-coherence XOR gates passed on Proof tip `f1ae094082f7c626a10caa9
 
 ### Out of scope (this pin)
 
-- WebGPU → **0038** (IN PROGRESS)
+- WebGPU → **0038** (IN PROGRESS (re-XOR: plainAdapterInfo + rotate-first))
 - Native-Compatible privacy-pane UI (PM)
 - Fonts (already **0036** MERGED / PASS)
 - Inventing Chrome-only voice names or `webkitSpeechRecognition` when absent
@@ -195,7 +195,7 @@ All five speech-coherence XOR gates passed on Proof tip `f1ae094082f7c626a10caa9
 - Apply log: `~/src/darkstr-gecko/darkstr-apply-0037-20260926-131431.log`
 - Disk free after apply: ~9.3 Gi (Data volume)
 
-## IN PROGRESS — 0038 WebGPU adapter/device/limits/features coherence
+## IN PROGRESS (re-XOR: plainAdapterInfo + rotate-first) — 0038 WebGPU adapter/device/limits/features coherence
 
 | Item | Status |
 |------|--------|
@@ -292,7 +292,7 @@ when API already exposed; idle when pref-off).
 
 ## Next eng backlog
 
-0038 is **IN PROGRESS** (WebGPU was the last PHASE-5 eng backlog item).
+0038 is **IN PROGRESS (re-XOR: plainAdapterInfo + rotate-first)** (WebGPU was the last PHASE-5 eng backlog item).
 
 After 0038 Proof XOR PASS + merge: Phase 5 eng depth backlog is empty pending PM/Native UI.
 

@@ -30,6 +30,10 @@
 #     coherent with depth gpu / WebGL UNMASKED persona family
 #
 # Marker: Soft residual (0038)
+#
+# re-XOR SoT: patches/0038-files/*.sys.mjs (plainAdapterInfo + rotate path FIRST).
+# Apply script prefers overlay when re-XOR markers missing; this patch is the
+# original 0038 land + sharedFeatCache tip. See 0038-darkstr-webgpu-coherence-rexor.patch.
 
 --- a/browser/components/DarkstrDepthHooks.sys.mjs
 +++ b/browser/components/DarkstrDepthHooks.sys.mjs
