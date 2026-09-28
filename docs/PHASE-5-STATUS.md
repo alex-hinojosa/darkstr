@@ -313,7 +313,7 @@ webgpuSeed diverge, plainAdapterInfo non-empty / familiesCoherent).
 
 | Pin | Residual | Status |
 |-----|----------|--------|
-| **0042** | Cookie 0035 `/echo` Cookie header empty | Soft → **pin in-flight** (QI nsIHttpChannel; see Completed 0042) |
+| **0042** | Cookie 0035 `/echo` Cookie header empty | Soft → **pin in-flight** (QI nsIHttpChannel; see In-flight 0042) |
 | — | Speech 0037 pref-off / empty voices before async | Soft / do not invent API |
 | — | WebGPU 0038 Worker OOS / AdapterInfo.device empty | Soft / do not invent |
 | — | FFI `libduppel_ffi` not in DMG `package-manifest.in` | Soft / **moot** for product A-only path (XUL carries symbols); historical B dylib inert |
@@ -335,7 +335,7 @@ webgpuSeed diverge, plainAdapterInfo non-empty / familiesCoherent).
 | Mini helper | [`scripts/apply-0042-cookie-echo-qi-mini.sh`](../scripts/apply-0042-cookie-echo-qi-mini.sh) / [`PHASE-5-COOKIE-0042-MINI-APPLY.sh`](PHASE-5-COOKIE-0042-MINI-APPLY.sh) |
 | Extends | **0035** Cookie firewall HTTP outbound path |
 | Mini apply | **OK** 2026-09-28 ~08:00 CDT (SoT + mach build browser/components; moz-src symlink live) |
-| Tip (Builder) | `ab1e6a6924c555569952c237dc90ae0e6a72c1f8` |
+| Tip (Builder) | `8e57928307eb0078c4d3fcee7388c4c5773ff81f` |
 | Local verify | **PASS** — `fetch('/echo', {credentials:'include'})` Cookie header = sandbox synthetic `net_probe=8ad45765c6b3be31` (was empty under 0035); `lastCookieOut` == `lastCookieSet`; `lastCookieErr` empty |
 | Proof | pending (do not ping from Builder) |
 
