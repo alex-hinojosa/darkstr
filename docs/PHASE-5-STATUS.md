@@ -15,7 +15,7 @@ Phase 5 pin **0038 WebGPU coherence** is **MERGED** / Proof XOR **PASS** (PR [#6
 Phase 5 pin **0039 FontFaceSet enumeration coherence** is **MERGED** / Proof XOR **PASS** (PR [#70](https://github.com/alex-hinojosa/darkstr/pull/70); see evidence below) — soft-residual polish extending 0036 `check`→enumeration; not a new depth surface.
 Phase 5 eng **depth backlog empty**; soft residuals remain (see backlog table). Native privacy-pane UI is PM-owned. Approach A FFI (**0040**) is **Proof-green on main** (PR [#71](https://github.com/alex-hinojosa/darkstr/pull/71) MERGED `f828a78`). Approach B runtime load (**0041**) is **Proof-green / MERGED** (PR [#72](https://github.com/alex-hinojosa/darkstr/pull/72) `f961d39`) — **A-only**; soft historical dylib inert; hooks default-off. See [`M-FFI-0040-STATUS.md`](M-FFI-0040-STATUS.md) / [`M-FFI-0041-STATUS.md`](M-FFI-0041-STATUS.md).
 Phase 5 soft residual pin **0042 Cookie `/echo` QI** is **MERGED** / Proof XOR **PASS** (PR [#73](https://github.com/alex-hinojosa/darkstr/pull/73) `cda3c91`) — outbound sandbox Cookie closed; soft residual from 0035 empty `/echo` Cookie **closed**.
-Phase 5 soft residual pin **0043** Worker/SharedWorker WebGPU (0038 OOS) is **IN FLIGHT** (Builder) — DedicatedWorker+SharedWorker via 0018 blob + 0038-parity wrap; ServiceWorker still OOS; AdapterInfo.device empty stays soft / do not invent.
+Phase 5 soft residual pin **0043** Worker/SharedWorker WebGPU (0038 OOS) is **OPEN** (PR [#74](https://github.com/alex-hinojosa/darkstr/pull/74)) — DedicatedWorker+SharedWorker via 0018 blob + 0038-parity wrap; ServiceWorker still OOS; AdapterInfo.device empty stays soft / do not invent.
 
 ## Completed — 0036 Fonts coherence / fingerprint farbling
 
@@ -316,7 +316,7 @@ webgpuSeed diverge, plainAdapterInfo non-empty / familiesCoherent).
 | Pin | Residual | Status |
 |-----|----------|--------|
 | **0042** | Cookie 0035 `/echo` Cookie header empty | Soft → **CLOSED** / Proof **PASS** / MERGED `cda3c91` (PR [#73](https://github.com/alex-hinojosa/darkstr/pull/73); QI nsIHttpChannel) |
-| **0043** | WebGPU 0038 Worker/SharedWorker OOS | Soft → **IN FLIGHT** (Builder); DedicatedWorker+SharedWorker via 0018 blob; ServiceWorker still OOS; AdapterInfo.device empty stays soft |
+| **0043** | WebGPU 0038 Worker/SharedWorker OOS | Soft → **OPEN** PR [#74](https://github.com/alex-hinojosa/darkstr/pull/74); DedicatedWorker+SharedWorker via 0018 blob; ServiceWorker still OOS; AdapterInfo.device empty stays soft |
 | — | Speech 0037 pref-off / empty voices before async | Soft / do not invent API |
 | — | WebGPU AdapterInfo.device empty | Soft / do not invent |
 | — | WebGPU ServiceWorker OOS | Soft / register ≠ Worker blob; do not invent |
@@ -332,8 +332,8 @@ webgpuSeed diverge, plainAdapterInfo non-empty / familiesCoherent).
 | Item | Status |
 |------|--------|
 | Pin | **0043** (soft residual after 0038 Worker OOS) |
-| PR | *(open — Builder)* |
-| Tip at Proof | *(pending)* |
+| PR | [#74](https://github.com/alex-hinojosa/darkstr/pull/74) **OPEN** |
+| Tip at Proof |  (Builder tip for Proof paste; align after any docs follow-up) |
 | Branch | `builder/phase5-webgpu-worker-0043` |
 | Patch | [`patches/0043-darkstr-webgpu-worker-coherence.patch`](../patches/0043-darkstr-webgpu-worker-coherence.patch) |
 | Apply SoT | [`patches/0043-files/`](../patches/0043-files/) (`DarkstrWorkerHooks.sys.mjs`, `DarkstrWorkerHooksChild.sys.mjs`) |
@@ -441,7 +441,7 @@ All four 0042 Cookie `/echo` QI XOR gates passed on Proof tip `beb44f8fc03276483
 
 **Remaining soft residuals (not FAIL; no new eng pins from this close):**
 
-- **0043** WebGPU Worker/SharedWorker (0038 OOS) — **IN FLIGHT** (see below)
+- **0043** WebGPU Worker/SharedWorker (0038 OOS) — **OPEN** PR [#74](https://github.com/alex-hinojosa/darkstr/pull/74) (see below)
 - Speech 0037: SpeechRecognition pref-off; empty voices before async populate
 - WebGPU AdapterInfo.device empty (do not invent)
 - WebGPU ServiceWorker OOS (register ≠ Worker blob)
