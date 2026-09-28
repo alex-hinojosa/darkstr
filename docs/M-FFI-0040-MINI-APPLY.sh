@@ -54,13 +54,13 @@ fi
 : "${OBJDIR:?no objdir — set DARKSTR_GECKO_OBJDIR or build once}"
 
 cd "${DARKSTR_GECKO_ROOT}"
-echo "Building toolkit/library (gkrust + XUL link) in ${OBJDIR}"
+echo "Building toolkit/library --allow-subdirectory-build (gkrust + XUL link) in ${OBJDIR}"
 START="$(date +%s)"
 # Incremental: rust staticlib then libxul relink. Full ./mach build only if this fails.
-./mach build toolkit/library
+./mach build --allow-subdirectory-build toolkit/library
 BUILD_EXIT=$?
 END="$(date +%s)"
-echo "mach build toolkit/library EXIT=${BUILD_EXIT} elapsed_sec=$((END-START))"
+echo "mach build --allow-subdirectory-build toolkit/library EXIT=${BUILD_EXIT} elapsed_sec=$((END-START))"
 
 XUL="${OBJDIR}/dist/bin/XUL"
 if [[ ! -f "${XUL}" ]]; then

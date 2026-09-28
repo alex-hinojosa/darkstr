@@ -67,3 +67,23 @@ nm -gU "$XUL" | grep darkstr_ffi_
 1. Keep `third_party/darkstr/build-and-install-ffi.sh` + PHASE-4 install until Proof signs A headed.
 2. After Proof-green A: prefer documenting retirement of B side-load (optional keep as emergency ctypes path).
 3. Disk: full XUL link is heavy — Builder records free space before/after.
+
+
+## Mini verify (Builder — 2026-09-28 CDT)
+
+| Step | Result |
+|------|--------|
+| Disk before | **~21 Gi free** (`df -h /`) |
+| Apply 0040 sources on tree | **Applied** (Cargo.toml / lib.rs / libxul.symbols / DarkstrFfi / Cargo.lock) |
+| `cargo update -p gkrust-shared --offline` | **EXIT 0** — locked path-only `duppel-ffi` + `duppel-persona` (no crates.io) |
+| `./mach build toolkit/library` (no flag) | No-op (subdirectory ignored) |
+| `./mach build --allow-subdirectory-build toolkit/library` | **SUCCESS** — wall ~846s (~14m); gkrust LTO + XUL relink |
+| `nm -gU obj-*/dist/bin/XUL \| grep darkstr_ffi_` | **`_darkstr_ffi_abi_version`**, **`_darkstr_ffi_persona_snapshot_json`**, **`_darkstr_ffi_string_free`** (global T) |
+| Generated `XUL.symbols` | Includes three `_darkstr_ffi_*` exports |
+| `DarkstrFfi.sys.mjs` in dist | Symlink → source with Prefer A (`0040: Prefer A`) |
+| Python `ctypes.CDLL(XUL)` outside browser | Soft-fail (missing `@rpath` NSS) — **nm export smoke is the A gate**; chrome loads XUL in-process |
+| Disk after | **~16 Gi free** (~5 Gi consumed during LTO/link; watch before full package) |
+| `nativePersonaHooks` default | **Still false** |
+| Headed Proof XOR / merge | **Not claimed** |
+
+**Soft:** rust-objcopy strip warning (`libLLVM.dylib` missing on rustup) — non-fatal. Approach B cdylib remains installed as fallback.
