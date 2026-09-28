@@ -26,6 +26,9 @@ These stubs document *how* a real bsys6 / LibreWolf recipe would layer darkstr p
 
 Design pin: [`../docs/GECKO-HOOKS.md`](../docs/GECKO-HOOKS.md). Bridge: [`../docs/PREF-BRIDGE.md`](../docs/PREF-BRIDGE.md).
 
+Phase 5 depth pins (real patches): [`0035`](0035-darkstr-cookie-firewall.patch) cookie · [`0036`](0036-darkstr-fonts-coherence.patch) fonts · [`0037`](0037-darkstr-speech-coherence.patch) speech · [`0038`](0038-darkstr-webgpu-coherence.patch) WebGPU.
+
+
 ## Intended apply flow (real fork)
 
 ```bash

@@ -86,7 +86,7 @@ install (`DarkstrDepthHooks.depthSeedsForBrowsingContext`):
 Verify: two eTLD+1 under Pollution+rotate → different `canvasSeed`/`audioSeed` in
 `lastSeeds` (aligned with digests). Diagnostic only — no farbling math change.
 
-## Phase 5 — fonts coherence (0036) — **IN PROGRESS**
+## Phase 5 — fonts coherence (0036) — **MERGED / PASS**
 
 Depth `fontSeed` is derived in `_generateDepthFromSeed` **after** `canvasSeed` and
 `audioSeed` so prior golden digests stay bit-identical. Snapshot may supply
@@ -99,3 +99,30 @@ golden lock (snapshot / `rotatePerSite=false`) keeps global plan seeds.
 Farbling math lives in `DarkstrDepthHooksChild` (measureText / fonts.check / DOM
 widths) — Proof XOR gates in `PHASE-5-STATUS.md`.
 
+## Phase 5 — speech coherence (0037) — **MERGED / PASS**
+
+Depth `speechSeed` is derived in `_generateDepthFromSeed` **after** `fontSeed`
+so prior goldens stay intact. Snapshot may supply `speechSeed` / `speech_seed`;
+otherwise chrome uses a stable XOR fallback (`fontSeed`⊕`canvasSeed`) that does
+not consume the mulberry stream. Under 0030 `rotatePerSite`,
+`depthSeedsForBrowsingContext` re-derives `speechSeed` with the eTLD-effective seed;
+golden lock keeps snapshot/global plan seeds.
+
+`darkstr.depth.lastSeeds` includes `speechSeed`. Farbling lives in
+`DarkstrDepthHooksChild` (`speechSynthesis.getVoices` subset/reorder of host
+voices; SpeechRecognition lang soft when ctor exposed).
+
+## Phase 5 — WebGPU coherence (0038) — **IN PROGRESS**
+
+Depth `webgpuSeed` is derived in `_generateDepthFromSeed` **after** `speechSeed`
+so prior goldens stay intact. Snapshot may supply `webgpuSeed` / `webgpu_seed`;
+otherwise chrome uses a stable XOR fallback (`speechSeed`⊕`audioSeed`) that does
+not consume the mulberry stream. Under 0030 `rotatePerSite`,
+`depthSeedsForBrowsingContext` re-derives `webgpuSeed` with the eTLD-effective seed;
+golden lock keeps snapshot/global plan seeds.
+
+`darkstr.depth.lastSeeds` includes `webgpuSeed`. Farbling lives in
+`DarkstrDepthHooksChild` (window `navigator.gpu.requestAdapter` → Proxy adapter/
+device; features subset; soft `max*` limits; AdapterInfo mapped from depth `gpu`
+persona). LibreWolf `dom.webgpu.enabled` default **false** — hooks idle when
+`navigator.gpu` absent (soft-coherence; no API invention).

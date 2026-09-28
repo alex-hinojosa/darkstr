@@ -1,6 +1,6 @@
 # Phase 5 status — eng backlog after Phase 4 depth closed
 
-**Date:** 2026-09-26 (CDT)  
+**Date:** 2026-09-28 (CDT)  
 **Owner:** Builder  
 **Audience:** Meridian / Proof / Product Manager skim  
 **Brand:** darkstr — not official LibreWolf. Pollution browser, not Cloudflare bypass.  
@@ -10,6 +10,7 @@ Phase 4 depth (through **0034** lastSeeds eTLD diag) is **CLOSED** / Proof PASS.
 Phase 5 pin **0035 cookie firewall MVP** is **MERGED** / Proof XOR **PASS**.  
 Phase 5 pin **0036 fonts coherence** is **MERGED** / Proof XOR **PASS** (PR #67; see evidence below).
 Phase 5 pin **0037 speech coherence** is **MERGED** / Proof XOR **PASS** (PR #68; see evidence below).
+Phase 5 pin **0038 WebGPU coherence** is **IN PROGRESS** (PR pending Proof XOR — do not claim PASS).
 
 ## Completed — 0036 Fonts coherence / fingerprint farbling
 
@@ -170,7 +171,7 @@ All five speech-coherence XOR gates passed on Proof tip `f1ae094082f7c626a10caa9
 
 ### Out of scope (this pin)
 
-- WebGPU
+- WebGPU → **0038** (IN PROGRESS)
 - Native-Compatible privacy-pane UI (PM)
 - Fonts (already **0036** MERGED / PASS)
 - Inventing Chrome-only voice names or `webkitSpeechRecognition` when absent
@@ -192,13 +193,96 @@ All five speech-coherence XOR gates passed on Proof tip `f1ae094082f7c626a10caa9
 - Apply log: `~/src/darkstr-gecko/darkstr-apply-0037-20260926-131431.log`
 - Disk free after apply: ~9.3 Gi (Data volume)
 
+## IN PROGRESS — 0038 WebGPU adapter/device/limits/features coherence
+
+| Item | Status |
+|------|--------|
+| Pin | **0038** |
+| PR | (open — see branch `builder/phase5-webgpu-0038`) **DO NOT MERGE** until Proof XOR PASS |
+| Branch | `builder/phase5-webgpu-0038` |
+| Patch | [`patches/0038-darkstr-webgpu-coherence.patch`](../patches/0038-darkstr-webgpu-coherence.patch) |
+| Mini helper | [`scripts/apply-0038-webgpu-coherence-mini.sh`](../scripts/apply-0038-webgpu-coherence-mini.sh) / [`PHASE-5-WEBGPU-0038-MINI-APPLY.sh`](PHASE-5-WEBGPU-0038-MINI-APPLY.sh) |
+| Proof | **pending** (Builder does not ping) |
+
+### Design summary
+
+Depth `webgpuSeed` (from eTLD-effective persona seed via `_generateDepthFromSeed`
+**after** `speechSeed` so golden digests stay intact; snapshot may supply
+`webgpuSeed`/`webgpu_seed`; else stable XOR fallback from `speechSeed`⊕`audioSeed`)
+drives page-compartment farbling under the same arm gate as other depth hooks:
+
+`pollution && !nativeCompatible && nativePersonaHooks` (plus DocShell SubsequentNav
+when `strictFirstDoc`).
+
+**Pref choice (documented):** LibreWolf ships `defaultPref("dom.webgpu.enabled", false)`.
+This pin prefers **soft-coherence** — do **not** flip that default. When
+`navigator.gpu` is absent, hooks are **idle** (no inventing WebGPU / Chrome adapters).
+When WebGPU is enabled (user or Proof), wrap fingerprint surfaces.
+
+Surfaces (Brave-inspired sticky farbling; Firefox/LibreWolf/Gecko persona only):
+
+1. **`navigator.gpu.requestAdapter()`** — wrap resolved `GPUAdapter` in a Proxy.
+2. **Adapter / device `features`** — seed-tied subset of **host** features only;
+   always keep `core-features-and-limits` when present; never invent feature names.
+3. **Adapter / device `limits`** — soft multiplicative downward fudge `[0.99, 1.0)`
+   on fingerprinty `max*` keys only; **never** touch `min*Alignment` (power-of-2).
+4. **`adapter.info` / `device.adapterInfo`** — map depth `gpu` persona →
+   Firefox-plausible WebGPU AdapterInfo (`apple` / `intel` / `nvidia` / `amd`);
+   coherent with WebGL UNMASKED vendor/renderer family; no Chrome adapter cosplay.
+5. **`requestDevice`** — wrap device so features/limits/adapterInfo match adapter.
+
+Default-**on** with depth hooks (same risk class as fonts/speech list farbling).
+Homogeneous / hooks-off / pref-off: idle. Diag: `darkstr.depth.lastSeeds` JSON
+gains `webgpuSeed` (0034 path).
+
+### Prefs / arm gate
+
+| Pref / gate | Role |
+|-------------|------|
+| `darkstr.mode=pollution` ∧ `!nativeCompatible` ∧ `nativePersonaHooks` | Arm (shared depth) |
+| `darkstr.depth.hooksArmed` / `lastSeeds` (incl. `webgpuSeed`) | Diag |
+| `dom.webgpu.enabled` | **LibreWolf default false** — unchanged by this pin |
+| Golden lock | non-empty `darkstr.persona.snapshot` **or** `rotatePerSite=false` |
+
+No new default-off arm pref (justified: read-only adapter metadata / feature subset
+when API already exposed; idle when pref-off).
+
+### Proof gates (for Proof ACK — do not ping from Builder)
+
+1. Hooks-off / Homogeneous / `dom.webgpu.enabled=false` → idle
+2. Pollution+hooks with WebGPU enabled: same seed → stable adapter info/features/limits digests (double-read; adapter↔device coherent)
+3. Different eTLD+1 with rotatePerSite → digests / webgpuSeed diverge
+4. Same eTLD two tabs → same digests / webgpuSeed
+5. Golden lock seed-42 coherent; no Chrome-only adapter brands; AdapterInfo coherent with depth gpu / WebGL persona family
+
+### Soft residuals (expected — not FAIL)
+
+- Default LibreWolf WebGPU-off → most sessions never exercise the wrappers (by design).
+- Feature subset may hide some non-core host features under Pollution+hooks.
+- Limits fudge is soft (≤1%); alignment limits untouched.
+- Worker WebGPU (`WorkerNavigator.gpu`) not wrapped in this pin (window path only; soft).
+- Proxy wrappers: `instanceof GPUAdapter` still holds; some exotic brand-checks may differ.
+
+### Out of scope (this pin)
+
+- Flipping LibreWolf `dom.webgpu.enabled` default
+- Native-Compatible privacy-pane UI (PM)
+- Worker/ServiceWorker WebGPU surfaces
+- Inventing Chrome adapters or enabling WebGPU when pref-off
+- C++/wgpu-level farbling
+
+### Residual risks
+
+- Host with very few features → subset may equal full list (entropy soft).
+- Not anti-detect / not Cloudflare bypass.
+
+## Apply status (Mini) — 0038 — pending rebuild note in commit / PR
+
 ## Next eng backlog
 
-0037 is **MERGED** / Proof XOR **PASS**.
+0038 is **IN PROGRESS** (WebGPU was the last PHASE-5 eng backlog item).
 
-1. **WebGPU**
-
-No WebGPU engineering in this pin.
+After 0038 Proof XOR PASS + merge: Phase 5 eng depth backlog is empty pending PM/Native UI.
 
 ## Completed — 0035 Cookie firewall MVP
 
