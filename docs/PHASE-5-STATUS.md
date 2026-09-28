@@ -333,7 +333,7 @@ webgpuSeed diverge, plainAdapterInfo non-empty / familiesCoherent).
 |------|--------|
 | Pin | **0043** (soft residual after 0038 Worker OOS) |
 | PR | [#74](https://github.com/alex-hinojosa/darkstr/pull/74) **OPEN** |
-| Tip at Proof | `98755c0d9e77afdc5e5f0ce34372a69b344750c5` (feat; branch HEAD may include docs align — Proof use PR head) |
+| Tip at Proof | `0cea5b60cfc83fab3dc1ecf12fdb1292d4e3e77f` |
 | Branch | `builder/phase5-webgpu-worker-0043` |
 | Patch | [`patches/0043-darkstr-webgpu-worker-coherence.patch`](../patches/0043-darkstr-webgpu-worker-coherence.patch) |
 | Apply SoT | [`patches/0043-files/`](../patches/0043-files/) (`DarkstrWorkerHooks.sys.mjs`, `DarkstrWorkerHooksChild.sys.mjs`) |
