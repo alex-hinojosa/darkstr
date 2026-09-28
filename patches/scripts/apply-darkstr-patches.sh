@@ -219,6 +219,18 @@ patch_markers_present() {
     0040-darkstr-ffi-gkrust-libxul.patch)
       grep -Fq 'duppel-ffi = { path = "../../../../third_party/darkstr/duppel-ffi" }'         "${DARKSTR_GECKO_ROOT}/toolkit/library/rust/shared/Cargo.toml"         && grep -Fq 'extern crate duppel_ffi;'           "${DARKSTR_GECKO_ROOT}/toolkit/library/rust/shared/lib.rs"         && grep -Fq 'darkstr_ffi_abi_version'           "${DARKSTR_GECKO_ROOT}/toolkit/library/libxul.symbols"         && grep -Fq '0040: Prefer A'           "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrFfi.sys.mjs"         && grep -Fq 'name = "duppel-ffi"'           "${DARKSTR_GECKO_ROOT}/Cargo.lock"
       ;;
+    0041-darkstr-ffi-retire-approach-b.patch)
+      grep -Fq '0041: Retire B' \
+        "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrFfi.sys.mjs" \
+        && grep -Fq 'Approach A (only runtime path)' \
+          "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrFfi.sys.mjs" \
+        && ! grep -Fq 'cdylibCandidates' \
+          "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrFfi.sys.mjs" \
+        && ! grep -Fq 'kind: "cdylib"' \
+          "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrFfi.sys.mjs" \
+        && grep -Fq 'Approach B cdylib runtime load retired (0041)' \
+          "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrNativePersona.sys.mjs"
+      ;;
     0010-darkstr-nav-languages-pageshow.patch)
       grep -Fq "pageshow" "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrNativePersona.sys.mjs" \
         && grep -Fq "pullAndApply" "${DARKSTR_GECKO_ROOT}/browser/components/DarkstrNativePersonaChild.sys.mjs"
@@ -383,7 +395,7 @@ patch_markers_present() {
 }
 
 shopt -s nullglob
-for patchfile in "${STUBS}"/000*.patch "${STUBS}"/001*.patch "${STUBS}"/002*.patch "${STUBS}"/003*.patch "${ROOT}/patches"/000*.patch "${ROOT}/patches"/001*.patch "${ROOT}/patches"/002*.patch "${ROOT}/patches"/003*.patch; do
+for patchfile in "${STUBS}"/000*.patch "${STUBS}"/001*.patch "${STUBS}"/002*.patch "${STUBS}"/003*.patch "${STUBS}"/004*.patch "${ROOT}/patches"/000*.patch "${ROOT}/patches"/001*.patch "${ROOT}/patches"/002*.patch "${ROOT}/patches"/003*.patch "${ROOT}/patches"/004*.patch; do
   [[ -f "${patchfile}" ]] || continue
   echo "Applying ${patchfile}"
   if [[ "${DRY_RUN}" -eq 1 ]]; then
@@ -450,5 +462,6 @@ echo "Phase 4 audio silence-safe farbling: patches/0031-darkstr-audio-silence-fa
 echo "Phase 4 WebGL ext+precision: patches/0032-darkstr-webgl-ext-precision.patch (getSupportedExtensions/getExtension + getShaderPrecisionFormat; Firefox-plausible; seed-tied canvasSeed). Independent of 0031. Rebuild: browser/components only; no XUL relink (see docs/PHASE-4-WEBGL-0032-MINI-APPLY.sh)."
 echo "Phase 4 langs cloneInto: patches/0033-darkstr-nav-languages-cloneinto.patch (page-compartment navigator.languages after SubsequentNav). Rebuild: browser/components only; no XUL relink (see docs/PHASE-4-LANGS-0033-MINI-APPLY.sh)."
 echo "Phase 4 lastSeeds eTLD diag: patches/0034-darkstr-depth-lastseeds-etld-diag.patch (lastSeeds mirrors install seeds when rotatePerSite). Rebuild: browser/components only; no XUL relink (see docs/PHASE-4-LASTSEEDS-0034-MINI-APPLY.sh)."
-echo "M-FFI-0008 gecko FFI link: patches/0008-darkstr-gecko-ffi-link.patch (Approach B cdylib). Build FFI: third_party/darkstr/build-and-install-ffi.sh --prefix \"\${DARKSTR_GECKO_OBJDIR:-obj-*}/dist/bin\". Rebuild chrome: ./mach build browser/components (see docs/M-FFI-0008-STATUS.md)."
+echo "M-FFI-0008 gecko FFI link: patches/0008-darkstr-gecko-ffi-link.patch (historical Approach B cdylib; runtime load retired in 0041). Product path is A-only (0040/0041). Rebuild chrome: ./mach build browser/components (see docs/M-FFI-0008-STATUS.md / M-FFI-0041-STATUS.md)."
 echo "M-FFI-0040 Approach A gkrust/libxul: patches/0040-darkstr-ffi-gkrust-libxul.patch. Rebuild: ./mach build toolkit/library; nm -gU obj-*/dist/bin/XUL | grep darkstr_ffi_ (see docs/M-FFI-0040-STATUS.md)."
+echo "M-FFI-0041 retire Approach B: patches/0041-darkstr-ffi-retire-approach-b.patch (A-only runtime; soft-fail → JS mulberry). Rebuild: ./mach build --allow-subdirectory-build browser/components then make install-dist_bin (see docs/M-FFI-0041-STATUS.md)."

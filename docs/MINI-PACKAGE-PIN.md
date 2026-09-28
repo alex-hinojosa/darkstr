@@ -44,7 +44,7 @@ Verified inside DMG `LibreWolf.app/Contents/Resources/omni.ja`:
 | XUL `darkstr.mode` / `darkstr.nativePersonaHooks` | Present in staged/DMG `Contents/MacOS/XUL` |
 | `librewolf.cfg` darkstr prefs (hooks **default-off**) | Present in stage Resources |
 
-**Honest gap (unchanged vs Sep-24 package behavior):** `libduppel_ffi.dylib` is **not** in the DMG. Approach B installs it into `dist/bin` (+ DEV app MacOS/Resources mirror) but it is **not** listed in `browser/installer/package-manifest.in`. Pollution+hooks FFI snapshot fill for a DMG-installed copy needs a post-copy of the dylib next to `MacOS/librewolf`, or Proof continues to use the objdir DEV app which already has the dylib (mtime **2026-09-24 12:49:55 CDT**). Soft residual JS hooks in omni.ja do **not** require the dylib.
+**FFI packaging (post-0041):** Product Pollution FFI is **Approach A only** (`darkstr_ffi_*` in libxul/XUL via gkrust). A side-loaded `libduppel_ffi.dylib` is **not** required for runtime. Historical note: Approach B used to install the dylib into `dist/bin` (+ DEV app mirror) and it was **not** listed in `browser/installer/package-manifest.in` — that gap is **moot** for A-only product path. Soft residual JS hooks in omni.ja never required the dylib. See [`M-FFI-0041-STATUS.md`](M-FFI-0041-STATUS.md).
 
 ## Existing DEV app pin (Proof / headed skim)
 
@@ -55,16 +55,16 @@ Prefer launcher: `~/src/darkstr-gecko/headed-hooks-on-skim.sh` (temp profile; po
 | App | `$DARKSTR_GECKO_ROOT/obj-aarch64-apple-darwin25.6.0/dist/LibreWolf.app` |
 | Binary | `…/Contents/MacOS/librewolf` |
 | XUL mtime | **2026-09-23 11:04:45 CDT** (Soft residual depth is JS in omni/moz-src; XUL carries native persona prefs strings) |
-| `libduppel_ffi.dylib` | Present next to binary (see gap note above for DMG) |
+| `libduppel_ffi.dylib` | May be present historically; **inert post-0041** (chrome A-only; see M-FFI-0041) |
 | Light smoke 2026-09-28 ~07:00 CDT | Launch OK — parent + content processes alive ≥15s; no DiagnosticReports crash; quit OK. **Not** full Proof XOR. |
 
 ## How Proof runs headed XOR
 
-1. Confirm pin path exists on Mini SSD (objdir preserved) **or** install from the fresh DMG and, if FFI needed, copy `libduppel_ffi.dylib` beside `MacOS/librewolf`.
+1. Confirm pin path exists on Mini SSD (objdir preserved) **or** install from the fresh DMG. FFI snapshot uses Approach A (XUL-resident); no B dylib post-copy required (0041).
 2. Prefer launcher: `~/src/darkstr-gecko/headed-hooks-on-skim.sh`.
 3. Matrix (Homogeneous / Pollution / NC) per [`PROOF-XOR-CHECKLIST.md`](PROOF-XOR-CHECKLIST.md) / [`MINI-SMOKE-CHECKLIST.md`](MINI-SMOKE-CHECKLIST.md).
 4. Soft residual harness `storage.local` live read vs chrome mirror stays **soft**.
 
 ## Builder note for Alex
 
-Fresh branded fork **DMG** is recorded. Hooks Soft residual through **0038** verified in the packaged `omni.ja`. Product hooks remain **default-off**. Full Proof XOR on this artifact is **next if** Proof wants a package-path ACK; light Mini smoke already launch-OK on the DEV app. FFI-in-DMG packaging is a known residual (manifest), not a new depth pin.
+Fresh branded fork **DMG** is recorded. Hooks Soft residual through **0038** verified in the packaged `omni.ja`. Product hooks remain **default-off**. Full Proof XOR on this artifact is **next if** Proof wants a package-path ACK; light Mini smoke already launch-OK on the DEV app. Post-0041, product FFI is A-only in XUL — B dylib-in-DMG packaging residual is moot.
