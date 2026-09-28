@@ -112,25 +112,26 @@ golden lock keeps snapshot/global plan seeds.
 `DarkstrDepthHooksChild` (`speechSynthesis.getVoices` subset/reorder of host
 voices; SpeechRecognition lang soft when ctor exposed).
 
-## Phase 5 — WebGPU coherence (0038) — **IN PROGRESS**
+## Phase 5 — WebGPU coherence (0038) — **MERGED / PASS**
 
 Depth `webgpuSeed` is derived in `_generateDepthFromSeed` **after** `speechSeed`
 so prior goldens stay intact. Snapshot may supply `webgpuSeed` / `webgpu_seed`;
 otherwise chrome uses a stable XOR fallback (`speechSeed`⊕`audioSeed`) that does
 not consume the mulberry stream. Under 0030 `rotatePerSite`,
-`depthSeedsForBrowsingContext` re-derives `webgpuSeed` with the eTLD-effective seed;
-golden lock keeps snapshot/global plan seeds.
+`depthSeedsForBrowsingContext` re-derives `webgpuSeed` with the eTLD-effective seed
+**first** (not snap-canvas fallthrough to global plan.seeds); golden lock keeps
+snapshot/global plan seeds.
 
 `darkstr.depth.lastSeeds` includes `webgpuSeed`. Farbling lives in
 `DarkstrDepthHooksChild` (window `navigator.gpu.requestAdapter` → Proxy adapter/
 device; seed-ranked features subset; soft `max*` limits; AdapterInfo mapped from depth `gpu`
 persona; `requestDevice` reuses adapter farbled features/limits/info via
-`sharedFeatCache` for adapter↔device coherence). LibreWolf `dom.webgpu.enabled` default **false** — hooks idle when
-`navigator.gpu` absent (soft-coherence; no API invention).
-
-**re-XOR (after Proof FAIL on 5319de7):** under `rotatePerSite`, depth seeds
-(incl. `webgpuSeed`) are derived from the eTLD-effective seed **first** (not
-snap-canvas fallthrough to global plan.seeds). Page wrappers return **plain**
-AdapterInfo/limits objects and `defineProperty`-overlay device features/limits/
-adapterInfo so Marionette/Xray probes observe sharedFeatCache (adapter↔device).
+`sharedFeatCache` + plain AdapterInfo/limits + `defineProperty` device overlay for
+adapter↔device coherence under Marionette/Xray). LibreWolf `dom.webgpu.enabled`
+default **false** — hooks idle when `navigator.gpu` absent (soft-coherence; no API
+invention). Soft residuals: `AdapterInfo.device` empty; Worker WebGPU out of scope;
+feature subset seed-ranked drop. Proof XOR **PASS** on tip
+`4eaca24c22c8b45cb909f4b777d2c89430d013dd`; PR [#69](https://github.com/alex-hinojosa/darkstr/pull/69)
+merged as `b974c8077500a5e8d2ad35a22eee6135c291754b`. Evidence:
+`~/AgentDocs/proof/darkstr-pr69-0038-xor-20260928-015655/`. Phase 5 eng depth backlog empty.
 

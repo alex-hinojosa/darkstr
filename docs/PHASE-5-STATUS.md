@@ -10,9 +10,9 @@ Phase 4 depth (through **0034** lastSeeds eTLD diag) is **CLOSED** / Proof PASS.
 Phase 5 pin **0035 cookie firewall MVP** is **MERGED** / Proof XOR **PASS**.  
 Phase 5 pin **0036 fonts coherence** is **MERGED** / Proof XOR **PASS** (PR #67; see evidence below).
 Phase 5 pin **0037 speech coherence** is **MERGED** / Proof XOR **PASS** (PR #68; see evidence below).
-Phase 5 pin **0038 WebGPU coherence** is **IN PROGRESS (re-XOR: plainAdapterInfo + rotate-first)** (PR [#69](https://github.com/alex-hinojosa/darkstr/pull/69) — do not claim PASS).
+Phase 5 pin **0038 WebGPU coherence** is **MERGED** / Proof XOR **PASS** (PR [#69](https://github.com/alex-hinojosa/darkstr/pull/69); see evidence below).
 
-**Proof XOR FAIL** on tip `5319de7e846a791174867889a37f2ab42b3d527a` (2026-09-28 re-XOR): a↔d still n=15 vs n=1 (Proxy(GPUDevice) Xray-transparent under Marionette); AdapterInfo empty; `webgpuSeed` stuck at seed-42 across eTLD (depth fallthrough to plan.seeds). Eng fix: plain AdapterInfo/limits + `defineProperty` device overlay (`plainAdapterInfo` / `a2dDefineProperty`); rotate-first depth seed derivation. Apply SoT: `patches/0038-files/`. Local Mini verify PASS — Builder does not ping Proof.
+Phase 5 eng **depth backlog is empty**. Native privacy-pane UI is PM-owned; Approach A FFI remains deferred — no new eng pins invented from this close.
 
 ## Completed — 0036 Fonts coherence / fingerprint farbling
 
@@ -173,7 +173,7 @@ All five speech-coherence XOR gates passed on Proof tip `f1ae094082f7c626a10caa9
 
 ### Out of scope (this pin)
 
-- WebGPU → **0038** (IN PROGRESS (re-XOR: plainAdapterInfo + rotate-first))
+- WebGPU → **0038** (**MERGED** / Proof XOR **PASS**)
 - Native-Compatible privacy-pane UI (PM)
 - Fonts (already **0036** MERGED / PASS)
 - Inventing Chrome-only voice names or `webkitSpeechRecognition` when absent
@@ -195,16 +195,19 @@ All five speech-coherence XOR gates passed on Proof tip `f1ae094082f7c626a10caa9
 - Apply log: `~/src/darkstr-gecko/darkstr-apply-0037-20260926-131431.log`
 - Disk free after apply: ~9.3 Gi (Data volume)
 
-## IN PROGRESS (re-XOR: plainAdapterInfo + rotate-first) — 0038 WebGPU adapter/device/limits/features coherence
+## Completed — 0038 WebGPU adapter/device/limits/features coherence
 
 | Item | Status |
 |------|--------|
 | Pin | **0038** |
-| PR | [#69](https://github.com/alex-hinojosa/darkstr/pull/69) **DO NOT MERGE** until Proof XOR PASS |
+| PR | [#69](https://github.com/alex-hinojosa/darkstr/pull/69) **MERGED** as `b974c8077500a5e8d2ad35a22eee6135c291754b` |
+| Tip at Proof | `4eaca24c22c8b45cb909f4b777d2c89430d013dd` |
 | Branch | `builder/phase5-webgpu-0038` |
-| Patch | [`patches/0038-darkstr-webgpu-coherence.patch`](../patches/0038-darkstr-webgpu-coherence.patch) |
+| Patch | [`patches/0038-darkstr-webgpu-coherence.patch`](../patches/0038-darkstr-webgpu-coherence.patch) (+ re-XOR `patches/0038-darkstr-webgpu-coherence-rexor.patch`; Apply SoT `patches/0038-files/`) |
 | Mini helper | [`scripts/apply-0038-webgpu-coherence-mini.sh`](../scripts/apply-0038-webgpu-coherence-mini.sh) / [`PHASE-5-WEBGPU-0038-MINI-APPLY.sh`](PHASE-5-WEBGPU-0038-MINI-APPLY.sh) |
-| Proof | **pending** (Builder does not ping) |
+| Proof | **PASS** (third re-XOR after FAIL tips `bbe308d9…` / `5319de7e…`) |
+| Evidence | `~/AgentDocs/proof/darkstr-pr69-0038-xor-20260928-015655/` |
+| PR comment | https://github.com/alex-hinojosa/darkstr/pull/69#issuecomment-5865022571 |
 
 ### Design summary
 
@@ -224,14 +227,19 @@ When WebGPU is enabled (user or Proof), wrap fingerprint surfaces.
 Surfaces (Brave-inspired sticky farbling; Firefox/LibreWolf/Gecko persona only):
 
 1. **`navigator.gpu.requestAdapter()`** — wrap resolved `GPUAdapter` in a Proxy.
-2. **Adapter / device `features`** — seed-tied subset of **host** features only;
+2. **Adapter / device `features`** — seed-tied / seed-ranked subset of **host** features only;
    always keep `core-features-and-limits` when present; never invent feature names.
 3. **Adapter / device `limits`** — soft multiplicative downward fudge `[0.99, 1.0)`
    on fingerprinty `max*` keys only; **never** touch `min*Alignment` (power-of-2).
 4. **`adapter.info` / `device.adapterInfo`** — map depth `gpu` persona →
    Firefox-plausible WebGPU AdapterInfo (`apple` / `intel` / `nvidia` / `amd`);
    coherent with WebGL UNMASKED vendor/renderer family; no Chrome adapter cosplay.
-5. **`requestDevice`** — wrap device so features/limits/adapterInfo match adapter.
+   Plain AdapterInfo objects (not Proxy of GPUAdapterInfo) so Marionette/Xray observes fields.
+5. **`requestDevice`** — `defineProperty` overlay on device features/limits/adapterInfo
+   reusing adapter `sharedFeatCache` (adapter↔device coherent under Xray).
+
+**re-XOR (closed):** under `rotatePerSite`, depth seeds (incl. `webgpuSeed`) derive from
+the eTLD-effective seed **first** (not snap-canvas fallthrough to global plan.seeds).
 
 Default-**on** with depth hooks (same risk class as fonts/speech list farbling).
 Homogeneous / hooks-off / pref-off: idle. Diag: `darkstr.depth.lastSeeds` JSON
@@ -249,7 +257,7 @@ gains `webgpuSeed` (0034 path).
 No new default-off arm pref (justified: read-only adapter metadata / feature subset
 when API already exposed; idle when pref-off).
 
-### Proof gates (for Proof ACK — do not ping from Builder)
+### Proof gates — PASS
 
 1. Hooks-off / Homogeneous / `dom.webgpu.enabled=false` → idle
 2. Pollution+hooks with WebGPU enabled: same seed → stable adapter info/features/limits digests (double-read; adapter↔device coherent)
@@ -257,12 +265,21 @@ when API already exposed; idle when pref-off).
 4. Same eTLD two tabs → same digests / webgpuSeed
 5. Golden lock seed-42 coherent; no Chrome-only adapter brands; AdapterInfo coherent with depth gpu / WebGL persona family
 
-### Soft residuals (expected — not FAIL)
+### Proof result — PASS
 
-- Default LibreWolf WebGPU-off → most sessions never exercise the wrappers (by design).
-- Feature subset may hide some non-core host features under Pollution+hooks.
+All five WebGPU-coherence XOR gates passed on Proof tip `4eaca24c22c8b45cb909f4b777d2c89430d013dd`
+(third re-XOR; prior FAIL tips `bbe308d9…` / `5319de7e…` fixed: a↔d n match, rotate-first
+webgpuSeed diverge, plainAdapterInfo non-empty / familiesCoherent).
+
+**Evidence:** `~/AgentDocs/proof/darkstr-pr69-0038-xor-20260928-015655/`
+
+**Soft residuals (not FAIL):**
+
+- LibreWolf `dom.webgpu.enabled` **default off** — most sessions never exercise wrappers (by design; gate 1 idle).
+- `AdapterInfo.device` remains **empty** (host/Gecko surface; not invented).
+- Worker / ServiceWorker WebGPU (`WorkerNavigator.gpu`) **out of scope** (window path only).
+- Feature subset is **seed-ranked drop** of non-core host features under Pollution+hooks (entropy soft when host list is tiny).
 - Limits fudge is soft (≤1%); alignment limits untouched.
-- Worker WebGPU (`WorkerNavigator.gpu`) not wrapped in this pin (window path only; soft).
 - Proxy wrappers: `instanceof GPUAdapter` still holds; some exotic brand-checks may differ.
 
 ### Out of scope (this pin)
@@ -272,29 +289,33 @@ when API already exposed; idle when pref-off).
 - Worker/ServiceWorker WebGPU surfaces
 - Inventing Chrome adapters or enabling WebGPU when pref-off
 - C++/wgpu-level farbling
+- Approach A FFI (deferred)
 
 ### Residual risks
 
 - Host with very few features → subset may equal full list (entropy soft).
 - Not anti-detect / not Cloudflare bypass.
 
-## Apply status (Mini) — 0038 — 2026-09-28 ~01:31 CDT
+## Apply status (Mini) — 0038 — 2026-09-28 ~01:56 CDT (Proof PASS apply) / merge ~01:58 CDT
 
 - Tree: LibreWolf **156.0.1-1** (`$DARKSTR_GECKO_ROOT`)
-- Markers already present (Builder applied source edits); patch skip OK
-- `./mach build --allow-subdirectory-build browser/components` — **OK** (~8s)
-- `make install-dist_bin` — Kept existing; moz-src symlinks refreshed
-- Symlinks: `dist/LibreWolf.app/.../moz-src/browser/components/DarkstrDepthHooks*.sys.mjs` → source (`webgpuSeed` / Soft residual 0038 / `installWebGpuInPage` present)
-- PR [#69](https://github.com/alex-hinojosa/darkstr/pull/69) open — **DO NOT MERGE** until Proof XOR PASS
-- Apply log: `~/src/darkstr-gecko/darkstr-apply-0038-20260928-013139.log`
-- Disk free after apply: ~31 Gi (Data volume)
+- Re-XOR markers present (`plainAdapterInfo` / `a2dDefineProperty` / rotate path FIRST / `sharedFeatCache`); patch skip OK
+- `./mach build --allow-subdirectory-build browser/components` — **OK**; `make install-dist_bin` refreshed moz-src
+- Symlinks: `dist/LibreWolf.app/.../moz-src/browser/components/DarkstrDepthHooks*.sys.mjs` → source (`webgpuSeed` / Soft residual 0038 / `installWebGpuInPage` / plainAdapterInfo present)
+- PR [#69](https://github.com/alex-hinojosa/darkstr/pull/69) **MERGED** as `b974c8077500a5e8d2ad35a22eee6135c291754b`; Proof XOR **PASS** on tip `4eaca24c22c8b45cb909f4b777d2c89430d013dd`
+- Apply log (PASS re-apply): `~/AgentDocs/proof/darkstr-pr69-0038-xor-20260928-015655/darkstr-apply-0038-20260928-015619.log`
 - LibreWolf `dom.webgpu.enabled` default remains **false** (unchanged)
 
 ## Next eng backlog
 
-0038 is **IN PROGRESS (re-XOR: plainAdapterInfo + rotate-first)** (WebGPU was the last PHASE-5 eng backlog item).
+**Phase 5 eng depth backlog is empty.** Pin **0038** was the last depth pin (WebGPU); closed Proof-green / MERGED.
 
-After 0038 Proof XOR PASS + merge: Phase 5 eng depth backlog is empty pending PM/Native UI.
+What is **not** eng-owned next (do not invent pins):
+
+- **Native privacy-pane UI** — PM-owned
+- **Approach A FFI** — deferred
+
+No new eng pins started from this close.
 
 ## Completed — 0035 Cookie firewall MVP
 
