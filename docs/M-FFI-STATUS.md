@@ -20,14 +20,15 @@ Reviewed Rust→C ABI (`duppel-ffi`) consumed by Pollution chrome without hand-p
 | Chrome Prefer A then B | **Superseded by 0041** — A-only runtime; B retired (see M-FFI-0041-STATUS) |
 | Mini apply + `mach` + symbol smoke EXIT recorded from authoring executor | **See M-FFI-0008-STATUS** (B) / **M-FFI-0040-STATUS** (A) |
 | `darkstr.nativePersonaHooks` default | **Still false** (unchanged) |
-| Approach B load-path retirement | **0041** — this pin; B runtime load retired |
+| Approach B load-path retirement | **0041 MERGED** — PR [#72](https://github.com/alex-hinojosa/darkstr/pull/72) `f961d39`; B runtime load retired; A-only |
 | Headed Prefer A / PM copy | **Not claimed** (optional headed soft-OK) |
 
 ## Honesty
 
 - Snapshot JSON matches `docs/SEED-COHERENCE.md` / `fixtures/seed-goldens.json` SoT (Rust `generate_persona`).
 - Chrome uses **Approach A only** (XUL/libxul in-process) after **0041**; JS mulberry `_generateFromSeed` remains soft-fail fallback when A missing.
-- Approach B cdylib/ctypes runtime load is **retired** (0041); crate may still build cdylib for unit tests.
+- Approach B cdylib/ctypes runtime load is **retired** (0041 MERGED `f961d39`); crate may still build cdylib for unit tests.
+- Soft historical `libduppel_ffi.dylib` may remain in dist/bin — **inert** (chrome does not load).
 - No Cloudflare / TLS / JA3 / RFP metric customization.
 - Brand: darkstr — not official LibreWolf.
 
@@ -40,4 +41,4 @@ See [`M-FFI-0008-STATUS.md`](M-FFI-0008-STATUS.md).
 
 - **0009**: [`M-FFI-0009-STATUS.md`](M-FFI-0009-STATUS.md).
 - **0040 Approach A**: [`M-FFI-0040-STATUS.md`](M-FFI-0040-STATUS.md) — **Proof PASS / MERGED** on main.
-- **0041 Retire B**: [`M-FFI-0041-STATUS.md`](M-FFI-0041-STATUS.md) — A-only runtime; B load path retired.
+- **0041 Retire B**: [`M-FFI-0041-STATUS.md`](M-FFI-0041-STATUS.md) — **Proof PASS / MERGED** `f961d39`; A-only runtime; B load path retired; hooks default-off.

@@ -36,7 +36,7 @@
 | Mini gkrust + XUL link + `nm` on XUL | **Yes** (Builder + Proof) |
 | Proof XOR PASS / merge on main | **Yes** — PR #71 MERGED `f828a78` |
 | Headed Prefer A (`loadSource=libxul`) | **Optional / soft-OK** (not executed; A symbols + Prefer A order verified) |
-| Approach B retirement (delete cdylib load path) | **Follow-up 0041** — see M-FFI-0041-STATUS |
+| Approach B retirement (delete cdylib load path) | **0041 MERGED** `f961d39` — see [`M-FFI-0041-STATUS.md`](M-FFI-0041-STATUS.md) |
 | Cloudflare / TLS / JA3 / RFP metrics | **No** |
 
 ## Mini apply / build
@@ -69,7 +69,7 @@ nm -gU "$XUL" | grep darkstr_ffi_
 ## Soft residuals / B retirement plan
 
 1. **Prefer A then B** was the #71 merge state: chrome tried in-process XUL/libxul first, then Approach B cdylib.
-2. **B retirement** → follow-up pin **[`M-FFI-0041-STATUS.md`](M-FFI-0041-STATUS.md)** (retire cdylib/ctypes runtime load; A-only).
+2. **B retirement** → **[`M-FFI-0041-STATUS.md`](M-FFI-0041-STATUS.md)** **MERGED** `f961d39` (A-only; soft historical dylib inert; hooks default-off).
 3. `build-and-install-ffi.sh` / crate `cdylib` kept for unit tests; PHASE-4 install gated off for product (0041).
 4. `nativePersonaHooks` remains **default-off**.
 5. Disk: full XUL link is heavy — Builder recorded ~21→16 Gi during Mini LTO/link.

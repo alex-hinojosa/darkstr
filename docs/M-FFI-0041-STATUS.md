@@ -4,11 +4,11 @@
 **Train:** LibreWolf / Firefox **156.0.1-1**.  
 **Patch:** [`../patches/0041-darkstr-ffi-retire-approach-b.patch`](../patches/0041-darkstr-ffi-retire-approach-b.patch)  
 **SoT file:** [`../patches/0041-files/DarkstrFfi.sys.mjs`](../patches/0041-files/DarkstrFfi.sys.mjs)  
-**PR:** [#72](https://github.com/alex-hinojosa/darkstr/pull/72) (open — do not merge)  
-**Tip:** `fa721e73029dd2e51f2799d6a5ac77a77205b88d`  
+**PR:** [#72](https://github.com/alex-hinojosa/darkstr/pull/72) **MERGED** as `f961d3941a13a142ef5b8561cbc3134673b9cc23`  
+**Tip at Proof:** `b6f100583c27044d6fb26a86021bf700921de791`  
 **Branch:** `builder/m-ffi-retire-approach-b-0041`  
 **Prerequisite:** Approach A **0040** Proof-green on main (PR [#71](https://github.com/alex-hinojosa/darkstr/pull/71) MERGED `f828a78`).  
-**Proof:** *open — Builder Mini apply + local smoke; do not ping Proof until Builder paste ready.*
+**Proof:** **PASS** — evidence `~/AgentDocs/proof/darkstr-pr72-0041-xor-20260928-075315/` + [PR comment](https://github.com/alex-hinojosa/darkstr/pull/72#issuecomment-5870246843).
 
 ## Approach
 
@@ -62,16 +62,16 @@ nm -gU "$(ls -d "$DARKSTR_GECKO_ROOT"/obj-*/dist/bin/XUL | head -1)" | grep dark
 # Expect: three Approach A globals still present (untouched)
 ```
 
-## Proof XOR checklist (Builder paste)
+## Proof XOR checklist — **PASS** (2026-09-28 ~07:53 CDT)
 
-- [ ] `0041` apply idempotent (markers skip on 2nd run)
-- [ ] Mini: chrome apply EXIT 0 (`browser/components` + install-dist_bin)
-- [ ] Soft: `DarkstrFfi` has no `cdylibCandidates` / no `kind: "cdylib"` stage
-- [ ] Soft: marker `0041: Retire B` present; `loadSource` type is libxul-only
-- [ ] Soft: Approach A symbols still in XUL (`nm` three globals)
-- [ ] Soft-fail closed: when A missing → null → JS mulberry (no invent Chrome)
-- [ ] `nativePersonaHooks` still default-off
-- [ ] STATUS honesty: B retired for runtime; A kept; no PM copy
+- [x] `0041` apply idempotent (markers skip on 2nd run)
+- [x] Mini: chrome apply EXIT 0 (`browser/components` + install-dist_bin)
+- [x] Soft: `DarkstrFfi` has no `cdylibCandidates` / no `kind: "cdylib"` stage
+- [x] Soft: marker `0041: Retire B` present; `loadSource` type is libxul-only
+- [x] Soft: Approach A symbols still in XUL (`nm` three globals)
+- [x] Soft-fail closed: when A missing → null → JS mulberry (no invent Chrome)
+- [x] `nativePersonaHooks` still default-off
+- [x] STATUS honesty: B retired for runtime; A kept; hooks default-off; no PM copy
 
 
 ## Mini verify (Builder — 2026-09-28 ~07:50 CDT)
@@ -87,7 +87,7 @@ nm -gU "$(ls -d "$DARKSTR_GECKO_ROOT"/obj-*/dist/bin/XUL | head -1)" | grep dark
 | Historical `libduppel_ffi.dylib` in dist/bin | **Present / inert** (soft residual) |
 | `nativePersonaHooks` default | **Still false** |
 | Headed Prefer A | **Soft-OK / not executed** |
-| Proof XOR / merge | **Open** — Builder paste ready; do not ping Proof; do not merge |
+| Proof XOR / merge | **PASS / MERGED** — tip `b6f10058`; merge `f961d39`; evidence `~/AgentDocs/proof/darkstr-pr72-0041-xor-20260928-075315/` |
 
 ## Soft residuals left after B retirement
 
@@ -99,7 +99,7 @@ nm -gU "$(ls -d "$DARKSTR_GECKO_ROOT"/obj-*/dist/bin/XUL | head -1)" | grep dark
 
 ## Honesty
 
-- Do **not** remove Approach A.
-- Do **not** flip hooks default-on.
-- Do **not** merge until Proof XOR green (Builder does not ping Proof).
+- Approach A **kept** (only runtime path); B runtime load **retired**.
+- `nativePersonaHooks` remains **default-off**.
+- Soft historical `libduppel_ffi.dylib` may remain on disk — **inert** (chrome A-only does not load).
 - Brand: darkstr — not official LibreWolf.

@@ -13,7 +13,7 @@ Phase 5 pin **0037 speech coherence** is **MERGED** / Proof XOR **PASS** (PR #68
 Phase 5 pin **0038 WebGPU coherence** is **MERGED** / Proof XOR **PASS** (PR [#69](https://github.com/alex-hinojosa/darkstr/pull/69); see evidence below).
 
 Phase 5 pin **0039 FontFaceSet enumeration coherence** is **MERGED** / Proof XOR **PASS** (PR [#70](https://github.com/alex-hinojosa/darkstr/pull/70); see evidence below) — soft-residual polish extending 0036 `check`→enumeration; not a new depth surface.
-Phase 5 eng **depth backlog empty**; soft residuals remain (see backlog table). Native privacy-pane UI is PM-owned. Approach A FFI (**0040**) is **Proof-green on main** (PR [#71](https://github.com/alex-hinojosa/darkstr/pull/71) MERGED `f828a78`) — Prefer A then B; B retirement open follow-up; hooks default-off. See [`M-FFI-0040-STATUS.md`](M-FFI-0040-STATUS.md).
+Phase 5 eng **depth backlog empty**; soft residuals remain (see backlog table). Native privacy-pane UI is PM-owned. Approach A FFI (**0040**) is **Proof-green on main** (PR [#71](https://github.com/alex-hinojosa/darkstr/pull/71) MERGED `f828a78`). Approach B runtime load (**0041**) is **Proof-green / MERGED** (PR [#72](https://github.com/alex-hinojosa/darkstr/pull/72) `f961d39`) — **A-only**; soft historical dylib inert; hooks default-off. See [`M-FFI-0040-STATUS.md`](M-FFI-0040-STATUS.md) / [`M-FFI-0041-STATUS.md`](M-FFI-0041-STATUS.md).
 
 ## Completed — 0036 Fonts coherence / fingerprint farbling
 
@@ -316,11 +316,12 @@ webgpuSeed diverge, plainAdapterInfo non-empty / familiesCoherent).
 | — | Cookie 0035 `/echo` Cookie header empty | Soft / open (necko/QI; not this close) |
 | — | Speech 0037 pref-off / empty voices before async | Soft / do not invent API |
 | — | WebGPU 0038 Worker OOS / AdapterInfo.device empty | Soft / do not invent |
-| — | FFI `libduppel_ffi` not in DMG `package-manifest.in` | Packaging residual (not depth) |
+| — | FFI `libduppel_ffi` not in DMG `package-manifest.in` | Soft / **moot** for product A-only path (XUL carries symbols); historical B dylib inert |
 | — | `document.fonts.ready` still host Promise | Soft (by design; not wrapped in 0039) |
 | — | Native privacy-pane UI | PM-owned |
-| — | Approach A FFI (**0040**) | **MERGED** / Proof **PASS** (PR #71 `f828a78`); Prefer A then B; **B retirement open follow-up** (load path retained); hooks default-off |
-| — | Approach B load-path retirement | Soft / open follow-up (do **not** delete in #71 close) |
+| — | Approach A FFI (**0040**) | **MERGED** / Proof **PASS** (PR #71 `f828a78`); A-only after **0041**; hooks default-off |
+| — | Approach B load-path retirement (**0041**) | **MERGED** / Proof **PASS** (PR #72 `f961d39`); B runtime load retired; soft historical dylib inert |
+| — | Soft historical `libduppel_ffi.dylib` in dist/bin | Soft / inert (chrome A-only does not load) |
 
 ## Completed — 0040 Approach A FFI (gkrust → libxul)
 
@@ -336,7 +337,23 @@ webgpuSeed diverge, plainAdapterInfo non-empty / familiesCoherent).
 | Proof | **PASS** |
 | Evidence | `~/AgentDocs/proof/darkstr-pr71-0040-xor-20260928-074243/` + [PR comment](https://github.com/alex-hinojosa/darkstr/pull/71#issuecomment-5870086745) |
 
-**Prefer A then B** on main. Approach B cdylib load path **retained** (retirement open follow-up). `nativePersonaHooks` remains **default-off**.
+**Prefer A then B** was the #71 merge state; superseded by **0041** (**A-only** / B runtime load retired — PR [#72](https://github.com/alex-hinojosa/darkstr/pull/72) MERGED `f961d39`). `nativePersonaHooks` remains **default-off**.
+
+## Completed — 0041 Retire Approach B (cdylib/ctypes runtime load)
+
+| Item | Status |
+|------|--------|
+| Pin | **0041** (M-FFI Retire B) |
+| PR | [#72](https://github.com/alex-hinojosa/darkstr/pull/72) **MERGED** as `f961d3941a13a142ef5b8561cbc3134673b9cc23` |
+| Tip at Proof | `b6f100583c27044d6fb26a86021bf700921de791` |
+| Branch | `builder/m-ffi-retire-approach-b-0041` |
+| Patch | [`patches/0041-darkstr-ffi-retire-approach-b.patch`](../patches/0041-darkstr-ffi-retire-approach-b.patch) |
+| Status docs | [`M-FFI-0041-STATUS.md`](M-FFI-0041-STATUS.md) / [`M-FFI-STATUS.md`](M-FFI-STATUS.md) |
+| Mini apply | **OK** — chrome-only `browser/components` EXIT 0 (~7s); no XUL relink |
+| Proof | **PASS** |
+| Evidence | `~/AgentDocs/proof/darkstr-pr72-0041-xor-20260928-075315/` + [PR comment](https://github.com/alex-hinojosa/darkstr/pull/72#issuecomment-5870246843) |
+
+**A-only** on main after merge. B cdylib/ctypes runtime load **retired**. Soft historical `libduppel_ffi.dylib` may remain inert on disk. `nativePersonaHooks` remains **default-off**. Crate `cdylib` kept for unit tests; PHASE-4 install gated.
 
 ## Completed — 0039 FontFaceSet enumeration coherence
 
@@ -382,7 +399,7 @@ All five FontFaceSet-enumeration XOR gates passed on Proof tip `4810eb6a2deea687
 
 - `document.fonts.ready` remains the host load-completion Promise (**not wrapped** by design).
 - DOM width fudge ≤0.1% (0036 accepted).
-- Remaining soft list (not this pin): Cookie 0035 `/echo` Cookie empty; Speech 0037 pref-off / empty voices before async; WebGPU 0038 Worker OOS / AdapterInfo.device empty; FFI dylib not in DMG `package-manifest.in`; Approach A **0040** Proof-green (B retirement open); Native privacy-pane UI (PM).
+- Remaining soft list (not this pin): Cookie 0035 `/echo` Cookie empty; Speech 0037 pref-off / empty voices before async; WebGPU 0038 Worker OOS / AdapterInfo.device empty; FFI dylib not in DMG `package-manifest.in` (**moot** A-only); soft historical `libduppel_ffi.dylib` inert; Approach A **0040** + B retire **0041** Proof-green/MERGED; Native privacy-pane UI (PM).
 
 ### Out of scope (this pin)
 
@@ -417,7 +434,7 @@ Honest packaging evidence only — **no new eng depth pins**.
 | darkstr tip | `ff89e8287509e21049399504bfdf2b85e54e33a0` |
 | Disk | ~19 Gi → reclaim ~2.8 Gi safe caches/old stage → ~21 Gi; after package still ~21 Gi |
 | Hooks in DMG | Soft residual **0038** (`webgpuSeed` / plainAdapterInfo) inside `omni.ja` `DarkstrDepthHooksChild.sys.mjs` (SHA match source); XUL `darkstr.mode` / `nativePersonaHooks` present |
-| FFI in DMG | **Absent** — Approach B `libduppel_ffi.dylib` not in `package-manifest.in` (same gap as Sep-24 DMG). DEV app still has dylib for headed skim. |
+| FFI in DMG | **Absent** B dylib — **moot** after **0041** A-only (XUL carries Approach A symbols). Soft: historical `libduppel_ffi.dylib` may sit inert in DEV dist/bin; chrome does not load. |
 | Light smoke | DEV app Pollution+hooks-on skim launch OK (~07:00 CDT); no crash. Not full Proof XOR. |
 
 Pin detail: [`MINI-PACKAGE-PIN.md`](MINI-PACKAGE-PIN.md). Builder may offer Proof a package-path XOR when ready; do not invent packaging-manifest eng from this note.
@@ -425,10 +442,10 @@ Pin detail: [`MINI-PACKAGE-PIN.md`](MINI-PACKAGE-PIN.md). Builder may offer Proo
 What is **not** eng-owned next (do not invent pins):
 
 - **Native privacy-pane UI** — PM-owned
-- **Approach A FFI (0040)** — **Proof-green on main** (PR #71); Prefer A then B; B load path retained; B retirement open follow-up; hooks default-off — see [`M-FFI-0040-STATUS.md`](M-FFI-0040-STATUS.md)
-- **Approach B load-path retirement** — open follow-up (do not start from this close)
+- **Approach A FFI (0040)** — **Proof-green on main** (PR #71); A-only after **0041**; hooks default-off — see [`M-FFI-0040-STATUS.md`](M-FFI-0040-STATUS.md)
+- **Approach B load-path retirement (0041)** — **CLOSED** / Proof **PASS** / MERGED `f961d39` (PR [#72](https://github.com/alex-hinojosa/darkstr/pull/72)) — see [`M-FFI-0041-STATUS.md`](M-FFI-0041-STATUS.md)
 
-No new eng pins started from this close (no B retirement / no new pins).
+No new eng pins from this 0041 close.
 
 ## Completed — 0035 Cookie firewall MVP
 
