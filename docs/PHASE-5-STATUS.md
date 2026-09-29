@@ -586,7 +586,28 @@ All five FontFaceSet-enumeration XOR gates passed on Proof tip `4810eb6a2deea687
 - Apply log: `~/src/darkstr-gecko/darkstr-apply-0039-20260928-070940.log`
 - Disk free after apply: ~21 Gi (Data volume)
 
-## Ship note — Mini `./mach package` DMG (2026-09-28 ~06:59 CDT)
+## Ship note — Mini package DMG (2026-09-29 ~00:37 CDT) — Soft residual **0039–0043**
+
+Honest packaging evidence only — **no new eng depth pins**. Soft residuals **0039–0043** are **in this DMG** (prior 2026-09-28 ship was pre-0039 only).
+
+| Field | Value |
+|------|--------|
+| Command | `make -C obj-aarch64-apple-darwin25.6.0 package` (mach body; host Darwin **27.0.0** would default a missing `obj-…-darwin27.0.0` — pinned existing 25.6.0 objdir) |
+| Exit / artifact | **0** → `obj-aarch64-apple-darwin25.6.0/dist/librewolf-156.0.1.en-US.mac.dmg` (**99440846** bytes ~95 MiB) |
+| Absolute path | `/Users/alexander/src/darkstr-gecko/librewolf-source/librewolf-156.0.1-1/obj-aarch64-apple-darwin25.6.0/dist/librewolf-156.0.1.en-US.mac.dmg` |
+| SHA-256 | `e3290e38c23848388a1da542700e1a2d4ca6facd18b9a67c72bf5123936236f4` |
+| DMG mtime | **2026-09-29 00:37:31 CDT** |
+| Sourcestamp | buildid `20260928084500`; mozilla-release `6f2c158dfc7e9693f880fad2510ceb51a158c069` |
+| darkstr tip | `0b95bbfdf2ed82f98f773a3d655732d75f4eb834` (PR [#74](https://github.com/alex-hinojosa/darkstr/pull/74) merge `2672848`) |
+| Disk | ~54 Gi free — no reclaim; objdir kept |
+| Softs in DMG | **0039** FontFaceSet · **0040** Approach A · **0041** retire B · **0042** Cookie `/echo` QI · **0043** Worker WebGPU — all markers PASS in packaged `omni.ja` (SHA match tree) |
+| FFI in DMG | **Absent** B dylib — **moot** after **0041** A-only |
+| Light smoke | Builder checklist PASS on mounted DMG `omni.ja`; evidence `~/AgentDocs/proof/darkstr-ship-156-dmg-20260929-003745/`. Optional: parent may ping Proof for package-path smoke — Builder does **not** ping Proof. |
+| Log | `~/src/darkstr-gecko/mach-package-156-20260929-003658.log` |
+
+Pin detail: [`MINI-PACKAGE-PIN.md`](MINI-PACKAGE-PIN.md). Supersedes 2026-09-28 DMG `d400de8b…` (0038-only ship).
+
+## Ship note — Mini `./mach package` DMG (2026-09-28 ~06:59 CDT) — superseded (pre-0039)
 
 Honest packaging evidence only — **no new eng depth pins**.
 
