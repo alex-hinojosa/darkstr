@@ -327,6 +327,24 @@ webgpuSeed diverge, plainAdapterInfo non-empty / familiesCoherent).
 | — | Approach B load-path retirement (**0041**) | **MERGED** / Proof **PASS** (PR #72 `f961d39`); B runtime load retired; soft historical dylib inert |
 | — | Soft historical `libduppel_ffi.dylib` in dist/bin | Soft / inert (chrome A-only does not load) |
 
+## In progress — 0044 native about:preferences pane
+
+| Field | Value |
+|------|-------|
+| Pin | **0044** (native privacy pane; product close) |
+| Train | LibreWolf **156.0.1-1** |
+| Branch | `builder/prefs-pane-0044` |
+| Patch | [`patches/0044-darkstr-prefs-pane.patch`](../patches/0044-darkstr-prefs-pane.patch) (pointer; SoT apply) |
+| Apply SoT | [`patches/0044-files/`](../patches/0044-files/) |
+| Mini helper | [`scripts/apply-0044-prefs-pane-mini.sh`](../scripts/apply-0044-prefs-pane-mini.sh) |
+| Controls | Homogeneous XOR Pollution; Native-Compatible beside; hooks off by default, Pollution-only |
+| Latch | Leaving Pollution → `darkstr.nativePersonaHooks=false` (clear checkbox + pref) |
+| Evidence (controls) | `~/AgentDocs/proof/darkstr-pane-check-156-20261005-084525/` SOFT-PASS (pre-latch) |
+| Evidence (FP matrix) | `~/AgentDocs/proof/darkstr-fp-matrix-156-20261004-114746/` SOFT-PASS (persona coherence; pane not scored) |
+| DMG (pre-latch) | `obj-aarch64-apple-darwin25.6.0/dist/librewolf-156.0.1.en-US.mac.dmg` SHA-256 `99a89542bd5eea0af8e8c3a069b95179dd8cf7e7d6e3c0674af3ab134c463a0d` |
+
+Product score: pane shows the three controls and hooks gate. Latch clear on mode flip is the remaining Proof check before merge.
+
 ## Completed — 0043 Worker/SharedWorker WebGPU coherence
 
 | Item | Status |

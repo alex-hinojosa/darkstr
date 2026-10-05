@@ -1,0 +1,20 @@
+# darkstr pin 0044 — native about:preferences darkstr pane
+# Train: LibreWolf 156.0.1-1. Brand: darkstr — not official LibreWolf.
+# Product: same controls as extension Settings — Homogeneous XOR Pollution,
+#   Native-Compatible beside mode, nativePersonaHooks off by default and
+#   Pollution-only. Leaving Pollution clears hooks (pref false), not grey-only.
+# Apply SoT: patches/0044-files via scripts/apply-0044-prefs-pane-mini.sh
+# Marker: Leaving Pollution clears hooks / Preferences.addAll / onUserChange
+# Chrome preferences UI only — no persona/engine change. Not anti-detect.
+#
+# Files installed by the apply script:
+#   browser/components/preferences/darkstr.js
+#   browser/components/preferences/darkstr.inc.xhtml
+#   browser/components/preferences/config/darkstr.mjs
+#   browser/components/preferences/jar.mn
+#   browser/components/preferences/preferences.xhtml
+#   browser/components/preferences/preferences.js
+#   browser/components/preferences/main.js
+#   browser/locales/en-US/browser/preferences/preferences.ftl
+#
+# Soft residual (latch): mode→Homogeneous must set darkstr.nativePersonaHooks=false.
