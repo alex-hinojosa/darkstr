@@ -327,7 +327,7 @@ webgpuSeed diverge, plainAdapterInfo non-empty / familiesCoherent).
 | — | Approach B load-path retirement (**0041**) | **MERGED** / Proof **PASS** (PR #72 `f961d39`); B runtime load retired; soft historical dylib inert |
 | — | Soft historical `libduppel_ffi.dylib` in dist/bin | Soft / inert (chrome A-only does not load) |
 
-## In progress — 0044 native about:preferences pane
+## Completed — 0044 native about:preferences pane
 
 | Field | Value |
 |------|-------|
@@ -343,7 +343,11 @@ webgpuSeed diverge, plainAdapterInfo non-empty / familiesCoherent).
 | Evidence (FP matrix) | `~/AgentDocs/proof/darkstr-fp-matrix-156-20261004-114746/` SOFT-PASS (persona coherence; pane not scored) |
 | DMG (pre-latch) | `obj-aarch64-apple-darwin25.6.0/dist/librewolf-156.0.1.en-US.mac.dmg` SHA-256 `99a89542bd5eea0af8e8c3a069b95179dd8cf7e7d6e3c0674af3ab134c463a0d` |
 
-Product score: pane shows the three controls and hooks gate. Latch clear on mode flip is the remaining Proof check before merge.
+Product score: pane shows the three controls and hooks gate. Latch clear on mode flip **PASS**. **MERGED** after Proof PASS.
+
+| Merge | `gh pr merge --merge` PR [#75](https://github.com/alex-hinojosa/darkstr/pull/75) |
+| Latch evidence | `~/AgentDocs/proof/darkstr-pane-latch-156-20261005-085035/` PASS |
+| Latch DMG SHA-256 | `0615574e7cd7616c521d32971c604f448c0f2a3e4f12c65cf8544bbabbb40f1c` |
 
 ## Completed — 0043 Worker/SharedWorker WebGPU coherence
 
