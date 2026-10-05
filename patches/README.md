@@ -27,6 +27,7 @@ These stubs document *how* a real bsys6 / LibreWolf recipe would layer darkstr p
 Design pin: [`../docs/GECKO-HOOKS.md`](../docs/GECKO-HOOKS.md). Bridge: [`../docs/PREF-BRIDGE.md`](../docs/PREF-BRIDGE.md).
 
 Phase 5 depth pins (real patches): [`0035`](0035-darkstr-cookie-firewall.patch) cookie · [`0036`](0036-darkstr-fonts-coherence.patch) fonts · [`0037`](0037-darkstr-speech-coherence.patch) speech · [`0038`](0038-darkstr-webgpu-coherence.patch) WebGPU. Soft residual: [`0039`](0039-darkstr-fonts-enum-coherence.patch) FontFaceSet enum (extends 0036). Cookie `/echo` QI: [`0042`](0042-darkstr-cookie-echo-qi.patch) (extends 0035). Worker WebGPU: [`0043`](0043-darkstr-webgpu-worker-coherence.patch) (extends 0018+0038; ServiceWorker still OOS).
+Native prefs pane: [`0044`](0044-darkstr-prefs-pane.patch) about:preferences darkstr (modes + Native-Compatible + hooks; latch clears hooks when leaving Pollution).
 
 FFI: [`0040`](0040-darkstr-ffi-gkrust-libxul.patch) Approach A gkrust→libxul (Proof-green). [`0041`](0041-darkstr-ffi-retire-approach-b.patch) retire Approach B cdylib/ctypes runtime load (A-only).
 
