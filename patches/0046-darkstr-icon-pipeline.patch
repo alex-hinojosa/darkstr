@@ -1,0 +1,20 @@
+# darkstr pin 0046 — app icon pipeline (prep only; no Gecko tree change yet)
+# Train: LibreWolf 156.0.1-1. Requires pin 0045 (browser/branding/darkstr).
+# Tool: scripts/darkstr-icon-from-png.sh <icon-1024.png> [OUT_DIR] [--install] [--doc png] [--disk png]
+# Inventory: patches/0046-files/ICON-INVENTORY.md
+# State: LibreWolf wolf art still in browser/branding/darkstr (byte-identical to
+#   browser/branding/librewolf). The PM 1024 PNG lands later; then --install, build, stage,
+#   ./mach package (one DMG for icon + any queued changes).
+#
+# --install replaces (originals backed up to OUT_DIR/replaced-originals/):
+#   browser/branding/darkstr/firefox.icns   (CFBundleIconFile: Dock/Finder/Cmd-Tab)
+#   browser/branding/darkstr/document.icns  (CFBundleDocumentTypes icon)
+#   browser/branding/darkstr/disk.icns      (DMG .VolumeIcon.icns via toolkit/moz.configure --icon)
+#   browser/branding/darkstr/default{16,22,24,32,48,64,128,256}.png
+#     (16..128 also chrome://branding/content/iconNN.png)
+#   browser/branding/darkstr/content/about-logo{,-private}{,@2x}.png (About, about:home/newtab,
+#     private browsing page)
+# Web check after --install: chrome://branding/content is contentaccessible=yes; re-run the 0045
+#   reach probe and confirm pages still cannot load chrome://branding/content/* (0045: blocked).
+# No pref, persona, engine or fingerprinting change. Bookmarks toolbar stays LibreWolf "always"
+#   (the 0046 bookmarks-newtab draft was withdrawn by PM and removed from this pin).

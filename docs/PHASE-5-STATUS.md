@@ -327,24 +327,22 @@ webgpuSeed diverge, plainAdapterInfo non-empty / familiesCoherent).
 | — | Approach B load-path retirement (**0041**) | **MERGED** / Proof **PASS** (PR #72 `f961d39`); B runtime load retired; soft historical dylib inert |
 | — | Soft historical `libduppel_ffi.dylib` in dist/bin | Soft / inert (chrome A-only does not load) |
 
-## In progress — 0046 bookmarks toolbar default "newtab" + icon prep
+## In progress — 0046 darkstr app icon pipeline (prep; waiting for PM PNG)
 
 | Field | Value |
 |------|-------|
-| Pin | **0046** (bookmarks toolbar default back to stock Firefox) |
+| Pin | **0046** (icon pipeline only; no Gecko tree change until `--install`) |
 | Train | LibreWolf **156.0.1-1** (on top of 0045) |
-| Branch | `builder/0046-bookmarks-newtab` (no PR yet) |
-| Patch | [`patches/0046-bookmarks-newtab.patch`](../patches/0046-bookmarks-newtab.patch) (pointer; SoT apply) |
-| Apply SoT | [`patches/0046-files/`](../patches/0046-files/) |
-| Mini helper | [`scripts/apply-0046-bookmarks-newtab-mini.sh`](../scripts/apply-0046-bookmarks-newtab-mini.sh) / [`PHASE-5-BOOKMARKS-0046-MINI-APPLY.sh`](PHASE-5-BOOKMARKS-0046-MINI-APPLY.sh) |
-| Change | `lw/librewolf.cfg` (LibreWolf line 251; ships as `Contents/Resources/librewolf.cfg`): `defaultPref("browser.toolbars.bookmarks.visibility", "always")` → `"newtab"` (stock `firefox.js:3087`). defaultPref, not lock |
-| Pollution | fresh profile, real window 1280×1040, default prefs (`inTitlebar`=2, `uidensity`=0): normal site outerH−innerH **85** (latch 113), outerW−innerW 0; bar 28px on about:home (start page) and about:newtab, hidden on sites |
-| Homogeneous | outerH−innerH **0** (RFP, unchanged). **Caveat:** window opens on about:home with the bar, RFP rounds content to 1600×900 *with* the bar; on sites the bar hides → pages see **1600×928** (latch: 1600×900). This is LibreWolf #1569 (why LibreWolf ships `always`). Needs a product decision before merge |
-| Web persona | UA `Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:156.0) Gecko/20100101 Firefox/156.0` and all navigator fields identical to latch in both modes; no brand strings web-visible |
-| Build | incremental `./mach build` (25.6.0 objdir) OK; `stage-package` OK (`dist/librewolf/darkstr.app`). **Not packaged** (waiting for PM icon) |
-| Icon prep | [`scripts/darkstr-icon-from-png.sh`](../scripts/darkstr-icon-from-png.sh) 1024 PNG → `firefox.icns`/`document.icns`/`disk.icns` (full 16–512 @1x/@2x iconset), `default16…256.png`, `content/about-logo{,-private}{,@2x}.png`; `--install` only when the PM PNG lands (wolf still in place) |
-| Evidence | `~/AgentDocs/proof/darkstr-0046-20261008/` (`f-*-{poll,homog}.flow.json` + `.json`) |
-| 0045 DMG | preserved `~/AgentDocs/builds/darkstr-0045-1712df51.dmg` (SHA-256 `1712df51…d334`) before the next package overwrites dist |
+| Branch | `builder/0046-icon` (no PR yet) |
+| Patch | [`patches/0046-darkstr-icon-pipeline.patch`](../patches/0046-darkstr-icon-pipeline.patch) (pointer) |
+| Inventory | [`patches/0046-files/ICON-INVENTORY.md`](../patches/0046-files/ICON-INVENTORY.md) |
+| Tool | [`scripts/darkstr-icon-from-png.sh`](../scripts/darkstr-icon-from-png.sh): 1024×1024 PNG → `firefox.icns`, `document.icns`, `disk.icns` (iconutil, full 16–512 @1x/@2x), `default16…256.png`, `content/about-logo{,-private}{,@2x}.png`; validates size/format, SHA256SUMS; `--install` backs up originals then copies into `browser/branding/darkstr` |
+| Tested | generation + size checks on a 1024 test image; `--install` exercised only against a copy of the branding dir (`DARKSTR_BRANDING_DIR`) — real tree still has the wolf |
+| Bookmarks bar | PM withdrew the `newtab` request: stays LibreWolf `defaultPref(..., "always")` in both modes; `DarkstrModeXor` untouched. Re-verified on staged app (fresh profile, real window, start on about:home → site): Homogeneous page sees **1600×900**, outerH−innerH **0**; Pollution **113** (1280×1040, inner 927) — identical to latch; UA/navigator identical |
+| Build | tree back to 0045 state for that pref/ModeXor; incremental `./mach build` + `stage-package` OK (25.6.0 objdir). **Not packaged** (waiting for PM icon) |
+| Next | PM PNG → `scripts/darkstr-icon-from-png.sh <png> --install` → build → stage → web reach re-check → `./mach package` |
+| Evidence | `~/AgentDocs/proof/darkstr-0046-20261008/` (`r-new-{homog,poll}` vs `f-latch-{homog,poll}`) |
+| 0045 DMG | preserved `~/AgentDocs/builds/darkstr-0045-1712df51.dmg` (SHA-256 `1712df51…d334`, 99,596,905 B) |
 
 ## Completed — 0045 darkstr branding + default theme + Cockpit UI fonts
 
