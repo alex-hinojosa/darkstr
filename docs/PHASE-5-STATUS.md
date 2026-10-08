@@ -567,7 +567,49 @@ All five 0043 Worker/SharedWorker WebGPU XOR gates passed on Proof tip `cc692641
 - Persona version numbers (139/140 vs 156) and seed persistence — **N6**, open for Alex.
 - Worker persona path — done in 0049 (section below): worker `deviceMemory`
   spoof, worker HW mirror, Shared/Service-worker requests.
-- Chaff (0050).
+- Chaff — done in 0050 (section above).
+
+## In review — 0050 chaff rearm (stacked on 0049)
+
+| | |
+|---|---|
+| Pin | 0050 — Rowan **B6**: the chaff scheduler cancelled every batch it scheduled |
+| Branch | `builder/0050-chaff-rearm` (on `builder/0049-worker-coherence` / #81) |
+| Merge order | #79 → #80 → #81 → this PR, each after Proof PASS |
+| Patch | [`../patches/0050-darkstr-chaff-rearm.patch`](../patches/0050-darkstr-chaff-rearm.patch) + `patches/0050-files/` |
+| Apply | `scripts/apply-0050-chaff-rearm-mini.sh` (chrome JS only; no C++ recompile) |
+| Tests | `tests/chaff-rearm-0050.test.mjs` |
+
+### Bug
+
+`_onIntervalFire` → `_scheduleBatch` (batch nsITimers) → `_armIntervalTimer`
+→ `_cancelAll`, which cancelled the interval timer **and** the batch it had
+just scheduled. The scheduler reported armed but no beacon ever fired (Rowan's
+SIM: 0 fetches vs 1/2/10 in the positive control; live: `_batchTimers` empty
+right after the interval fire).
+
+### Fix
+
+- `_cancelAll` is split into `_cancelIntervalTimer` + `_cancelBatchTimers`.
+- `_armIntervalTimer` (the re-arm) replaces **only** the interval timer;
+  pending batch timers survive and fire on their stagger.
+- `_cancelAll` (interval + every pending batch) still runs when chaff is
+  disabled (mode / `nativeCompatible` / `nativePersonaHooks`), when the gate or
+  `darkstr.chaosLevel` prefs change (`refreshPlan`, same as before 0050), when
+  an interval fires while disarmed, and on `uninit` (shutdown).
+- A fired one-shot batch timer removes itself from `_batchTimers`, so the
+  pending list does not grow across intervals; a callback for a timer no
+  longer in the list is a no-op.
+- Unchanged: defaults (homogeneous, hooks off → idle), schedules
+  (interval/batch/stagger per level), endpoints, payloads, request options.
+
+### Known gaps
+
+- A level/gate pref change while a batch is pending drops that batch (as
+  before 0050; the new plan starts a fresh interval).
+- Chaff remains opt-in (Pollution + `nativePersonaHooks`); live verification
+  used a local logging proxy that refuses every request — no beacon reached
+  the real endpoints during testing.
 
 ## In review — 0049 worker coherence (stacked on 0051)
 
@@ -644,7 +686,7 @@ All five 0043 Worker/SharedWorker WebGPU XOR gates passed on Proof tip `cc692641
 ### Not in 0049
 
 - Persona version numbers (139/140 vs 156) and seed persistence — **N6**, open for Alex.
-- Chaff (0050).
+- Chaff — done in 0050 (section above).
 
 ## Completed — 0042 Cookie `/echo` QI soft residual
 
