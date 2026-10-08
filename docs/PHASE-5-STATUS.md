@@ -327,13 +327,32 @@ webgpuSeed diverge, plainAdapterInfo non-empty / familiesCoherent).
 | — | Approach B load-path retirement (**0041**) | **MERGED** / Proof **PASS** (PR #72 `f961d39`); B runtime load retired; soft historical dylib inert |
 | — | Soft historical `libduppel_ffi.dylib` in dist/bin | Soft / inert (chrome A-only does not load) |
 
-## In progress — 0045 darkstr branding + default theme + Cockpit UI fonts
+## In progress — 0046 bookmarks toolbar default "newtab" + icon prep
+
+| Field | Value |
+|------|-------|
+| Pin | **0046** (bookmarks toolbar default back to stock Firefox) |
+| Train | LibreWolf **156.0.1-1** (on top of 0045) |
+| Branch | `builder/0046-bookmarks-newtab` (no PR yet) |
+| Patch | [`patches/0046-bookmarks-newtab.patch`](../patches/0046-bookmarks-newtab.patch) (pointer; SoT apply) |
+| Apply SoT | [`patches/0046-files/`](../patches/0046-files/) |
+| Mini helper | [`scripts/apply-0046-bookmarks-newtab-mini.sh`](../scripts/apply-0046-bookmarks-newtab-mini.sh) / [`PHASE-5-BOOKMARKS-0046-MINI-APPLY.sh`](PHASE-5-BOOKMARKS-0046-MINI-APPLY.sh) |
+| Change | `lw/librewolf.cfg` (LibreWolf line 251; ships as `Contents/Resources/librewolf.cfg`): `defaultPref("browser.toolbars.bookmarks.visibility", "always")` → `"newtab"` (stock `firefox.js:3087`). defaultPref, not lock |
+| Pollution | fresh profile, real window 1280×1040, default prefs (`inTitlebar`=2, `uidensity`=0): normal site outerH−innerH **85** (latch 113), outerW−innerW 0; bar 28px on about:home (start page) and about:newtab, hidden on sites |
+| Homogeneous | outerH−innerH **0** (RFP, unchanged). **Caveat:** window opens on about:home with the bar, RFP rounds content to 1600×900 *with* the bar; on sites the bar hides → pages see **1600×928** (latch: 1600×900). This is LibreWolf #1569 (why LibreWolf ships `always`). Needs a product decision before merge |
+| Web persona | UA `Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:156.0) Gecko/20100101 Firefox/156.0` and all navigator fields identical to latch in both modes; no brand strings web-visible |
+| Build | incremental `./mach build` (25.6.0 objdir) OK; `stage-package` OK (`dist/librewolf/darkstr.app`). **Not packaged** (waiting for PM icon) |
+| Icon prep | [`scripts/darkstr-icon-from-png.sh`](../scripts/darkstr-icon-from-png.sh) 1024 PNG → `firefox.icns`/`document.icns`/`disk.icns` (full 16–512 @1x/@2x iconset), `default16…256.png`, `content/about-logo{,-private}{,@2x}.png`; `--install` only when the PM PNG lands (wolf still in place) |
+| Evidence | `~/AgentDocs/proof/darkstr-0046-20261008/` (`f-*-{poll,homog}.flow.json` + `.json`) |
+| 0045 DMG | preserved `~/AgentDocs/builds/darkstr-0045-1712df51.dmg` (SHA-256 `1712df51…d334`) before the next package overwrites dist |
+
+## Completed — 0045 darkstr branding + default theme + Cockpit UI fonts
 
 | Field | Value |
 |------|-------|
 | Pin | **0045** (rename LibreWolf → darkstr; chrome/branding only) |
 | Train | LibreWolf **156.0.1-1** |
-| Branch | `builder/branding-0045` (PR → `main` open for review; **not merged**) |
+| Branch | `builder/branding-0045` — merged via PR #76 (`515a4dbe`) after Proof PASS |
 | Patch | [`patches/0045-darkstr-branding.patch`](../patches/0045-darkstr-branding.patch) (pointer; SoT apply) |
 | Apply SoT | [`patches/0045-files/`](../patches/0045-files/) |
 | Mini helper | [`scripts/apply-0045-branding-mini.sh`](../scripts/apply-0045-branding-mini.sh) / [`PHASE-5-BRANDING-0045-MINI-APPLY.sh`](PHASE-5-BRANDING-0045-MINI-APPLY.sh) |
@@ -346,7 +365,7 @@ webgpuSeed diverge, plainAdapterInfo non-empty / familiesCoherent).
 | First-run prompt | **Not in native build** (only Phase-1 WebExtension `extension/first-run.html`, not bundled). Not built. |
 | Evidence | `~/AgentDocs/proof/darkstr-branding-0045-20261007/` |
 | Latch DMG | preserved `~/AgentDocs/builds/darkstr-latch-0615574e.dmg` (SHA-256 `0615574e…0f1c`) |
-| DMG | `<objdir>/dist/darkstr-156.0.1.en-US.mac.dmg` (Mini, objdir `obj-aarch64-apple-darwin25.6.0`), 99,596,980 B, SHA-256 `1712df5160323fe04f43e2f908e6aeb77878897f0ab9ef5ec1c0adde183cd334`. Volume `darkstr`: `darkstr.app` + Applications alias (`.DS_Store` from `branding/dsstore`, darkstr.app icon position). No stale `LibreWolf * Helper` executables |
+| DMG | `<objdir>/dist/darkstr-156.0.1.en-US.mac.dmg` (Mini, objdir `obj-aarch64-apple-darwin25.6.0`), 99,596,905 B, SHA-256 `1712df5160323fe04f43e2f908e6aeb77878897f0ab9ef5ec1c0adde183cd334`. Volume `darkstr`: `darkstr.app` + Applications alias (`.DS_Store` from `branding/dsstore`, darkstr.app icon position). No stale `LibreWolf * Helper` executables |
 | DMG smoke | App copied from DMG to a temp dir (not /Applications), fresh profile: brand/appinfo darkstr, Shock Diamond active, Cockpit fonts loaded (chrome only), About copy exact + librewolf.net link, 0044 pane present, UA `Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:156.0) Gecko/20100101 Firefox/156.0` (= latch), navigator fields = latch, fonts not web-reachable, prefers-color-scheme follows system |
 | macOS names | `CFBundleName`=darkstr, no `CFBundleDisplayName` (same as latch), `CFBundleExecutable`=librewolf, bundle `darkstr.app`; LaunchServices/Dock/Force Quit/menu bar = darkstr; child processes `darkstrCP …`, `darkstr GPU Helper`; BSD process name (ps/top/pkill) `librewolf`. App icon artwork still the LibreWolf wolf |
 | Signing | Same as latch: app ad-hoc linker-signed (Identifier `librewolf`, no Team ID, not notarized), DMG unsigned; `spctl` rejects both identically |

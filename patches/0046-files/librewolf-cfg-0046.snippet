@@ -1,0 +1,7 @@
+// BEGIN darkstr-0046-bookmarks-newtab
+// darkstr pin 0046: stock Firefox default — bookmarks toolbar only on the new tab page
+// (firefox.js: pref("browser.toolbars.bookmarks.visibility", "newtab")). defaultPref, not
+// lockPref: users can still choose "always"/"never" (View > Toolbars > Bookmarks Toolbar).
+// LibreWolf used "always" (#1569: RFP new-window rounding); see docs/PHASE-5-STATUS.md 0046.
+defaultPref("browser.toolbars.bookmarks.visibility", "newtab");
+// END darkstr-0046-bookmarks-newtab
