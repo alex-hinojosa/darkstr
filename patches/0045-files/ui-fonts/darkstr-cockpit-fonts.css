@@ -1,0 +1,48 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+/* darkstr pin 0045 — "Cockpit" UI fonts, browser chrome ONLY.
+ * IBM Plex Sans Condensed (tab titles, menus/panels) + IBM Plex Mono (URL bar text).
+ * Fonts: SIL OFL 1.1 (IBM/plex), see chrome://darkstr-ui/content/fonts/LICENSE-IBM-Plex-OFL.txt
+ *
+ * Fingerprint rules:
+ *  - Served from the chrome://darkstr-ui package, which is NOT contentaccessible
+ *    (chrome://browser and chrome://branding are, so the fonts must not live there).
+ *  - Not in the bundled-fonts dir, not installed system-wide: @font-face here is
+ *    scoped to the browser.xhtml chrome document's own FontFaceSet.
+ *  - Private family names ("darkstr Cockpit *") — web pages asking for
+ *    "IBM Plex Mono"/"IBM Plex Sans Condensed" fall back like stock.
+ *  - Geometry pinned to stock: font-family only; font-size and line-height are
+ *    inherited unchanged and tab/urlbar/toolbar heights come from stock min-heights.
+ *  - Kill switch: darkstr.ui.cockpitFonts=false restores stock fonts.
+ */
+
+@font-face {
+  font-family: "darkstr Cockpit Sans";
+  src: url("chrome://darkstr-ui/content/fonts/IBMPlexSansCondensed-Regular.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+}
+
+@font-face {
+  font-family: "darkstr Cockpit Mono";
+  src: url("chrome://darkstr-ui/content/fonts/IBMPlexMono-Regular.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+}
+
+@media -moz-pref("darkstr.ui.cockpitFonts") {
+  .tab-label,
+  .tab-secondary-label,
+  panel,
+  menupopup,
+  panelview {
+    font-family: "darkstr Cockpit Sans", system-ui, sans-serif;
+  }
+
+  #urlbar-input,
+  .urlbar-input {
+    font-family: "darkstr Cockpit Mono", ui-monospace, monospace;
+  }
+}

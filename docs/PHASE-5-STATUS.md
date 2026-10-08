@@ -327,6 +327,30 @@ webgpuSeed diverge, plainAdapterInfo non-empty / familiesCoherent).
 | — | Approach B load-path retirement (**0041**) | **MERGED** / Proof **PASS** (PR #72 `f961d39`); B runtime load retired; soft historical dylib inert |
 | — | Soft historical `libduppel_ffi.dylib` in dist/bin | Soft / inert (chrome A-only does not load) |
 
+## In progress — 0045 darkstr branding + default theme + Cockpit UI fonts
+
+| Field | Value |
+|------|-------|
+| Pin | **0045** (rename LibreWolf → darkstr; chrome/branding only) |
+| Train | LibreWolf **156.0.1-1** |
+| Branch | `builder/branding-0045` (PR → `main` open for review; **not merged**) |
+| Patch | [`patches/0045-darkstr-branding.patch`](../patches/0045-darkstr-branding.patch) (pointer; SoT apply) |
+| Apply SoT | [`patches/0045-files/`](../patches/0045-files/) |
+| Mini helper | [`scripts/apply-0045-branding-mini.sh`](../scripts/apply-0045-branding-mini.sh) / [`PHASE-5-BRANDING-0045-MINI-APPLY.sh`](PHASE-5-BRANDING-0045-MINI-APPLY.sh) |
+| Branding | `--with-branding=browser/branding/darkstr`; `MOZ_APP_DISPLAYNAME`/`MOZ_APP_BASENAME`=darkstr → `darkstr.app`, appinfo.name, brand.ftl/.properties/.dtd; `MOZ_PKG_APPNAME=darkstr` → `darkstr-156.0.1.en-US.mac.dmg` |
+| Kept | `MOZ_APP_NAME=librewolf` (internal binary), `MOZ_APP_UA_NAME=Firefox`, bundle id `org.mozilla.librewolf` (global define → full rebuild), `MOZ_APP_PROFILE=librewolf` |
+| Web persona | UA/navigator identical to latch `0615574e` (RFP and Pollution); no darkstr/LibreWolf in web-visible strings |
+| Theme | builtin static `darkstr-theme@darkstr`, Shock Diamond default (violet alt), flat colors, `content_color_scheme=system`; top separator transparent (stock height) |
+| Fonts | IBM Plex Sans Condensed (tabs/menus/panels) + IBM Plex Mono (URL bar) via non-contentaccessible `chrome://darkstr-ui`; kill switch `darkstr.ui.cockpitFonts` |
+| Geometry | Windowed, fresh profile, default prefs (`browser.tabs.inTitlebar`=2 → tabs drawn in titlebar, `browser.uidensity`=0, 1280×1040 Pollution / RFP 1600×900 Homogeneous, dpr 1). LibreWolf defaults `browser.toolbars.bookmarks.visibility`=`always` (+28 px). outerH−innerH: Pollution **113** (toolbox 85 + bookmarks 28), Homogeneous **0** (RFP); with bookmarks `never` (what Marionette/WebDriver recommended prefs force): Pollution **85**, Homogeneous **0**. outerW−innerW **0** everywhere. **Latch DMG = 0045 DMG in all four cells**; fonts on = off = stock theme |
+| First-run prompt | **Not in native build** (only Phase-1 WebExtension `extension/first-run.html`, not bundled). Not built. |
+| Evidence | `~/AgentDocs/proof/darkstr-branding-0045-20261007/` |
+| Latch DMG | preserved `~/AgentDocs/builds/darkstr-latch-0615574e.dmg` (SHA-256 `0615574e…0f1c`) |
+| DMG | `<objdir>/dist/darkstr-156.0.1.en-US.mac.dmg` (Mini, objdir `obj-aarch64-apple-darwin25.6.0`), 99,596,980 B, SHA-256 `1712df5160323fe04f43e2f908e6aeb77878897f0ab9ef5ec1c0adde183cd334`. Volume `darkstr`: `darkstr.app` + Applications alias (`.DS_Store` from `branding/dsstore`, darkstr.app icon position). No stale `LibreWolf * Helper` executables |
+| DMG smoke | App copied from DMG to a temp dir (not /Applications), fresh profile: brand/appinfo darkstr, Shock Diamond active, Cockpit fonts loaded (chrome only), About copy exact + librewolf.net link, 0044 pane present, UA `Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:156.0) Gecko/20100101 Firefox/156.0` (= latch), navigator fields = latch, fonts not web-reachable, prefers-color-scheme follows system |
+| macOS names | `CFBundleName`=darkstr, no `CFBundleDisplayName` (same as latch), `CFBundleExecutable`=librewolf, bundle `darkstr.app`; LaunchServices/Dock/Force Quit/menu bar = darkstr; child processes `darkstrCP …`, `darkstr GPU Helper`; BSD process name (ps/top/pkill) `librewolf`. App icon artwork still the LibreWolf wolf |
+| Signing | Same as latch: app ad-hoc linker-signed (Identifier `librewolf`, no Team ID, not notarized), DMG unsigned; `spctl` rejects both identically |
+
 ## Completed — 0044 native about:preferences pane
 
 | Field | Value |
