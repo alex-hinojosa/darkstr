@@ -1,0 +1,94 @@
+# darkstr pin 0047 — darkstr start page + full-bleed Dock icon
+# Train: LibreWolf 156.0.1-1. Requires pins 0045 (browser/branding/darkstr) + 0046 (icon E).
+# Apply (Mini): scripts/apply-0047-startpage-dockicon-mini.sh   (copies binaries from patches/0047-files, then patch -p1 below)
+#
+# Start page (about:home = default homepage/new window, about:newtab, private-window about:privatebrowsing):
+#   before: jet tile (about-logo.png, 0046) + "LibreWolf" wordmark (chrome://branding/content/firefox-wordmark.svg,
+#           LibreWolf's Inkscape outline path, fill:context-fill = #20123A light / #fbfbfe dark).
+#   after:  PM jet mark (darkstr-jet-mark.svg: outline only, #9AAEFF, no tile) + lowercase "darkstr" wordmark
+#           (IBM Plex Sans Condensed SemiBold outlined to paths; #E8E9F0 when the page is dark, #1C1E28 when light).
+#   Only branding-package files change (browser/branding/darkstr/content):
+#     firefox-wordmark.svg                     <- patches/0047-files/startpage/firefox-wordmark.svg (diff below)
+#     about-logo{,-private}{,@2x}.png          <- patches/0047-files/startpage/about-logo{,@2x}.png (binary)
+#   No activity-stream file, CSS, HTML, string, pref, search engine, link or widget is changed. Layout is the
+#   existing newtab row (64px logo, wordmark to its right) — stacking the wordmark UNDER the mark would need an
+#   activity-stream (web-accessible) CSS change, so it was not done. chrome://branding/content stays unreachable
+#   from pages (img + fetch probe on the 0047 DMG).
+#   Side effect: about-logo.png is also used by moz-page-nav (about:preferences etc.), the fxms bookmarks-menu
+#   button and the QR-code centre logo — those now show the outline mark instead of the 0046 tile.
+#   Homepage: about:home (not a LibreWolf-branded page) — unchanged.
+#
+# Dock icon (macOS 26/27 gray "legacy" plate):
+#   firefox.icns <- PM darkstr-fullbleed.iconset via scripts/darkstr-icon-from-png.sh ... --iconset (binary; heavy 16/32).
+#   Measured: an .icns-only bundle is still drawn inside the gray plate on macOS 27.0.1 (full-bleed AND Big Sur
+#   template art). The plate goes away only with an asset-catalog icon: Assets.car compiled by Xcode actool from an
+#   Icon Composer-style AppIcon.icon (scripts/darkstr-icon-assets-car.sh) + CFBundleIconName=AppIcon. firefox.icns
+#   stays CFBundleIconFile (fallback). Text changes below: browser/app/moz.build (install Assets.car for the darkstr
+#   branding dir), Info.plist.in (CFBundleIconName), package-manifest.in (@RESPATH@/Assets.car).
+#   document.icns, disk.icns, default*.png: unchanged from 0046.
+# Not web-visible: UA / navigator / headers identical to 0046; DarkstrModeXor untouched.
+--- a/browser/app/moz.build
++++ b/browser/app/moz.build
+@@ -75,6 +75,9 @@
+         (f"{branding}/firefox.icns", "Resources/firefox.icns"),
+         (f"{branding}/document.icns", "Resources/document.icns"),
+     ]
++    # darkstr 0047: macOS 26+ icon (Assets.car / CFBundleIconName "AppIcon"); firefox.icns stays the fallback.
++    if CONFIG["MOZ_BRANDING_DIRECTORY"].endswith("branding/darkstr"):
++        extra_files.append((f"{branding}/Assets.car", "Resources/Assets.car"))
+     if CONFIG["MOZ_UPDATER"]:
+         extra_files.append((
+             f"!/{FINAL_TARGET}/org.mozilla.updater",
+--- a/browser/app/macbuild/Contents/Info.plist.in
++++ b/browser/app/macbuild/Contents/Info.plist.in
+@@ -190,6 +190,8 @@
+ 	<string>@MAC_APP_NAME@ @APP_VERSION@</string>
+ 	<key>CFBundleIconFile</key>
+ 	<string>firefox.icns</string>
++	<key>CFBundleIconName</key>
++	<string>AppIcon</string>
+ 	<key>CFBundleIdentifier</key>
+ 	<string>@MOZ_MACBUNDLE_ID@</string>
+ 	<key>CFBundleInfoDictionaryVersion</key>
+--- a/browser/installer/package-manifest.in
++++ b/browser/installer/package-manifest.in
+@@ -42,6 +42,8 @@
+ @APPNAME@/Contents/PkgInfo
+ @RESPATH@/firefox.icns
+ @RESPATH@/document.icns
++; darkstr 0047: macOS 26+ app icon (CFBundleIconName AppIcon), from browser/branding/darkstr/Assets.car
++@RESPATH@/Assets.car
+ @RESPATH@/@LPROJ_ROOT@.lproj/*
+ #endif
+ 
+--- a/browser/branding/darkstr/content/firefox-wordmark.svg
++++ b/browser/branding/darkstr/content/firefox-wordmark.svg
+@@ -1,23 +1,4 @@
+-<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+-<!-- Created with Inkscape (http://www.inkscape.org/) -->
+-
+-<svg
+-   width="350.48819mm"
+-   height="57.414555mm"
+-   viewBox="0 0 350.48819 57.414555"
+-   version="1.1"
+-   id="svg1"
+-   xmlns="http://www.w3.org/2000/svg"
+-   xmlns:svg="http://www.w3.org/2000/svg">
+-  <defs
+-     id="defs1" />
+-  <g
+-     id="layer1"
+-     transform="translate(-4.9615547,-9.6878807)">
+-    <path
+-       style="fill:context-fill;stroke-width:0.264583"
+-       d="M 4.9615541,66.361603 V 13.466128 H 16.296299 v 43.560979 h 21.410073 v 9.334496 z M 51.189532,9.9842132 q 2.444749,0 4.222748,1.1853328 1.852082,1.111249 1.852082,4.296831 0,3.037415 -1.852082,4.222748 -1.777999,1.185333 -4.222748,1.185333 -2.518832,0 -4.296832,-1.185333 -1.777999,-1.185333 -1.777999,-4.222748 0,-3.185582 1.777999,-4.296831 1.778,-1.1853328 4.296832,-1.1853328 z M 56.745779,25.912122 V 66.361603 H 45.559201 V 25.912122 Z M 78.822586,23.17104 q 0,2.296582 -0.148166,4.370915 -0.148167,2.074332 -0.296334,3.630081 h 0.4445 q 1.629833,-2.518832 4.370915,-4.222748 2.741082,-1.777999 7.111996,-1.777999 6.74158,0 10.964333,5.333998 4.22274,5.259914 4.22274,15.557492 0,10.371662 -4.29683,15.705659 -4.222746,5.333998 -11.186576,5.333998 -4.444998,0 -7.037913,-1.555749 -2.518832,-1.629833 -4.148665,-3.555999 h -0.740833 l -1.852082,4.370915 H 67.636008 V 10.058297 h 11.186578 z m 7.85283,10.890245 q -4.222748,0 -6.074831,2.666999 -1.777999,2.666998 -1.777999,8.371412 v 1.3335 q 0,5.778497 1.703916,8.741829 1.777999,2.889248 6.29708,2.889248 3.630082,0 5.482164,-3.111498 1.852083,-3.111499 1.852083,-9.038162 0,-11.853328 -7.482413,-11.853328 z M 136.8298,25.171289 q 1.11125,0 2.37067,0.148167 1.25942,0.148166 2.07433,0.296333 l -1.11125,10.445745 q -0.81491,-0.22225 -1.92616,-0.296333 -1.11125,-0.148167 -2.667,-0.148167 -2.29658,0 -4.59317,0.963083 -2.29658,0.963083 -3.85233,3.185582 -1.48166,2.222499 -1.48166,6.07483 V 66.361603 H 114.45665 V 25.912122 h 8.51958 l 1.62983,6.815664 h 0.51858 q 1.778,-3.111499 4.81542,-5.333998 3.1115,-2.222499 6.88974,-2.222499 z m 26.52183,0 q 8.4455,0 13.26091,4.741331 4.8895,4.741331 4.8895,13.631327 v 5.408081 H 155.4988 q 0.22225,4.593164 2.81517,7.260163 2.667,2.592915 7.63058,2.592915 3.77825,0 6.88974,-0.740833 3.1115,-0.740833 6.37117,-2.222498 v 8.371412 q -2.96333,1.481666 -6.29708,2.148416 -3.33375,0.740833 -8.14916,0.740833 -6.00075,0 -10.668,-2.222499 -4.59316,-2.296582 -7.26016,-6.889747 -2.667,-4.593164 -2.667,-11.556994 0,-10.593912 5.25991,-15.927909 5.334,-5.333998 13.92766,-5.333998 z m 0.29634,7.926913 q -3.33375,0 -5.48217,2.148416 -2.07433,2.074332 -2.37066,6.222997 h 15.26116 q -0.0741,-3.630082 -1.92617,-6.000747 -1.778,-2.370666 -5.48216,-2.370666 z m 92.90046,-19.632074 -13.48316,52.895475 h -12.74233 l -7.18608,-27.781237 q -0.22225,-0.814916 -0.59266,-2.444749 -0.29634,-1.629832 -0.74084,-3.555998 -0.37041,-1.926166 -0.66675,-3.630082 -0.29633,-1.777999 -0.4445,-2.741082 -0.0741,0.963083 -0.4445,2.741082 -0.29633,1.703916 -0.66675,3.630082 -0.37041,1.852082 -0.74083,3.555998 -0.37042,1.629833 -0.59267,2.518832 l -7.11199,27.707154 H 198.39304 L 184.90988,13.466128 h 11.03841 l 6.74158,28.892486 q 0.4445,1.703916 0.96309,4.296832 0.51858,2.592915 0.96308,5.18583 0.4445,2.592916 0.66675,4.370915 0.22225,-1.852082 0.66675,-4.370915 0.4445,-2.592915 0.889,-4.963581 0.51858,-2.444748 0.889,-3.778248 l 7.70466,-29.633319 h 10.59391 l 7.70466,29.633319 q 0.37042,1.259416 0.81492,3.704165 0.51858,2.444749 0.96308,5.037664 0.4445,2.592916 0.66675,4.370915 0.22225,-1.852082 0.66675,-4.370915 0.4445,-2.592915 0.96309,-5.18583 0.59266,-2.592916 0.96308,-4.296832 l 6.74158,-28.892486 z m 41.26442,32.596651 q 0,10.075329 -5.334,15.557493 -5.25991,5.482164 -14.37216,5.482164 -5.70441,0 -10.14941,-2.444749 -4.37091,-2.444749 -6.88975,-7.111997 -2.51883,-4.741331 -2.51883,-11.482911 0,-10.075328 5.25992,-15.483409 5.33399,-5.408081 14.52032,-5.408081 5.70442,0 10.07533,2.444749 4.37092,2.370666 6.88975,7.037913 2.51883,4.667248 2.51883,11.408828 z m -27.85532,0 q 0,5.926664 1.92617,9.260412 1.92616,3.259666 6.37116,3.259666 4.29683,0 6.223,-3.259666 1.92616,-3.333748 1.92616,-9.260412 0,-6.000747 -1.92616,-9.186329 -1.92617,-3.185582 -6.29708,-3.185582 -4.37092,0 -6.29708,3.185582 -1.92617,3.185582 -1.92617,9.186329 z m 48.00598,20.298824 H 306.77693 V 10.058297 h 11.18658 z m 33.63387,-32.152151 h -9.55675 V 66.361603 H 331.00222 V 34.209452 h -6.07483 v -5.333998 l 6.07483,-2.963332 V 22.94879 q 0,-5.185831 1.70392,-8.000996 1.778,-2.889248 4.96358,-4.074581 3.25966,-1.185333 7.63058,-1.185333 3.25966,0 5.85258,0.518583 2.667,0.518583 4.29683,1.185333 l -2.81517,8.075079 q -1.25941,-0.370416 -2.74108,-0.666749 -1.48166,-0.370417 -3.40783,-0.370417 -2.29658,0 -3.40783,1.407583 -1.03717,1.407582 -1.03717,3.555998 v 2.518832 h 9.55675 z"
+-       id="logo"
+-       aria-label="LibreWolf" />
+-  </g>
+-</svg>
+\ No newline at end of file
++<svg xmlns="http://www.w3.org/2000/svg" viewBox="40.0 -1166.1 5013.3 1604.3" width="200" height="64">
++<style>path{fill:#1C1E28}@media (prefers-color-scheme:dark){path{fill:#E8E9F0}}</style>
++<path d="M357 0H478V-740H357V-436H343C328 -494 279 -534 220 -534C98 -534 40 -438 40 -261C40 -84 98 12 220 12C279 12 328 -28 343 -86H357ZM266 -88C204 -88 167 -129 167 -199V-323C167 -393 204 -434 266 -434C320 -434 357 -405 357 -356V-166C357 -117 320 -88 266 -88Z M1023 0V-97H977V-350C977 -471 912 -534 782 -534C691 -534 633 -494 595 -434L666 -370C691 -412 723 -437 772 -437C831 -437 856 -408 856 -347V-302H775C648 -302 577 -249 577 -140C577 -44 626 12 721 12C790 12 840 -26 853 -89H865C868 -29 896 0 950 0ZM767 -77C724 -77 699 -96 699 -140V-162C699 -204 726 -227 783 -227H856V-158C856 -108 816 -77 767 -77Z M1238 0V-317C1238 -376 1275 -398 1350 -398H1390V-522H1364C1303 -522 1264 -484 1252 -415H1238V-522H1117V0Z M1474 0H1595V-163L1656 -239L1776 0H1912L1740 -317L1903 -522H1766L1662 -383L1601 -287H1587L1595 -395V-740H1474Z M2143 12C2266 12 2336 -51 2336 -159C2336 -244 2292 -289 2183 -309L2133 -318C2093 -325 2075 -341 2075 -376C2075 -418 2099 -439 2145 -439C2192 -439 2230 -417 2257 -384L2328 -455C2284 -507 2226 -534 2145 -534C2028 -534 1961 -480 1961 -371C1961 -280 2008 -235 2117 -215L2166 -206C2206 -199 2221 -180 2221 -147C2221 -105 2194 -83 2145 -83C2091 -83 2050 -107 2017 -154L1943 -82C1992 -20 2057 12 2143 12Z M2666 0V-97H2580V-425H2674V-522H2580V-664H2471V-572C2471 -538 2461 -522 2426 -522H2390V-425H2459V-117C2459 -36 2495 0 2578 0Z M2889 0V-317C2889 -376 2926 -398 3001 -398H3041V-522H3015C2954 -522 2915 -484 2903 -415H2889V-522H2768V0Z"/>
++</svg>
