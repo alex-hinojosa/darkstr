@@ -1,0 +1,2154 @@
+--- a/browser/components/DarkstrNativePersona.sys.mjs
++++ b/browser/components/DarkstrNativePersona.sys.mjs
+@@ -865,6 +865,7 @@
+     }
+     this._planSignature = signature;
+     this._docDecisions = new WeakMap();
++    this._workerSiteDecisions = new Map();
+     if (p.applyNativeBase) {
+       this._registerActor();
+     }
+@@ -1208,7 +1209,8 @@
+    * 0051 (N2/N3): decision for one request — the top-level document load
+    * itself (tab phase after counting, its own site) or the requesting
+    * document's top-level decision. No browsing context (Shared/Service
+-   * worker) → null: native headers (worker scope 0049).
++   * worker) → 0049: the owning site's worker decision (top-level site of the
++   * request's partition), the same one the worker's navigator got.
+    */
+   decisionForChannel(channel) {
+     const plan = this.getPlan();
+@@ -1243,7 +1245,7 @@
+     }
+     const top = bc?.top;
+     if (!top) {
+-      return null;
++      return this._windowlessDecisionForChannel(li);
+     }
+     if (top.currentWindowGlobal) {
+       return this.documentDecision(top.currentWindowGlobal);
+@@ -1255,6 +1257,136 @@
+     return !!this.decisionForChannel(channel)?.snapshot;
+   },
+ 
++  // -------------------------------------------------------------------------
++  // 0049: workers. Dedicated workers use their creating document's decision
++  // (documentDecision). Shared/Service workers have no window: they use the
++  // owning site's decision (top-level site of their partition).
++  // -------------------------------------------------------------------------
++
++  /** Navigator fields a worker reports (page surface + 0028 timezone). */
++  workerPersonaFields(snap) {
++    const child = this._childSnapshot(snap);
++    if (!child) {
++      return null;
++    }
++    const timezone = snap?.timezone ? String(snap.timezone).trim() : "";
++    return { ...child, timezone };
++  },
++
++  /**
++   * Top-level site URI that owns a windowless worker / request: the
++   * partitionKey "(scheme,host[,port][,f])" when present, else the
++   * principal's own origin (first-party).
++   */
++  topSiteUriForWorker(principalOrigin, partitionKey) {
++    const pk = String(partitionKey || "").trim();
++    if (pk.startsWith("(") && pk.endsWith(")")) {
++      const fields = pk.slice(1, -1).split(",");
++      const scheme = fields[0];
++      const host = fields[1];
++      let port = "";
++      if (fields[2] && /^\d+$/.test(fields[2])) {
++        port = ":" + fields[2];
++      }
++      if (scheme && host && /^(https?|file)$/i.test(scheme)) {
++        try {
++          return Services.io.newURI(`${scheme}://${host}${port}/`);
++        } catch (_e) {}
++      }
++    }
++    const origin = String(principalOrigin || "").trim();
++    if (!/^(https?|file):/i.test(origin)) {
++      return null;
++    }
++    try {
++      return Services.io.newURI(origin.endsWith("/") ? origin : origin + "/");
++    } catch (_e) {
++      return null;
++    }
++  },
++
++  _liveTopDocuments() {
++    const out = [];
++    try {
++      for (const win of Services.wm.getEnumerator("navigator:browser")) {
++        for (const browser of win.gBrowser?.browsers || []) {
++          const wgp = browser.browsingContext?.currentWindowGlobal;
++          if (wgp) {
++            out.push(wgp);
++          }
++        }
++      }
++    } catch (_e) {}
++    return out;
++  },
++
++  /**
++   * Decision for a windowless worker (or its requests) owned by the
++   * top-level site of `uri`. Armed when a live top-level document of that
++   * site is armed (same snapshot — one persona per site); once armed it
++   * stays armed for this plan so the worker's navigator and its later
++   * requests agree. No live document (service worker wake-up): armed unless
++   * strictFirstDoc. Returns { decision, browsingContext }.
++   */
++  workerSiteDecision(uri) {
++    const plan = this.getPlan();
++    const site = uri ? this._etldPlus1FromUri(uri) : null;
++    if (!plan.applyNativeBase || !uri || !site) {
++      return { decision: NATIVE_DECISION, browsingContext: null };
++    }
++    if (!this._workerSiteDecisions) {
++      this._workerSiteDecisions = new Map();
++    }
++    let liveNative = false;
++    for (const wgp of this._liveTopDocuments()) {
++      const d = this.documentDecision(wgp);
++      if (d.site !== site) {
++        continue;
++      }
++      if (d.snapshot) {
++        this._workerSiteDecisions.set(site, d);
++        return { decision: d, browsingContext: wgp.browsingContext };
++      }
++      liveNative = true;
++    }
++    const sticky = this._workerSiteDecisions.get(site);
++    if (sticky) {
++      return { decision: sticky, browsingContext: null };
++    }
++    if (liveNative) {
++      return { decision: { armed: false, site, snapshot: null }, browsingContext: null };
++    }
++    const d = this._decisionFor(uri, !plan.strictFirstDoc);
++    if (d.snapshot) {
++      this._workerSiteDecisions.set(site, d);
++    }
++    return { decision: d, browsingContext: null };
++  },
++
++  _windowlessDecisionForChannel(li) {
++    let principal = null;
++    try {
++      principal = li.triggeringPrincipal || li.loadingPrincipal;
++    } catch (_e) {}
++    if (!principal?.isContentPrincipal) {
++      return null;
++    }
++    let partitionKey = "";
++    try {
++      partitionKey = li.originAttributes?.partitionKey || "";
++    } catch (_e) {}
++    if (!partitionKey) {
++      try {
++        partitionKey = li.cookieJarSettings?.partitionKey || "";
++      } catch (_e) {}
++    }
++    const uri = this.topSiteUriForWorker(principal.originNoSuffix, partitionKey);
++    if (!uri) {
++      return null;
++    }
++    return this.workerSiteDecision(uri).decision;
++  },
++
+   /**
+    * Snapshot for a document's browsing context (Worker/Depth hooks gate on
+    * this). Null when idle / first document of the tab. READ-ONLY.
+--- a/browser/components/DarkstrWorkerHooks.sys.mjs
++++ b/browser/components/DarkstrWorkerHooks.sys.mjs
+@@ -3,168 +3,69 @@
+  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+ 
+ /**
+- * darkstr Phase 3 pin 3 — DedicatedWorker / SharedWorker globals coherence (chrome).
++ * darkstr worker coherence (chrome, parent process).
+  *
+- * Train pin: Firefox / LibreWolf 155.0.1-1 (FIREFOX_155_0_1_RELEASE).
++ * Train pin: LibreWolf 156.0.1-1 (Gecko 156).
+  * Brand: darkstr — not official LibreWolf. Pollution browser, not Cloudflare bypass.
+  *
+- * Mirrors public control plane (no Rust FFI required in this drop):
+- *   duppel_bridge::DepthSurface::{DedicatedWorker,SharedWorker}
+- *   duppel_bridge::HookApplicatorSurface::WorkerGlobals
+- *   seed_source = persona_snapshot (+ depth seeds for OffscreenCanvas/WebGL/WebGPU in workers)
++ * 0049: workers report the SAME persona as the page/site that created them.
++ * There is no worker-side persona generator any more: the only source of
++ * truth is DarkstrNativePersona (0051 per-document decision).
+  *
+- * Soft residual (0043): WorkerNavigator.gpu / DedicatedWorker+SharedWorker WebGPU
+- * surfaces get the same seed-tied coherence as window 0038 (webgpuSeed + plain
+- * AdapterInfo/features/limits; idle when navigator.gpu absent / pref off).
+- * ServiceWorker / Worklets still NOT claimed (register path ≠ Worker blob wrap;
+- * no Chrome invent). AdapterInfo.device stays empty (do not invent).
+- * Soft residual (0043 re-XOR): workerPayloadForBrowsingContext uses
+- * DepthHooks.depthSeedsForBrowsingContext(bc) FIRST (eTLD-effective under
+- * rotatePerSite — same SoT as window 0038). Persist delivered seeds to
+- * darkstr.worker.lastPayload so Proof gate 3 sees rotating webgpuSeed.
++ *   - Dedicated workers: the creating document's decision
++ *     (DarkstrNativePersona.documentDecision of its WindowGlobalParent).
++ *   - Shared / Service workers: the owning site's decision (top-level site of
++ *     the worker's partition, DarkstrNativePersona.workerSiteDecision).
++ *   - Nested workers inherit their parent worker's persona in C++.
+  *
+- * Pattern: JSWindowActor patches window.Worker / window.SharedWorker (same as
+- * Phase 1 WebExt misc.js) — workers have no window, so constructor wrap + blob
+- * importScripts/import injects navigator + OffscreenCanvas/WebGL/WebGPU into the
+- * worker global. Nested Worker wrap depth-limited to 2. Cross-origin workers pass
+- * through (CSP-safe). ServiceWorker / Worklets NOT claimed.
++ * Mechanism: native. WorkerPrivate::Constructor (C++) fires the observer
++ * topic "darkstr-worker-persona-resolve" in the worker's content process
++ * once per top-level worker; the DarkstrWorkerPersona JSProcessActor child
++ * answers via a sync message to this module. WorkerNavigator then serves
++ * userAgent / platform / hardwareConcurrency / languages natively and the
++ * stock worker plumbing carries the timezone. No Worker/SharedWorker
++ * constructor wrapping, no blob: scripts, no JS navigator overrides, no
++ * deviceMemory (Firefox has none).
+  *
+- * Gates (default-off — idle unless explicitly allowed):
+- *   pollution_active = mode=="pollution" && !nativeCompatible
+- *   allow = pollution_active && darkstr.nativePersonaHooks
+- *   per-BC delivery also requires DocShell SubsequentNav arm when strictFirstDoc (0020)
+- *   Global hooksArmed uses snapshot/prefs (Depth parity) — NOT snapshotForBrowsingContext(null)
+- * Homogeneous / Native-Compatible / hooks false → no constructor wrap; payload null.
++ * Depth (0043 OffscreenCanvas / WebGL / WebGPU in workers) stays: its prelude
++ * is evaluated natively in the worker global before the main script, with
++ * the seeds DarkstrDepthHooks hands the owning document.
+  *
+- * Payload: prefer DarkstrNativePersona.snapshot + DarkstrDepthHooks depth seeds
+- * (same persona coherence). Fallback reads darkstr.persona.snapshot / .seed.
+- * Does not write privacy.*.
++ * Gates (default-off — idle unless explicitly allowed):
++ *   armed = mode=="pollution" && !nativeCompatible && darkstr.nativePersonaHooks
++ *   (no seed pref needed: the session persona applies, same as the page).
++ * C++ never fires the observer when the content-side gate prefs are off, so
++ * default profiles see plain Firefox 156 workers.
+  */
+ 
+ const MODE_PREF = "darkstr.mode";
+ const NATIVE_PREF = "darkstr.nativeCompatible";
+ const HOOKS_PREF = "darkstr.nativePersonaHooks";
+-const SNAPSHOT_PREF = "darkstr.persona.snapshot";
+-const SEED_PREF = "darkstr.persona.seed";
+-const DOCSHELL_PHASE_MIRROR_PREF = "darkstr.persona.docShellPhase";
+ const ARMED_PREF = "darkstr.worker.hooksArmed";
+ const LAST_PAYLOAD_PREF = "darkstr.worker.lastPayload";
+ const LAST_ERROR_PREF = "darkstr.worker.lastError";
+ const LAST_INSTALL_PREF = "darkstr.worker.lastInstall";
+ 
++export const WORKER_PERSONA_ACTOR = "DarkstrWorkerPersona";
++export const WORKER_PERSONA_TOPIC = "darkstr-worker-persona-resolve";
++export const MSG_RESOLVE = "DarkstrWorkerHooks:Resolve";
+ 
+ function deriveWebGpuSeed(speechOrCanvasSeed, audioSeed) {
+-  // Soft residual (0043): match DepthHooks deriveWebGpuSeed (speechSeed ⊕ audio).
+-  // Worker fallback may lack speechSeed — canvasSeed is an acceptable substitute
+-  // only when Depth plan did not supply webgpuSeed (rare offline path).
++  // 0043: match DepthHooks deriveWebGpuSeed (speechSeed ⊕ audio).
+   return (speechOrCanvasSeed ^ Math.imul(audioSeed >>> 0, 0xc2b2ae35)) >>> 0;
+ }
+ 
+ function readWebGpuSeed(obj, speechOrCanvasSeed, audioSeed) {
+-  if (!obj || typeof obj !== "object") {
+-    return deriveWebGpuSeed(speechOrCanvasSeed >>> 0, audioSeed >>> 0);
+-  }
+-  for (const key of ["webgpuSeed", "webgpu_seed"]) {
+-    if (typeof obj[key] === "number" && Number.isFinite(obj[key])) {
+-      return obj[key] >>> 0;
++  if (obj && typeof obj === "object") {
++    for (const key of ["webgpuSeed", "webgpu_seed"]) {
++      if (typeof obj[key] === "number" && Number.isFinite(obj[key])) {
++        return obj[key] >>> 0;
++      }
+     }
+   }
+   return deriveWebGpuSeed(speechOrCanvasSeed >>> 0, audioSeed >>> 0);
+ }
+ 
+-const GPU_BY_OS = {
+-  macos: [
+-    { vendor: "Apple", renderer: "Apple M1" },
+-    { vendor: "Apple", renderer: "Apple M2" },
+-    { vendor: "Intel Inc.", renderer: "Intel(R) Iris(R) Plus Graphics" },
+-  ],
+-  windows: [
+-    {
+-      vendor: "Google Inc. (Intel)",
+-      renderer: "ANGLE (Intel, Intel(R) UHD Graphics 630, OpenGL 4.5)",
+-    },
+-    {
+-      vendor: "Google Inc. (NVIDIA)",
+-      renderer: "ANGLE (NVIDIA, NVIDIA GeForce RTX 3060, OpenGL 4.5)",
+-    },
+-    {
+-      vendor: "Google Inc. (AMD)",
+-      renderer: "ANGLE (AMD, AMD Radeon RX 580, OpenGL 4.5)",
+-    },
+-  ],
+-  linux: [
+-    { vendor: "Intel", renderer: "Mesa Intel(R) UHD Graphics 630 (CFL GT2)" },
+-    {
+-      vendor: "NVIDIA Corporation",
+-      renderer: "NVIDIA GeForce RTX 3060/PCIe/SSE2",
+-    },
+-    {
+-      vendor: "AMD",
+-      renderer:
+-        "AMD Radeon RX 580 (radeonsi, polaris10, LLVM 15.0.7, DRM 3.54, 6.8.0)",
+-    },
+-  ],
+-};
+-
+-const UA_GROUPS = {
+-  macos: {
+-    platform: "MacIntel",
+-    uas: [
+-      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:135.0) Gecko/20100101 Firefox/135.0",
+-      "Mozilla/5.0 (Macintosh; Intel Mac OS X 14.0; rv:135.0) Gecko/20100101 Firefox/135.0",
+-    ],
+-  },
+-  windows: {
+-    platform: "Win32",
+-    uas: [
+-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:135.0) Gecko/20100101 Firefox/135.0",
+-    ],
+-  },
+-  linux: {
+-    platform: "Linux x86_64",
+-    uas: [
+-      "Mozilla/5.0 (X11; Linux x86_64; rv:135.0) Gecko/20100101 Firefox/135.0",
+-    ],
+-  },
+-};
+-
+-const CORES = [4, 8, 10, 12, 16];
+-const MEMORY = [4, 8, 16, 32];
+-const LANGUAGES = [
+-  ["en-US", "en"],
+-  ["en-GB", "en"],
+-  ["de-DE", "de", "en"],
+-];
+-
+-function mulberry32(seed) {
+-  return function () {
+-    seed |= 0;
+-    seed = (seed + 0x6d2b79f5) | 0;
+-    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+-  };
+-}
+-
+-function pickFrom(arr, rng) {
+-  return arr[Math.floor(rng() * arr.length)];
+-}
+-
+-function detectHostOs() {
+-  try {
+-    const oscpu = Cc["@mozilla.org/network/protocol;1?name=http"].getService(
+-      Ci.nsIHttpProtocolHandler
+-    ).oscpu;
+-    if (/Mac OS X|macOS/i.test(oscpu)) {
+-      return "macos";
+-    }
+-    if (/Linux/i.test(oscpu)) {
+-      return "linux";
+-    }
+-  } catch (_e) {}
+-  return "windows";
+-}
+-
+ function normalizeGpu(raw) {
+   if (!raw || typeof raw !== "object") {
+     return null;
+@@ -177,54 +78,40 @@
+   return { vendor, renderer };
+ }
+ 
+-function readU32Field(obj, camel, snake) {
+-  if (!obj || typeof obj !== "object") {
+-    return null;
+-  }
+-  for (const k of [camel, snake]) {
+-    if (typeof obj[k] === "number" && Number.isFinite(obj[k])) {
+-      return obj[k] >>> 0;
+-    }
+-    if (typeof obj[k] === "string" && obj[k].trim() !== "") {
+-      const n = Number(obj[k]);
+-      if (Number.isFinite(n)) {
+-        return n >>> 0;
+-      }
+-    }
+-  }
+-  return null;
+-}
+-
+-function normalizePersona(raw) {
+-  if (!raw || typeof raw !== "object") {
++/** Depth seeds DarkstrDepthHooks gives the owning document (0043 SoT). */
++export function workerDepthFromSeeds(seeds) {
++  if (!seeds || typeof seeds.canvasSeed !== "number") {
+     return null;
+   }
+-  const userAgent = String(raw.userAgent || raw.user_agent || "").trim();
+-  if (!userAgent) {
+-    return null;
+-  }
+-  const platform = String(raw.platform || "MacIntel");
+-  const hardwareConcurrency =
+-    Number(raw.hardwareConcurrency ?? raw.hardware_concurrency) || 8;
+-  const deviceMemory = Number(raw.deviceMemory ?? raw.device_memory) || 8;
+-  const languages = Array.isArray(raw.languages)
+-    ? raw.languages.map(String)
+-    : ["en-US", "en"];
++  const audioSeed = seeds.audioSeed >>> 0;
++  const canvasSeed = seeds.canvasSeed >>> 0;
+   return {
+-    userAgent,
+-    platform,
+-    hardwareConcurrency,
+-    deviceMemory,
+-    languages,
++    canvasSeed,
++    audioSeed,
++    webgpuSeed: readWebGpuSeed(seeds, seeds.speechSeed ?? canvasSeed, audioSeed),
++    gpu: normalizeGpu(seeds.gpu) || { vendor: "Apple", renderer: "Apple M1" },
+   };
+ }
+ 
++function lazyNativePersona() {
++  return ChromeUtils.importESModule(
++    "moz-src:///browser/components/DarkstrNativePersona.sys.mjs"
++  ).DarkstrNativePersona;
++}
++
++function lazyDepthHooks() {
++  return ChromeUtils.importESModule(
++    "moz-src:///browser/components/DarkstrDepthHooks.sys.mjs"
++  ).DarkstrDepthHooks;
++}
++
+ export var DarkstrWorkerHooks = {
+   _inited: false,
+   _actorRegistered: false,
++  _listening: false,
+   _observer: null,
+-  _payload: null,
+   _armed: false,
++  _plan: null,
+ 
+   init() {
+     if (this._inited) {
+@@ -232,10 +119,11 @@
+     }
+     this._inited = true;
+     this._observer = this._observe.bind(this);
+-    for (const p of [MODE_PREF, NATIVE_PREF, HOOKS_PREF, SNAPSHOT_PREF, SEED_PREF, DOCSHELL_PHASE_MIRROR_PREF]) {
++    for (const p of [MODE_PREF, NATIVE_PREF, HOOKS_PREF]) {
+       Services.prefs.addObserver(p, this._observer);
+     }
+     this._registerActor();
++    this._listen();
+     this.refreshPlan();
+   },
+ 
+@@ -243,18 +131,24 @@
+     if (!this._inited) {
+       return;
+     }
+-    for (const p of [MODE_PREF, NATIVE_PREF, HOOKS_PREF, SNAPSHOT_PREF, SEED_PREF, DOCSHELL_PHASE_MIRROR_PREF]) {
++    for (const p of [MODE_PREF, NATIVE_PREF, HOOKS_PREF]) {
+       try {
+         Services.prefs.removeObserver(p, this._observer);
+       } catch (_e) {}
+     }
++    if (this._listening) {
++      try {
++        Services.ppmm.removeMessageListener(MSG_RESOLVE, this);
++      } catch (_e) {}
++      this._listening = false;
++    }
+     if (this._actorRegistered) {
+       try {
+-        ChromeUtils.unregisterWindowActor("DarkstrWorkerHooks");
++        ChromeUtils.unregisterProcessActor(WORKER_PERSONA_ACTOR);
+       } catch (_e) {}
+       this._actorRegistered = false;
+     }
+-    this._setArmed(false, null);
++    this._setArmed(false);
+     this._inited = false;
+   },
+ 
+@@ -270,7 +164,7 @@
+       return;
+     }
+     try {
+-      ChromeUtils.registerWindowActor("DarkstrWorkerHooks", {
++      ChromeUtils.registerProcessActor(WORKER_PERSONA_ACTOR, {
+         parent: {
+           esModuleURI:
+             "moz-src:///browser/components/DarkstrWorkerHooksParent.sys.mjs",
+@@ -278,20 +172,16 @@
+         child: {
+           esModuleURI:
+             "moz-src:///browser/components/DarkstrWorkerHooksChild.sys.mjs",
+-          events: {
+-            DOMWindowCreated: {},
+-            pageshow: {},
+-          },
++          observers: [WORKER_PERSONA_TOPIC],
+         },
+-        allFrames: true,
+-        messageManagerGroups: ["browsers"],
+-        matches: ["*://*/*", "file://*"],
+-        // Required for Fission webIsolated / web content processes.
++        includeParent: false,
++        // Workers run in web content processes; the child only relays the
++        // C++ resolve request and writes navigator strings back.
+         safeForUntrustedWebProcess: true,
+       });
+       this._actorRegistered = true;
+     } catch (e) {
+-      console.error("darkstr P3: WorkerHooks JSWindowActor register failed:", e);
++      console.error("darkstr 0049: worker persona process actor register failed:", e);
+       this.recordInstallStatus({
+         ok: false,
+         event: "register",
+@@ -301,14 +191,43 @@
+     }
+   },
+ 
++  _listen() {
++    if (this._listening) {
++      return;
++    }
++    try {
++      Services.ppmm.addMessageListener(MSG_RESOLVE, this);
++      this._listening = true;
++    } catch (e) {
++      console.error("darkstr 0049: worker resolve listener failed:", e);
++    }
++  },
++
++  /** ppmm sync handler (content process → parent). */
++  receiveMessage(message) {
++    if (message?.name !== MSG_RESOLVE) {
++      return null;
++    }
++    let senderPid = null;
++    try {
++      senderPid = message.target?.osPid;
++    } catch (_e) {}
++    try {
++      return this.resolveWorker(message.data || {}, senderPid);
++    } catch (e) {
++      this.recordInstallStatus({
++        ok: false,
++        event: "resolve",
++        status: "resolve-failed",
++        error: String(e?.message || e),
++      });
++      return { decision: "native", persona: null, depth: null };
++    }
++  },
++
+   /**
+-   * Resolve worker gate + payload (persona + optional depth).
+-   * @returns {{
+-   *   pollutionActive: boolean,
+-   *   nativeHooks: boolean,
+-   *   armed: boolean,
+-   *   payload: object|null
+-   * }}
++   * @returns {{ pollutionActive, nativeHooks, armed }}
++   * Armed whenever page hooks are on — no seed pref required (0049).
+    */
+   refreshPlan() {
+     let mode = "homogeneous";
+@@ -317,32 +236,18 @@
+     } catch (_e) {
+       mode = "homogeneous";
+     }
+-    if (mode !== "pollution" && mode !== "homogeneous") {
+-      mode = "homogeneous";
+-    }
+-
+     let nativeCompatible = false;
+     try {
+       nativeCompatible = Services.prefs.getBoolPref(NATIVE_PREF, false);
+     } catch (_e) {}
+-
+     let nativeHooks = false;
+     try {
+       nativeHooks = Services.prefs.getBoolPref(HOOKS_PREF, false);
+     } catch (_e) {}
+-
+     const pollutionActive = mode === "pollution" && !nativeCompatible;
+-    const payload = pollutionActive ? this._readWorkerPayload() : null;
+-    const armed = !!(pollutionActive && nativeHooks && payload?.persona);
+-
+-    this._plan = {
+-      pollutionActive,
+-      nativeHooks,
+-      armed,
+-      payload: armed ? payload : null,
+-    };
+-    this._payload = this._plan.payload;
+-    this._setArmed(armed, this._payload);
++    const armed = !!(pollutionActive && nativeHooks);
++    this._plan = { pollutionActive, nativeHooks, armed };
++    this._setArmed(armed);
+     return this._plan;
+   },
+ 
+@@ -351,364 +256,124 @@
+   },
+ 
+   /**
+-   * Persist content-install diagnostics. Never writes privacy.*.
+-   * Soft residual: runtime construct fallbacks set runtimeOnly and must not
+-   * overwrite lastInstall after a successful wrap (ok stays installed).
++   * One worker's persona + depth.
++   * data: { kind, innerWindowId, principalOrigin, partitionKey, scriptURL }
+    */
+-  recordInstallStatus(detail, browsingContext = null) {
+-    const runtimeOnly = !!detail?.runtimeOnly;
+-    const payload = {
+-      ok: !!detail?.ok,
+-      event: String(detail?.event || "unknown"),
+-      status: String(detail?.status || "unknown"),
+-      error: String(detail?.error || "").slice(0, 1000),
+-      at: new Date().toISOString(),
+-    };
+-    try {
+-      if (browsingContext?.id != null) {
+-        payload.bc = browsingContext.id;
+-      }
+-    } catch (_e) {}
+-    if (runtimeOnly) {
++  resolveWorker(data, senderPid = null) {
++    const plan = this.getPlan();
++    const kind = String(data?.kind || "dedicated");
++    if (!plan.armed) {
++      return { decision: "off", kind, persona: null, depth: null };
++    }
++    const NP = lazyNativePersona();
++    let decision = null;
++    let bc = null;
++    let source = "";
++    const innerWindowId = Number(data?.innerWindowId) || 0;
++    if (innerWindowId) {
++      let wgp = null;
+       try {
+-        Services.prefs.setStringPref(
+-          LAST_ERROR_PREF,
+-          `runtime:${payload.status}:${payload.error}`.slice(0, 1000)
+-        );
+-      } catch (e) {
+-        console.error("darkstr worker lastError write failed", e);
+-      }
+-      return;
+-    }
+-    try {
+-      Services.prefs.setStringPref(LAST_INSTALL_PREF, JSON.stringify(payload));
+-    } catch (e) {
+-      console.error("darkstr worker lastInstall write failed", e);
+-    }
+-    try {
+-      if (payload.ok) {
+-        Services.prefs.setStringPref(LAST_ERROR_PREF, "");
+-      } else {
+-        Services.prefs.setStringPref(
+-          LAST_ERROR_PREF,
+-          `${payload.event}:${payload.status}:${payload.error}`.slice(0, 1000)
+-        );
++        wgp = WindowGlobalParent.getByInnerWindowId(innerWindowId);
++      } catch (_e) {}
++      if (!wgp) {
++        return { decision: "native", kind, persona: null, depth: null, reason: "no-window" };
+       }
+-    } catch (e) {
+-      console.error("darkstr worker lastError write failed", e);
++      if (
++        typeof senderPid === "number" &&
++        senderPid > 0 &&
++        typeof wgp.osPid === "number" &&
++        wgp.osPid > 0 &&
++        senderPid !== wgp.osPid
++      ) {
++        return { decision: "native", kind, persona: null, depth: null, reason: "pid-mismatch" };
++      }
++      decision = NP.documentDecision(wgp);
++      bc = wgp.browsingContext;
++      source = "document";
++    } else {
++      const uri = NP.topSiteUriForWorker(data?.principalOrigin, data?.partitionKey);
++      const r = NP.workerSiteDecision(uri);
++      decision = r.decision;
++      bc = r.browsingContext;
++      source = "site";
+     }
+-  },
+-
+-  /** Worker payload for JSWindowActor child (null when idle / first-doc). */
+-  workerPayloadForBrowsingContext(bc) {
+-    const plan = this.getPlan();
+-    if (!plan.armed || !plan.payload?.persona) {
+-      return null;
+-    }
+-    // SubsequentNav arm: null on first_document when strictFirstDoc.
+-    try {
+-      const { DarkstrNativePersona } = ChromeUtils.importESModule(
+-        "moz-src:///browser/components/DarkstrNativePersona.sys.mjs"
+-      );
+-      if (DarkstrNativePersona.snapshotForBrowsingContext) {
+-        const snap = DarkstrNativePersona.snapshotForBrowsingContext(bc);
+-        if (!snap) {
+-          return null;
+-        }
+-      }
+-    } catch (_e) {
+-      try {
+-        const strictFirst = Services.prefs.getBoolPref(
+-          "darkstr.strictFirstDoc",
+-          true
+-        );
+-        if (strictFirst) {
+-          const phase = Services.prefs.getStringPref(
+-            "darkstr.persona.docShellPhase",
+-            ""
+-          );
+-          if (phase !== "subsequent_nav") {
+-            return null;
+-          }
+-        }
+-      } catch (_e2) {}
+-    }
+-    const persona = plan.payload.persona;
+-    // Soft residual (0043 re-XOR): prefer Depth eTLD-effective seeds (rotate
+-    // path FIRST via depthSeedsForBrowsingContext) — global plan.payload.depth
+-    // is seed-42 sticky and collapsed Proof gate 3 worker digests/webgpuSeed.
++    const persona = NP.workerPersonaFields(decision?.snapshot);
+     let depth = null;
+-    try {
+-      const { DarkstrDepthHooks } = ChromeUtils.importESModule(
+-        "moz-src:///browser/components/DarkstrDepthHooks.sys.mjs"
+-      );
+-      const bcSeeds =
+-        DarkstrDepthHooks.depthSeedsForBrowsingContext &&
+-        DarkstrDepthHooks.depthSeedsForBrowsingContext(bc);
+-      if (bcSeeds && typeof bcSeeds.canvasSeed === "number") {
+-        const audioSeed = bcSeeds.audioSeed >>> 0;
+-        const canvasSeed = bcSeeds.canvasSeed >>> 0;
+-        depth = {
+-          canvasSeed,
+-          audioSeed,
+-          webgpuSeed: readWebGpuSeed(bcSeeds, canvasSeed, audioSeed),
+-          gpu: normalizeGpu(bcSeeds.gpu) || {
+-            vendor: "Apple",
+-            renderer: "Apple M1",
+-          },
+-        };
++    if (persona && bc) {
++      try {
++        depth = workerDepthFromSeeds(lazyDepthHooks().depthSeedsForBrowsingContext(bc));
++      } catch (_e) {
++        depth = null;
+       }
+-    } catch (_eDepth) {}
+-    if (!depth && plan.payload.depth) {
+-      const d = plan.payload.depth;
+-      depth = {
+-        canvasSeed: d.canvasSeed >>> 0,
+-        audioSeed: d.audioSeed >>> 0,
+-        webgpuSeed:
+-          d.webgpuSeed != null
+-            ? d.webgpuSeed >>> 0
+-            : readWebGpuSeed(d, d.canvasSeed >>> 0, d.audioSeed >>> 0),
+-        gpu: {
+-          vendor: d.gpu.vendor,
+-          renderer: d.gpu.renderer,
+-        },
+-      };
+     }
+     const out = {
+-      persona: {
+-        userAgent: persona.userAgent,
+-        platform: persona.platform,
+-        hardwareConcurrency: Number(persona.hardwareConcurrency) || 8,
+-        deviceMemory: Number(persona.deviceMemory) || 8,
+-        languages: Array.isArray(persona.languages)
+-          ? persona.languages.slice()
+-          : ["en-US", "en"],
+-      },
++      decision: persona ? "persona" : "native",
++      kind,
++      source,
++      site: decision?.site || "",
++      persona,
+       depth,
+     };
+-    // Mirror Depth lastSeeds: persist seeds actually handed to content so
+-    // darkstr.worker.lastPayload.webgpuSeed rotates with eTLD under rotatePerSite.
+-    try {
+-      if (out.depth && typeof out.depth.webgpuSeed === "number") {
+-        Services.prefs.setStringPref(
+-          LAST_PAYLOAD_PREF,
+-          JSON.stringify({
+-            ua: out.persona.userAgent,
+-            platform: out.persona.platform,
+-            hw: out.persona.hardwareConcurrency,
+-            mem: out.persona.deviceMemory,
+-            langs: out.persona.languages,
+-            canvasSeed: out.depth.canvasSeed ?? null,
+-            webgpuSeed: out.depth.webgpuSeed >>> 0,
+-            gpu: out.depth.gpu ?? null,
+-          })
+-        );
+-      }
+-    } catch (_ePay) {}
++    this._writeLastPayload(out);
++    this.recordInstallStatus({
++      ok: true,
++      event: "resolve",
++      status: `${kind}:${source}:${out.decision}`,
++    });
+     return out;
+   },
+ 
+-  _readWorkerPayload() {
+-    // 0020 nextNavOk gate for global arm removed (0025) — SubsequentNav
+-    // idle remains in workerPayloadForBrowsingContext only.
+-    // Global arm payload (Depth parity): use plan snapshot / prefs, NOT
+-    // snapshotForBrowsingContext(null). BC-null + strictFirstDoc always
+-    // returned null → hooksArmed stuck false while Depth armed (Proof P0).
+-    // SubsequentNav idle is enforced only in workerPayloadForBrowsingContext.
+-    let persona = null;
+-    let depth = null;
+-    try {
+-      const { DarkstrNativePersona } = ChromeUtils.importESModule(
+-        "moz-src:///browser/components/DarkstrNativePersona.sys.mjs"
+-      );
+-      persona = normalizePersona(
+-        DarkstrNativePersona.getPlan?.()?.snapshot || null
+-      );
+-    } catch (_e) {}
++  _writeLastPayload(out) {
+     try {
+-      const { DarkstrDepthHooks } = ChromeUtils.importESModule(
+-        "moz-src:///browser/components/DarkstrDepthHooks.sys.mjs"
++      Services.prefs.setStringPref(
++        LAST_PAYLOAD_PREF,
++        JSON.stringify({
++          kind: out.kind,
++          source: out.source,
++          site: out.site,
++          decision: out.decision,
++          ua: out.persona?.userAgent || "",
++          platform: out.persona?.platform || "",
++          hw: out.persona?.hardwareConcurrency || 0,
++          langs: out.persona?.languages || [],
++          tz: out.persona?.timezone || "",
++          canvasSeed: out.depth?.canvasSeed ?? null,
++          webgpuSeed: out.depth?.webgpuSeed ?? null,
++          gpu: out.depth?.gpu ?? null,
++        })
+       );
+-      // Prefer Depth's global plan seeds (not BC-gated null).
+-      const plan = DarkstrDepthHooks.getPlan?.();
+-      const seeds = plan?.armed ? plan.seeds : null;
+-      if (seeds && typeof seeds.canvasSeed === "number") {
+-        const audioSeed = seeds.audioSeed >>> 0;
+-        const canvasSeed = seeds.canvasSeed >>> 0;
+-        // Soft residual (0043): prefer Depth plan webgpuSeed (0038 SoT).
+-        depth = {
+-          canvasSeed,
+-          audioSeed,
+-          webgpuSeed: readWebGpuSeed(seeds, canvasSeed, audioSeed),
+-          gpu: normalizeGpu(seeds.gpu) || {
+-            vendor: "Apple",
+-            renderer: "Apple M1",
+-          },
+-        };
+-      }
+     } catch (_e) {}
+-
+-    if (!persona) {
+-      persona = this._readPersonaFromPrefs();
+-    }
+-    if (!depth) {
+-      depth = this._readDepthFromPrefs();
+-    }
+-    if (!persona) {
+-      return null;
+-    }
+-    return { persona, depth };
+   },
+ 
+-  _readPersonaFromPrefs() {
++  /** Persist diagnostics. Never writes privacy.*. */
++  recordInstallStatus(detail) {
++    const payload = {
++      ok: !!detail?.ok,
++      event: String(detail?.event || "unknown"),
++      status: String(detail?.status || "unknown"),
++      error: String(detail?.error || "").slice(0, 1000),
++      at: new Date().toISOString(),
++    };
+     try {
+-      const raw = Services.prefs.getStringPref(SNAPSHOT_PREF, "");
+-      if (raw) {
+-        const parsed = JSON.parse(raw);
+-        const persona = normalizePersona(parsed);
+-        if (persona) {
+-          return persona;
+-        }
+-      }
++      Services.prefs.setStringPref(LAST_INSTALL_PREF, JSON.stringify(payload));
+     } catch (_e) {}
+-    const seed = this._readPersonaSeedPref();
+-    if (!seed) {
+-      return null;
+-    }
+-    return this._generatePersonaFromSeed(seed >>> 0);
+-  },
+-
+-  _readDepthFromPrefs() {
+     try {
+-      const raw = Services.prefs.getStringPref(SNAPSHOT_PREF, "");
+-      if (raw) {
+-        const parsed = JSON.parse(raw);
+-        const canvasSeed = readU32Field(parsed, "canvasSeed", "canvas_seed");
+-        const audioSeed = readU32Field(parsed, "audioSeed", "audio_seed");
+-        const gpu = normalizeGpu(parsed.gpu);
+-        if (canvasSeed !== null && audioSeed !== null && gpu) {
+-          return {
+-            canvasSeed,
+-            audioSeed,
+-            webgpuSeed: readWebGpuSeed(parsed, canvasSeed, audioSeed),
+-            gpu,
+-          };
+-        }
+-      }
++      Services.prefs.setStringPref(
++        LAST_ERROR_PREF,
++        payload.ok ? "" : `${payload.event}:${payload.status}:${payload.error}`.slice(0, 1000)
++      );
+     } catch (_e) {}
+-    const seed = this._readPersonaSeedPref();
+-    if (!seed) {
+-      return null;
+-    }
+-    return this._generateDepthFromSeed(seed >>> 0);
+   },
+ 
+-  /**
+-   * Read darkstr.persona.seed regardless of stored type.
+-   * 2-arg getIntPref(name, 0) returns 0 without throw on a string pref,
+-   * so type-detect first.
+-   */
+-  _readPersonaSeedPref() {
+-    let type;
+-    try {
+-      type = Services.prefs.getPrefType(SEED_PREF);
+-    } catch (_e) {
+-      return 0;
+-    }
+-    if (type === Ci.nsIPrefBranch.PREF_INT) {
+-      try {
+-        return Services.prefs.getIntPref(SEED_PREF);
+-      } catch (e) {
+-        console.error("darkstr worker int seed read failed", e);
+-        return 0;
+-      }
+-    }
+-    if (type === Ci.nsIPrefBranch.PREF_STRING) {
+-      try {
+-        const raw = Services.prefs.getStringPref(SEED_PREF);
+-        const n = Number(String(raw).trim());
+-        if (Number.isFinite(n) && n !== 0) {
+-          return n | 0;
+-        }
+-      } catch (e) {
+-        console.error("darkstr worker string seed read failed", e);
+-      }
+-    }
+-    return 0;
+-  },
+-
+-  _generatePersonaFromSeed(seed) {
+-    const rng = mulberry32(seed);
+-    const os = detectHostOs();
+-    const group = UA_GROUPS[os] || UA_GROUPS.windows;
+-    void pickFrom([0, 1], rng);
+-    const userAgent = pickFrom(group.uas, rng);
+-    const platform = group.platform;
+-    const hardwareConcurrency = pickFrom(CORES, rng);
+-    const deviceMemory = pickFrom(MEMORY, rng);
+-    void pickFrom([0, 1], rng); // screen
+-    void pickFrom([24, 30], rng); // colorDepth
+-    void pickFrom(GPU_BY_OS[os] || GPU_BY_OS.windows, rng);
+-    const languages = pickFrom(LANGUAGES, rng);
+-    void pickFrom([0, 1], rng); // timezone
+-    return {
+-      userAgent,
+-      platform,
+-      hardwareConcurrency,
+-      deviceMemory,
+-      languages,
+-    };
+-  },
+-
+-  _generateDepthFromSeed(seed) {
+-    const rng = mulberry32(seed);
+-    void pickFrom([0, 1], rng);
+-    void pickFrom([0, 1], rng);
+-    const os = detectHostOs();
+-    const gpus = GPU_BY_OS[os] || GPU_BY_OS.windows;
+-    const gpu = pickFrom(gpus, rng);
+-    void pickFrom(CORES, rng);
+-    void pickFrom(MEMORY, rng);
+-    void pickFrom([0, 1], rng);
+-    void pickFrom([24, 30], rng);
+-    const gpu2 = pickFrom(gpus, rng);
+-    void pickFrom([0, 1], rng);
+-    void pickFrom([0, 1], rng);
+-    const canvasSeed = (rng() * 0xffffffff) >>> 0;
+-    const audioSeed = (rng() * 0xffffffff) >>> 0;
+-    // Soft residual (0043): webgpuSeed after canvas/audio (Depth 0038 parity).
+-    const webgpuSeed = (rng() * 0xffffffff) >>> 0;
+-    return {
+-      canvasSeed,
+-      audioSeed,
+-      webgpuSeed,
+-      gpu: gpu2 || gpu,
+-    };
+-  },
+-
+-  _setArmed(armed, payload) {
++  _setArmed(armed) {
+     this._armed = !!armed;
+     try {
+       Services.prefs.setBoolPref(ARMED_PREF, this._armed);
+     } catch (_e) {}
+-    try {
+-      if (this._armed && payload?.persona) {
+-        Services.prefs.setStringPref(
+-          LAST_PAYLOAD_PREF,
+-          JSON.stringify({
+-            ua: payload.persona.userAgent,
+-            platform: payload.persona.platform,
+-            hw: payload.persona.hardwareConcurrency,
+-            mem: payload.persona.deviceMemory,
+-            langs: payload.persona.languages,
+-            canvasSeed: payload.depth?.canvasSeed ?? null,
+-            webgpuSeed: payload.depth?.webgpuSeed ?? null,
+-            gpu: payload.depth?.gpu ?? null,
+-          })
+-        );
+-      } else {
++    if (!this._armed) {
++      try {
+         Services.prefs.setStringPref(LAST_PAYLOAD_PREF, "");
+-      }
+-    } catch (_e) {}
++      } catch (_e) {}
++    }
+   },
+ };
+--- a/browser/components/DarkstrWorkerHooksChild.sys.mjs
++++ b/browser/components/DarkstrWorkerHooksChild.sys.mjs
+@@ -3,161 +3,30 @@
+  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+ 
+ /**
+- * darkstr Phase 3 pin 3 — JSWindowActor child.
+- * Wrap DedicatedWorker / SharedWorker constructors so worker globals stay
+- * persona-coherent (navigator + OffscreenCanvas/WebGL/WebGPU depth). Phase 1
+- * parity via blob importScripts / dynamic import; ServiceWorker NOT claimed.
+- * Soft residual (0043): WorkerNavigator.gpu wraps with same seed-tied coherence
+- * as window 0038 (plain AdapterInfo/features/limits; idle when navigator.gpu
+- * absent). ServiceWorker still OOS (register ≠ Worker blob). Brand: darkstr —
+- * not official LibreWolf.
+- * Soft residual (0043 re-XOR): contentBlob/contentConstruct — chrome Array
+- * parts to content Blob threw Permission denied Symbol.iterator (native gpu
+- * fallback). Cu.cloneInto overrides + refresh payloadKey on eTLD rotate.
++ * darkstr 0049 — DarkstrWorkerPersona JSProcessActor child (content process).
+  *
+- * Fission note: waive content window + Cu.exportFunction replacements.
+- * pageshow reinstall; surface lastError via InstallStatus IPC.
++ * C++ WorkerPrivate::Constructor notifies "darkstr-worker-persona-resolve"
++ * with an nsIWritablePropertyBag2 once per top-level worker (only when the
++ * hook gate prefs are on). This child asks the parent (sync ppmm message)
++ * for the creating document's / owning site's 0051 decision and writes the
++ * answer back into the bag; WorkerNavigator then reports it natively.
++ *
++ * Nothing here wraps Worker / SharedWorker, creates blob: URLs or overrides
++ * navigator in JS (0049 retired the Phase 3 blob importScripts wrapper:
++ * B4 module SharedWorker, B5 SharedWorker sharing, self.location, relative
++ * importScripts and constructor shape are all stock now). deviceMemory is
++ * never added — Firefox has none.
++ *
++ * The only script that still runs in the worker is the 0043 depth prelude
++ * (OffscreenCanvas / WebGL / WebGPU coherence), evaluated by C++ in the
++ * worker global before the main script. Brand: darkstr — not official
++ * LibreWolf.
+  */
+ 
+-const installedByWindow = new WeakMap();
+-
+-function errorText(error) {
+-  try {
+-    const name = error?.name ? String(error.name) : "";
+-    const msg = error?.message != null ? String(error.message) : String(error || "unknown error");
+-    const stack = error?.stack ? String(error.stack) : "";
+-    return `${name}:${msg} || ${stack}`.slice(0, 1000);
+-  } catch (_e) {
+-    return "unknown error";
+-  }
+-}
+-
+-function contentWindowFor(rawWindow) {
+-  try {
+-    const waived = Cu.waiveXrays(rawWindow);
+-    if (waived) {
+-      return waived;
+-    }
+-  } catch (_e) {}
+-  try {
+-    if (rawWindow?.wrappedJSObject) {
+-      return rawWindow.wrappedJSObject;
+-    }
+-  } catch (_e) {}
+-  throw new Error("unable to obtain waived content window");
+-}
+-
+-function contentBlob(pageWindow, sourceText) {
+-  // Soft residual (0043 re-XOR): Blob parts + options must be content-compartment
+-  // sequences. A chrome Array closed over by Cu.exportFunction throws
+-  // "Permission denied to access property Symbol.iterator" when content Blob
+-  // iterates parts — runtime-Worker fallback left gpu native (Proof FAIL).
+-  const src = String(sourceText);
+-  let parts;
+-  try {
+-    parts = new pageWindow.Array(1);
+-    parts[0] = src;
+-  } catch (_e) {
+-    parts = Cu.cloneInto([src], pageWindow);
+-  }
+-  let opts;
+-  try {
+-    opts = new pageWindow.Object();
+-    opts.type = "application/javascript";
+-  } catch (_e2) {
+-    opts = Cu.cloneInto({ type: "application/javascript" }, pageWindow);
+-  }
+-  return new pageWindow.Blob(parts, opts);
+-}
+-
+-function contentConstruct(Ctor, pageWindow, args) {
+-  // Reflect.construct args list must also be a content sequence under Xray.
+-  let list;
+-  try {
+-    list = new pageWindow.Array(args.length);
+-    for (let i = 0; i < args.length; i++) {
+-      list[i] = args[i];
+-    }
+-  } catch (_e) {
+-    list = Cu.cloneInto(args, pageWindow);
+-  }
+-  return Reflect.construct(Ctor, list);
+-}
+-
+-function methodIsInstalled(replacement) {
+-  try {
+-    return (
+-      Object.getOwnPropertyDescriptor(replacement.holder, replacement.name)
+-        ?.value === replacement.wrapper
+-    );
+-  } catch (_e) {
+-    return false;
+-  }
+-}
+-
+-function restoreReplacement(replacement) {
+-  if (methodIsInstalled(replacement)) {
+-    Object.defineProperty(
+-      replacement.holder,
+-      replacement.name,
+-      replacement.originalDescriptor
+-    );
+-  }
+-}
+-
+-function uninstallWorkerHooks(rawWindow) {
+-  const record = installedByWindow.get(rawWindow);
+-  if (!record) {
+-    return "idle";
+-  }
+-  for (const replacement of record.replacements.slice().reverse()) {
+-    restoreReplacement(replacement);
+-  }
+-  installedByWindow.delete(rawWindow);
+-  return "uninstalled";
+-}
+-
+-function buildNavigatorOverrides(persona) {
+-  const langs = Array.isArray(persona.languages)
+-    ? persona.languages
+-    : ["en-US", "en"];
+-  const appVersion = String(persona.userAgent || "").replace(/^Mozilla\//, "");
+-  const hw = Number(persona.hardwareConcurrency) || 8;
+-  const mem = Number(persona.deviceMemory) || 8;
+-  // Prefer own-property overrides on the navigator instance. WorkerNavigator
+-  // prototype hardwareConcurrency is often non-configurable from C++; proto
+-  // defineProperty then silently fails and Proof still sees host cores.
+-  return `
+-(function(){
+-  try {
+-    var nav = self.navigator;
+-    if (!nav) { return; }
+-    var proto = nav.__proto__;
+-    function def(obj, prop, getter) {
+-      if (!obj) { return false; }
+-      try {
+-        Object.defineProperty(obj, prop, { configurable: true, enumerable: true, get: getter });
+-        return true;
+-      } catch (_e) { return false; }
+-    }
+-    function spoof(prop, getter) {
+-      if (def(nav, prop, getter)) { return true; }
+-      return def(proto, prop, getter);
+-    }
+-    spoof("userAgent", function(){ return ${JSON.stringify(persona.userAgent)}; });
+-    spoof("platform", function(){ return ${JSON.stringify(persona.platform || "MacIntel")}; });
+-    // Best-effort: instance first, then proto. If both refuse (non-configurable
+-    // host binding), hardwareConcurrency residual stays host — documented.
+-    spoof("hardwareConcurrency", function(){ return ${hw}; });
+-    spoof("deviceMemory", function(){ return ${mem}; });
+-    spoof("language", function(){ return ${JSON.stringify(langs[0] || "en-US")}; });
+-    spoof("languages", function(){ return Object.freeze(${JSON.stringify(langs)}); });
+-    spoof("appVersion", function(){ return ${JSON.stringify(appVersion)}; });
+-  } catch (_e) {}
+-})();`;
+-}
++const TOPIC = "darkstr-worker-persona-resolve";
++const MSG_RESOLVE = "DarkstrWorkerHooks:Resolve";
+ 
+-function buildDepthOverrides(depth) {
++export function buildDepthOverrides(depth) {
+   if (!depth || typeof depth.canvasSeed !== "number") {
+     return "";
+   }
+@@ -191,7 +60,7 @@
+  * Xray/Marionette lessons). Never invent Chrome adapter brands. AdapterInfo.device
+  * stays "". ServiceWorker NOT claimed here.
+  */
+-function buildWebGpuOverrides(depth) {
++export function buildWebGpuOverrides(depth) {
+   if (!depth || typeof depth.webgpuSeed !== "number") {
+     return "";
+   }
+@@ -199,7 +68,7 @@
+   const vendor = depth.gpu?.vendor || "Apple";
+   const renderer = depth.gpu?.renderer || "Apple M1";
+   // Body mirrors DepthHooksChild installWebGpuInPage (window 0038) — kept in the
+-  // worker compartment via blob preamble (no chrome Xray channel).
++  // worker compartment via the native 0049 prelude (no chrome Xray channel).
+   return `
+ ;(function(){
+   try {
+@@ -598,320 +467,106 @@
+ })();`;
+ }
+ 
+-function buildNestedWorkerWrapper(leafOverrides) {
+-  return `
+-;(function(){
+-  if(typeof Worker!=='undefined'){
+-    var _OW=Worker;
+-    var _ovr=${JSON.stringify(leafOverrides)};
+-    self.Worker=function(u,o){
+-      try{
+-        var ru=new URL(u,self.location.href).href;
+-        if(o&&o.type==='module'){
+-          var b=new Blob([_ovr+';\\nawait import('+JSON.stringify(ru)+');'],{type:'application/javascript'});
+-          return new _OW(URL.createObjectURL(b),Object.assign({},o,{type:'module'}));
+-        }else{
+-          var b=new Blob([_ovr+';\\nimportScripts('+JSON.stringify(ru)+');'],{type:'application/javascript'});
+-          return new _OW(URL.createObjectURL(b),o);
+-        }
+-      }catch(e){return new _OW(u,o);}
+-    };
+-    self.Worker.prototype=_OW.prototype;
++/** Depth prelude for one worker ("" when depth is not armed). */
++export function buildWorkerPrelude(depth) {
++  if (!depth) {
++    return "";
+   }
+-})();`;
++  return buildDepthOverrides(depth) + buildWebGpuOverrides(depth);
+ }
+ 
+-function buildAllOverrides(payload) {
+-  const nav = buildNavigatorOverrides(payload.persona);
+-  const depth = buildDepthOverrides(payload.depth);
+-  const webgpu = buildWebGpuOverrides(payload.depth);
+-  const leaf = nav + depth + webgpu;
+-  return leaf + buildNestedWorkerWrapper(leaf);
+-}
+-
+-function isSameOriginOrBlob(pageWindow, urlStr) {
++function bagString(bag, key) {
+   try {
+-    if (typeof urlStr === "string" && urlStr.startsWith("blob:")) {
+-      return true;
+-    }
+-    const parsed = new pageWindow.URL(urlStr, pageWindow.location.href);
+-    return parsed.origin === pageWindow.location.origin;
++    return String(bag.getPropertyAsAString(key) || "");
+   } catch (_e) {
+-    return false;
+-  }
+-}
+-
+-function replaceConstructor(pageWindow, name, implementation, replacements) {
+-  const holder = pageWindow;
+-  const descriptor = Object.getOwnPropertyDescriptor(holder, name);
+-  if (!descriptor || typeof descriptor.value !== "function") {
+-    // Some builds expose Worker only on the prototype chain / as a value without descriptor.
+-    const existing = holder[name];
+-    if (typeof existing !== "function") {
+-      throw new Error(`${name} constructor unavailable`);
+-    }
+-    const wrapper = Cu.exportFunction(implementation, pageWindow);
+-    holder[name] = wrapper;
+-    try {
+-      wrapper.prototype = existing.prototype;
+-    } catch (_e) {}
+-    replacements.push({
+-      holder,
+-      name,
+-      wrapper,
+-      originalDescriptor: {
+-        configurable: true,
+-        enumerable: false,
+-        writable: true,
+-        value: existing,
+-      },
+-      _loose: true,
+-    });
+-    return existing;
++    return "";
+   }
+-  const original = descriptor.value;
+-  const wrapper = Cu.exportFunction(implementation, pageWindow);
+-  try {
+-    wrapper.prototype = original.prototype;
+-  } catch (_e) {}
+-  Object.defineProperty(holder, name, { ...descriptor, value: wrapper });
+-  replacements.push({
+-    holder,
+-    name,
+-    wrapper,
+-    originalDescriptor: descriptor,
+-  });
+-  return original;
+ }
+ 
+-function payloadKey(payload) {
+-  // Soft residual (0043 re-XOR): refresh blob overrides when eTLD depth seeds
+-  // change (rotatePerSite). already-installed must not keep seed-42 sticky.
+-  const d = payload?.depth;
+-  return [
+-    payload?.persona?.userAgent || "",
+-    d && typeof d.canvasSeed === "number" ? d.canvasSeed >>> 0 : "",
+-    d && typeof d.webgpuSeed === "number" ? d.webgpuSeed >>> 0 : "",
+-    d?.gpu?.vendor || "",
+-    d?.gpu?.renderer || "",
+-  ].join("|");
+-}
+-
+-function installWorkerHooks(rawWindow, payload, onRuntimeError) {
+-  const prior = installedByWindow.get(rawWindow);
+-  const key = payloadKey(payload);
+-  if (
+-    prior &&
+-    prior.replacements.every(methodIsInstalled) &&
+-    prior.payloadKey === key
+-  ) {
+-    return "already-installed";
+-  }
+-  if (prior) {
+-    uninstallWorkerHooks(rawWindow);
+-  }
+-
+-  const pageWindow = contentWindowFor(rawWindow);
+-  if (!payload?.persona?.userAgent) {
+-    throw new Error("persona payload unavailable");
+-  }
+-  const replacements = [];
+-  const overrides = buildAllOverrides(payload);
+-  // Soft residual (0043 re-XOR): chrome-compartment override strings closed over
+-  // by Cu.exportFunction throw under content Blob construction (runtime-Worker
+-  // fallback → native WorkerNavigator.gpu; Proof DedicatedWorker≠window).
+-  // Clone into the content compartment once at install (0038 pageWindow.Function
+-  // parity — content-side bytes only).
+-  let overridesContent;
+-  try {
+-    overridesContent = Cu.cloneInto(String(overrides), pageWindow);
+-  } catch (_cloneErr) {
+-    overridesContent = String(overrides);
+-  }
+-
++function bagU64(bag, key) {
+   try {
+-    if (typeof pageWindow.Worker === "function") {
+-      const OrigWorker = replaceConstructor(
+-        pageWindow,
+-        "Worker",
+-        function (url, opts) {
+-          try {
+-            if (!isSameOriginOrBlob(pageWindow, url)) {
+-              return contentConstruct(OrigWorker, pageWindow, [url, opts]);
+-            }
+-            const isModule = opts && opts.type === "module";
+-            const origUrl = new pageWindow.URL(url, pageWindow.location.href)
+-              .href;
+-            const preamble = String(overridesContent);
+-            if (isModule) {
+-              const blob = contentBlob(
+-                pageWindow,
+-                preamble + `;
+-await import(${JSON.stringify(origUrl)});`
+-              );
+-              let moduleOpts;
+-              try {
+-                moduleOpts = Cu.cloneInto(
+-                  Object.assign({}, opts || {}, { type: "module" }),
+-                  pageWindow
+-                );
+-              } catch (_eOpts) {
+-                moduleOpts = opts;
+-              }
+-              return contentConstruct(OrigWorker, pageWindow, [
+-                pageWindow.URL.createObjectURL(blob),
+-                moduleOpts,
+-              ]);
+-            }
+-            const blob = contentBlob(
+-              pageWindow,
+-              preamble + `;
+-importScripts(${JSON.stringify(origUrl)});`
+-            );
+-            return contentConstruct(OrigWorker, pageWindow, [
+-              pageWindow.URL.createObjectURL(blob),
+-              opts,
+-            ]);
+-          } catch (error) {
+-            onRuntimeError("Worker", error);
+-            return contentConstruct(OrigWorker, pageWindow, [url, opts]);
+-          }
+-        },
+-        replacements
+-      );
+-    }
+-
+-    if (typeof pageWindow.SharedWorker === "function") {
+-      const OrigSharedWorker = replaceConstructor(
+-        pageWindow,
+-        "SharedWorker",
+-        function (url, nameOrOpts) {
+-          try {
+-            if (!isSameOriginOrBlob(pageWindow, url)) {
+-              return contentConstruct(OrigSharedWorker, pageWindow, [
+-                url,
+-                nameOrOpts,
+-              ]);
+-            }
+-            const origUrl = new pageWindow.URL(url, pageWindow.location.href)
+-              .href;
+-            const preamble = String(overridesContent);
+-            const blob = contentBlob(
+-              pageWindow,
+-              preamble + `;
+-importScripts(${JSON.stringify(origUrl)});`
+-            );
+-            return contentConstruct(OrigSharedWorker, pageWindow, [
+-              pageWindow.URL.createObjectURL(blob),
+-              nameOrOpts,
+-            ]);
+-          } catch (error) {
+-            onRuntimeError("SharedWorker", error);
+-            return contentConstruct(OrigSharedWorker, pageWindow, [
+-              url,
+-              nameOrOpts,
+-            ]);
+-          }
+-        },
+-        replacements
+-      );
+-    }
+-
+-    if (!replacements.length) {
+-      throw new Error("Worker and SharedWorker constructors unavailable");
+-    }
+-
+-    installedByWindow.set(rawWindow, { replacements, payloadKey: key });
+-    return "installed";
+-  } catch (error) {
+-    for (const replacement of replacements.slice().reverse()) {
+-      try {
+-        restoreReplacement(replacement);
+-      } catch (_e) {}
+-    }
+-    throw error;
++    return Number(bag.getPropertyAsUint64(key)) || 0;
++  } catch (_e) {
++    return 0;
+   }
+ }
+ 
+-export class DarkstrWorkerHooksChild extends JSWindowActorChild {
+-  _report(ok, eventType, status, error = "") {
+-    const detail = {
+-      ok: !!ok,
+-      event: String(eventType || "unknown"),
+-      status: String(status || "unknown"),
+-      error: error ? errorText(error).slice(0, 1000) : "",
+-    };
+-    try {
+-      this.sendAsyncMessage("DarkstrWorkerHooks:InstallStatus", detail);
+-    } catch (reportError) {
+-      console.error("darkstr worker diagnostic IPC failed", reportError, detail);
+-    }
+-  }
+-
+-  /**
+-   * Construct-time fallback (blob wrap threw → OrigWorker). Must NOT clobber
+-   * lastInstall after a successful constructor wrap — Proof soft residual:
+-   * lastInstall often ended ok:false/runtime-Worker even when persona UA landed.
+-   * Runtime surfaces go to lastError only (runtimeOnly).
+-   */
+-  _reportRuntime(surface, error) {
+-    const detail = {
+-      ok: false,
+-      event: "runtime",
+-      status: `runtime-${surface}`,
+-      error: error ? errorText(error).slice(0, 1000) : "",
+-      runtimeOnly: true,
+-    };
+-    try {
+-      this.sendAsyncMessage("DarkstrWorkerHooks:InstallStatus", detail);
+-    } catch (reportError) {
+-      console.error("darkstr worker runtime diagnostic IPC failed", reportError, detail);
+-    }
+-  }
++/** Request fields C++ put in the bag. */
++export function readWorkerRequest(bag) {
++  return {
++    kind: bagString(bag, "kind") || "dedicated",
++    scriptURL: bagString(bag, "scriptURL"),
++    innerWindowId: bagU64(bag, "innerWindowId"),
++    principalOrigin: bagString(bag, "principalOrigin"),
++    partitionKey: bagString(bag, "partitionKey"),
++  };
++}
+ 
+-  async pullAndInstall(eventType) {
+-    let payload;
+-    try {
+-      payload = await this.sendQuery("DarkstrWorkerHooks:GetPayload");
+-    } catch (error) {
+-      console.error("darkstr worker payload IPC failed", error);
+-      this._report(false, eventType, "payload-query-failed", error);
++/**
++ * Write a resolve result back for C++. Navigator fields only when the
++ * decision is "persona"; empty = native (plain Firefox value).
++ */
++export function fillWorkerPersonaBag(bag, result) {
++  const persona = result?.decision === "persona" ? result.persona : null;
++  if (persona?.userAgent) {
++    bag.setPropertyAsAString("userAgent", String(persona.userAgent));
++    bag.setPropertyAsAString("platform", String(persona.platform || ""));
++    const hc = Number(persona.hardwareConcurrency) >>> 0;
++    if (hc > 0) {
++      bag.setPropertyAsUint32("hardwareConcurrency", hc);
++    }
++    const langs = Array.isArray(persona.languages)
++      ? persona.languages.map(String).filter(Boolean)
++      : [];
++    if (langs.length) {
++      bag.setPropertyAsAString("languages", langs.join(","));
++    }
++    if (persona.timezone) {
++      bag.setPropertyAsAString("timezone", String(persona.timezone));
++    }
++  }
++  const prelude = persona ? buildWorkerPrelude(result.depth) : "";
++  if (prelude) {
++    bag.setPropertyAsAString("prelude", prelude);
++  }
++  return !!persona?.userAgent;
++}
++
++export class DarkstrWorkerPersonaChild extends JSProcessActorChild {
++  observe(subject, topic, _data) {
++    if (topic !== TOPIC) {
+       return;
+     }
+-
+-    const rawWindow = this.contentWindow;
+-    if (!rawWindow) {
+-      this._report(false, eventType, "no-content-window", "contentWindow unavailable");
++    let bag;
++    try {
++      bag = subject.QueryInterface(Ci.nsIWritablePropertyBag2);
++    } catch (_e) {
+       return;
+     }
+-
+-    if (!payload || !payload.persona || !payload.persona.userAgent) {
+-      try {
+-        const status = uninstallWorkerHooks(rawWindow);
+-        this._report(true, eventType, status);
+-      } catch (error) {
+-        console.error("darkstr worker uninstall failed", error);
+-        this._report(false, eventType, "uninstall-failed", error);
+-      }
++    let result = null;
++    try {
++      const replies = Services.cpmm.sendSyncMessage(
++        MSG_RESOLVE,
++        readWorkerRequest(bag)
++      );
++      result = Array.isArray(replies) ? replies[0] : null;
++    } catch (e) {
++      console.error("darkstr 0049: worker persona resolve failed", e);
+       return;
+     }
+-
+     try {
+-      const status = installWorkerHooks(rawWindow, payload, (surface, error) => {
+-        console.error(`darkstr worker runtime failure (${surface})`, error);
+-        this._reportRuntime(surface, error);
+-      });
+-      this._report(true, eventType, status);
+-    } catch (error) {
+-      console.error("darkstr worker install failed", error);
+-      this._report(false, eventType, "install-failed", error);
++      fillWorkerPersonaBag(bag, result);
++    } catch (e) {
++      console.error("darkstr 0049: worker persona bag write failed", e);
+     }
+   }
++}
+ 
+-  async handleEvent(event) {
+-    if (event.type !== "DOMWindowCreated" && event.type !== "pageshow") {
+-      return;
+-    }
+-    await this.pullAndInstall(event.type);
+-  }
++/**
++ * Retired (0049): the Phase 3 window actor that wrapped Worker/SharedWorker.
++ * Kept as a no-op so a still-running pre-0049 parent that registered the
++ * old "DarkstrWorkerHooks" window actor loads this module cleanly.
++ */
++export class DarkstrWorkerHooksChild extends JSWindowActorChild {
++  handleEvent(_event) {}
+ }
+--- a/browser/components/DarkstrWorkerHooksParent.sys.mjs
++++ b/browser/components/DarkstrWorkerHooksParent.sys.mjs
+@@ -3,31 +3,20 @@
+  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+ 
+ /**
+- * darkstr Phase 3 pin 3 — JSWindowActor parent. Returns worker payload and
+- * persists content-install diagnostics in chrome prefs.
+- * Brand: darkstr — not official LibreWolf.
++ * darkstr 0049 — parent side of the DarkstrWorkerPersona JSProcessActor.
++ * Resolution is a sync ppmm message (DarkstrWorkerHooks:Resolve) handled by
++ * DarkstrWorkerHooks; this actor only exists so the child can observe the
++ * C++ "darkstr-worker-persona-resolve" topic in every content process.
+  */
++export class DarkstrWorkerPersonaParent extends JSProcessActorParent {
++  receiveMessage(_message) {
++    return null;
++  }
++}
+ 
++/** Retired (0049) window-actor parent; no-op for a pre-0049 registration. */
+ export class DarkstrWorkerHooksParent extends JSWindowActorParent {
+-  receiveMessage(message) {
+-    try {
+-      const { DarkstrWorkerHooks } = ChromeUtils.importESModule(
+-        "moz-src:///browser/components/DarkstrWorkerHooks.sys.mjs"
+-      );
+-      if (message.name === "DarkstrWorkerHooks:GetPayload") {
+-        return DarkstrWorkerHooks.workerPayloadForBrowsingContext(
+-          this.browsingContext
+-        );
+-      }
+-      if (message.name === "DarkstrWorkerHooks:InstallStatus") {
+-        DarkstrWorkerHooks.recordInstallStatus(
+-          message.data,
+-          this.browsingContext
+-        );
+-      }
+-    } catch (error) {
+-      console.error("darkstr worker parent IPC failed", error);
+-    }
++  receiveMessage(_message) {
+     return null;
+   }
+ }
+--- a/dom/base/DarkstrNavigatorHooks.cpp
++++ b/dom/base/DarkstrNavigatorHooks.cpp
+@@ -6,10 +6,24 @@
+ 
+ #include "DarkstrNavigatorHooks.h"
+ 
++#include "js/CompilationAndEvaluation.h"
++#include "js/CompileOptions.h"
++#include "js/SourceText.h"
++#include "jsapi.h"
+ #include "mozilla/Preferences.h"
++#include "mozilla/Services.h"
++#include "mozilla/StaticMutex.h"
++#include "mozilla/dom/WorkerLoadInfo.h"
++#include "mozilla/dom/WorkerPrivate.h"
+ #include "nsCharSeparatedTokenizer.h"
++#include "nsHashPropertyBag.h"
++#include "nsIObserverService.h"
++#include "nsIPrincipal.h"
++#include "nsPIDOMWindow.h"
+ #include "nsReadableUtils.h"
+ #include "nsString.h"
++#include "nsTHashMap.h"
++#include "nsThreadUtils.h"
+ 
+ namespace mozilla::dom {
+ 
+@@ -130,4 +144,187 @@
+   return !aOut.IsEmpty();
+ }
+ 
++// ---------------------------------------------------------------------------
++// darkstr 0049: worker coherence. One persona per top-level worker, taken
++// from the creating document's 0051 decision (dedicated) or the owning
++// site's decision (shared/service). WorkerNavigator reads it natively; no
++// script wrapping, so location / importScripts / constructors stay stock.
++// ---------------------------------------------------------------------------
++
++namespace {
++
++constexpr const char kDarkstrWorkerPersonaTopic[] = "darkstr-worker-persona-resolve";
++
++StaticMutex sDarkstrWorkerPersonaMutex MOZ_UNANNOTATED;
++// Leaked on purpose (process lifetime); entries are removed in
++// ~WorkerPrivate so the table only holds live workers.
++nsTHashMap<nsPtrHashKey<const void>, RefPtr<DarkstrWorkerPersona>>*
++    sDarkstrWorkerPersonas = nullptr;
++
++void DarkstrParseWorkerLanguages(const nsAString& aCsv, nsTArray<nsString>& aOut) {
++  aOut.Clear();
++  for (const nsAString& tok :
++       nsCharSeparatedTokenizer(aCsv, ',').ToRange()) {
++    nsAutoString t(tok);
++    t.Trim(" \t");
++    if (!t.IsEmpty()) {
++      aOut.AppendElement(t);
++    }
++  }
++}
++
++}  // namespace
++
++/* static */
++already_AddRefed<DarkstrWorkerPersona>
++DarkstrNavigatorHooks::ResolveWorkerPersona(WorkerPrivate* aParent,
++                                            bool aIsChromeWorker,
++                                            const char* aKind,
++                                            const nsAString& aScriptURL,
++                                            WorkerLoadInfo& aLoadInfo) {
++  if (aIsChromeWorker) {
++    return nullptr;
++  }
++  if (aParent) {
++    // Nested worker: same persona as the worker that created it. Languages
++    // and timezone were already inherited through GetLoadInfo(aParent).
++    return PersonaForWorker(aParent);
++  }
++  if (!NS_IsMainThread()) {
++    return nullptr;
++  }
++  // Default prefs (hooks off): no observer call at all — plain Firefox.
++  if (!PollutionNativeHooksActive()) {
++    return nullptr;
++  }
++  nsIPrincipal* principal = aLoadInfo.mPrincipal;
++  if (!principal || !principal->GetIsContentPrincipal()) {
++    return nullptr;
++  }
++  nsCOMPtr<nsIObserverService> obs = services::GetObserverService();
++  if (!obs) {
++    return nullptr;
++  }
++
++  RefPtr<nsHashPropertyBag> bag = new nsHashPropertyBag();
++  bag->SetPropertyAsACString(u"kind"_ns, nsDependentCString(aKind));
++  bag->SetPropertyAsAString(u"scriptURL"_ns, aScriptURL);
++  uint64_t innerWindowId = 0;
++  if (aLoadInfo.mWindow) {
++    innerWindowId = aLoadInfo.mWindow->WindowID();
++  }
++  bag->SetPropertyAsUint64(u"innerWindowId"_ns, innerWindowId);
++  nsAutoCString originNoSuffix;
++  (void)principal->GetOriginNoSuffix(originNoSuffix);
++  bag->SetPropertyAsACString(u"principalOrigin"_ns, originNoSuffix);
++  nsAutoString partitionKey;
++  if (aLoadInfo.mPartitionedPrincipal) {
++    partitionKey =
++        aLoadInfo.mPartitionedPrincipal->OriginAttributesRef().mPartitionKey;
++  }
++  if (partitionKey.IsEmpty()) {
++    partitionKey = aLoadInfo.mOriginAttributes.mPartitionKey;
++  }
++  bag->SetPropertyAsAString(u"partitionKey"_ns, partitionKey);
++
++  obs->NotifyObservers(static_cast<nsIWritablePropertyBag*>(bag),
++                       kDarkstrWorkerPersonaTopic, nullptr);
++
++  RefPtr<DarkstrWorkerPersona> persona = new DarkstrWorkerPersona();
++  (void)bag->GetPropertyAsAString(u"userAgent"_ns, persona->mUserAgent);
++  (void)bag->GetPropertyAsAString(u"platform"_ns, persona->mPlatform);
++  uint32_t hw = 0;
++  if (NS_SUCCEEDED(
++          bag->GetPropertyAsUint32(u"hardwareConcurrency"_ns, &hw))) {
++    persona->mHardwareConcurrency = hw;
++  }
++  nsAutoString langs;
++  if (NS_SUCCEEDED(bag->GetPropertyAsAString(u"languages"_ns, langs))) {
++    DarkstrParseWorkerLanguages(langs, persona->mLanguages);
++  }
++  (void)bag->GetPropertyAsAString(u"timezone"_ns, persona->mTimezone);
++  (void)bag->GetPropertyAsAString(u"prelude"_ns, persona->mPrelude);
++  CopyUTF16toUTF8(aScriptURL, persona->mScriptURL);
++
++  if (!persona->HasNavigator() && persona->mPrelude.IsEmpty()) {
++    return nullptr;
++  }
++  if (persona->HasNavigator()) {
++    // Stock worker plumbing carries these (navigator.languages / Intl
++    // timezone), nested workers inherit them from the parent loadInfo.
++    if (!persona->mLanguages.IsEmpty()) {
++      aLoadInfo.mLanguageOverride = persona->mLanguages.Clone();
++    }
++    if (!persona->mTimezone.IsEmpty()) {
++      aLoadInfo.mTimezoneOverride = persona->mTimezone;
++    }
++  }
++  return persona.forget();
++}
++
++/* static */
++void DarkstrNavigatorHooks::RegisterWorkerPersona(
++    const WorkerPrivate* aWorker, DarkstrWorkerPersona* aPersona) {
++  if (!aWorker || !aPersona) {
++    return;
++  }
++  StaticMutexAutoLock lock(sDarkstrWorkerPersonaMutex);
++  if (!sDarkstrWorkerPersonas) {
++    sDarkstrWorkerPersonas = new nsTHashMap<nsPtrHashKey<const void>,
++                                     RefPtr<DarkstrWorkerPersona>>();
++  }
++  sDarkstrWorkerPersonas->InsertOrUpdate(aWorker, RefPtr{aPersona});
++}
++
++/* static */
++void DarkstrNavigatorHooks::ForgetWorkerPersona(const WorkerPrivate* aWorker) {
++  RefPtr<DarkstrWorkerPersona> doomed;
++  {
++    StaticMutexAutoLock lock(sDarkstrWorkerPersonaMutex);
++    if (!sDarkstrWorkerPersonas) {
++      return;
++    }
++    sDarkstrWorkerPersonas->Remove(aWorker, &doomed);
++  }
++}
++
++/* static */
++already_AddRefed<DarkstrWorkerPersona> DarkstrNavigatorHooks::PersonaForWorker(
++    const WorkerPrivate* aWorker) {
++  if (!aWorker) {
++    return nullptr;
++  }
++  StaticMutexAutoLock lock(sDarkstrWorkerPersonaMutex);
++  if (!sDarkstrWorkerPersonas) {
++    return nullptr;
++  }
++  RefPtr<DarkstrWorkerPersona> found = sDarkstrWorkerPersonas->Get(aWorker);
++  return found.forget();
++}
++
++/* static */
++void DarkstrNavigatorHooks::RunWorkerPrelude(JSContext* aCx,
++                                             const WorkerPrivate* aWorker,
++                                             JS::Handle<JSObject*> aGlobal) {
++  RefPtr<DarkstrWorkerPersona> persona = PersonaForWorker(aWorker);
++  if (!persona || persona->mPrelude.IsEmpty() || !aGlobal) {
++    return;
++  }
++  JSAutoRealm ar(aCx, aGlobal);
++  JS::CompileOptions options(aCx);
++  options.setFileAndLine(persona->mScriptURL.get(), 1);
++  options.setNoScriptRval(true);
++  JS::SourceText<char16_t> srcBuf;
++  if (!srcBuf.init(aCx, persona->mPrelude.get(), persona->mPrelude.Length(),
++                   JS::SourceOwnership::Borrowed)) {
++    JS_ClearPendingException(aCx);
++    return;
++  }
++  JS::Rooted<JS::Value> unused(aCx);
++  if (!JS::Evaluate(aCx, options, srcBuf, &unused)) {
++    // The prelude is best effort; never surface its errors to the page.
++    JS_ClearPendingException(aCx);
++  }
++}
++
+ }  // namespace mozilla::dom
+--- a/dom/base/DarkstrNavigatorHooks.h
++++ b/dom/base/DarkstrNavigatorHooks.h
+@@ -22,11 +22,47 @@
+ #ifndef mozilla_dom_DarkstrNavigatorHooks_h
+ #define mozilla_dom_DarkstrNavigatorHooks_h
+ 
++#include "js/TypeDecls.h"
++#include "mozilla/AlreadyAddRefed.h"
++#include "nsISupportsImpl.h"
++#include "nsString.h"
+ #include "nsStringFwd.h"
+ #include "nsTArray.h"
+ 
+ namespace mozilla::dom {
+ 
++class WorkerPrivate;
++struct WorkerLoadInfo;
++
++/**
++ * darkstr 0049 — per-worker persona (immutable once resolved).
++ *
++ * Resolved once on the main thread when a top-level worker (dedicated,
++ * shared or service) is constructed, from the creating document's 0051
++ * decision (dedicated) or the owning site's decision (shared/service, top
++ * level site of the partition). Nested workers share their parent's entry.
++ * Empty fields mean "native" (plain Firefox value).
++ */
++class DarkstrWorkerPersona final {
++ public:
++  NS_INLINE_DECL_THREADSAFE_REFCOUNTING(DarkstrWorkerPersona)
++
++  nsString mUserAgent;
++  nsString mPlatform;
++  uint32_t mHardwareConcurrency = 0;
++  nsTArray<nsString> mLanguages;
++  nsString mTimezone;
++  // Depth prelude (OffscreenCanvas/WebGL/WebGPU, 0043) evaluated in the
++  // worker global before the main script. Navigator is never touched in JS.
++  nsString mPrelude;
++  nsCString mScriptURL;
++
++  bool HasNavigator() const { return !mUserAgent.IsEmpty(); }
++
++ private:
++  ~DarkstrWorkerPersona() = default;
++};
++
+ class DarkstrNavigatorHooks final {
+  public:
+   static bool PollutionNativeHooksActive();
+@@ -40,6 +76,27 @@
+   /** true → aOut from darkstr.persona.languages (comma-separated) */
+   static bool TryGetLanguages(nsTArray<nsString>& aOut);
+ 
++  // ---- darkstr 0049 worker coherence (native WorkerNavigator) ----
++
++  /**
++   * Main thread (top-level worker) or parent worker thread (nested). Asks
++   * chrome (observer "darkstr-worker-persona-resolve", answered by the
++   * DarkstrWorkerPersona process actor) for the worker's persona. Writes
++   * languages / timezone into aLoadInfo so the stock worker plumbing
++   * carries them. Returns null when hooks are off or the decision is native.
++   */
++  static already_AddRefed<DarkstrWorkerPersona> ResolveWorkerPersona(
++      WorkerPrivate* aParent, bool aIsChromeWorker, const char* aKind,
++      const nsAString& aScriptURL, WorkerLoadInfo& aLoadInfo);
++  static void RegisterWorkerPersona(const WorkerPrivate* aWorker,
++                                    DarkstrWorkerPersona* aPersona);
++  static void ForgetWorkerPersona(const WorkerPrivate* aWorker);
++  static already_AddRefed<DarkstrWorkerPersona> PersonaForWorker(
++      const WorkerPrivate* aWorker);
++  /** Worker thread: evaluate the depth prelude (if any) in aGlobal. */
++  static void RunWorkerPrelude(JSContext* aCx, const WorkerPrivate* aWorker,
++                               JS::Handle<JSObject*> aGlobal);
++
+  private:
+   DarkstrNavigatorHooks() = delete;
+   ~DarkstrNavigatorHooks() = delete;
+--- a/dom/workers/WorkerNavigator.cpp
++++ b/dom/workers/WorkerNavigator.cpp
+@@ -127,6 +127,15 @@
+ }
+ 
+ void WorkerNavigator::SetLanguages(const nsTArray<nsString>& aLanguages) {
++  // darkstr 0049: a persona worker keeps its creating page's languages
++  // (intl.accept_languages changes must not leak the host list).
++  if (RefPtr<DarkstrWorkerPersona> persona =
++          DarkstrNavigatorHooks::PersonaForWorker(
++              GetCurrentThreadWorkerPrivate())) {
++    if (persona->HasNavigator() && !persona->mLanguages.IsEmpty()) {
++      return;
++    }
++  }
+   WorkerNavigator_Binding::ClearCachedLanguageValue(this);
+   WorkerNavigator_Binding::ClearCachedLanguagesValue(this);
+   mProperties.mLanguages = aLanguages.Clone();
+@@ -160,6 +169,16 @@
+   WorkerPrivate* workerPrivate = GetCurrentThreadWorkerPrivate();
+   MOZ_ASSERT(workerPrivate);
+ 
++  // darkstr 0049: same platform as the creating page's persona.
++  if (aCallerType != CallerType::System) {
++    RefPtr<DarkstrWorkerPersona> persona =
++        DarkstrNavigatorHooks::PersonaForWorker(workerPrivate);
++    if (persona && persona->HasNavigator() && !persona->mPlatform.IsEmpty()) {
++      aPlatform = persona->mPlatform;
++      return;
++    }
++  }
++
+   // navigator.platform is the same for default and spoofed values. The
+   // "general.platform.override" pref should override the default platform,
+   // but the spoofed platform should override the pref.
+@@ -220,6 +239,16 @@
+   WorkerPrivate* workerPrivate = GetCurrentThreadWorkerPrivate();
+   MOZ_ASSERT(workerPrivate);
+ 
++  // darkstr 0049: same UA as the creating page's persona (0051 decision).
++  if (aCallerType != CallerType::System) {
++    RefPtr<DarkstrWorkerPersona> persona =
++        DarkstrNavigatorHooks::PersonaForWorker(workerPrivate);
++    if (persona && persona->HasNavigator()) {
++      aUserAgent = persona->mUserAgent;
++      return;
++    }
++  }
++
+   RefPtr<GetUserAgentRunnable> runnable = new GetUserAgentRunnable(
+       workerPrivate, aUserAgent,
+       workerPrivate->ShouldResistFingerprinting(RFPTarget::NavigatorUserAgent));
+@@ -228,17 +257,21 @@
+ }
+ 
+ uint64_t WorkerNavigator::HardwareConcurrency() const {
+-  // darkstr 0027: same persona HW as window Navigator (content-process safe gates).
+-  uint64_t darkstrHw = 0;
+-  if (DarkstrNavigatorHooks::TryGetHardwareConcurrency(darkstrHw)) {
+-    return darkstrHw;
++  WorkerPrivate* aWorkerPrivate = GetCurrentThreadWorkerPrivate();
++
++  // darkstr 0049: per-worker persona from the creating page (replaces the
++  // 0027 global darkstr.persona.hardwareConcurrency mirror, which ignored
++  // per-site rotation and the first-document phase).
++  if (RefPtr<DarkstrWorkerPersona> persona =
++          DarkstrNavigatorHooks::PersonaForWorker(aWorkerPrivate)) {
++    if (persona->HasNavigator() && persona->mHardwareConcurrency > 0) {
++      return persona->mHardwareConcurrency;
++    }
+   }
+ 
+   RuntimeService* rts = RuntimeService::GetService();
+   MOZ_ASSERT(rts);
+ 
+-  WorkerPrivate* aWorkerPrivate = GetCurrentThreadWorkerPrivate();
+-
+   return rts->ClampedHardwareConcurrency(
+       aWorkerPrivate->ShouldResistFingerprinting(
+           RFPTarget::NavigatorHWConcurrency),
+--- a/dom/workers/WorkerPrivate.cpp
++++ b/dom/workers/WorkerPrivate.cpp
+@@ -66,6 +66,7 @@
+ #include "mozilla/dom/MessagePort.h"
+ #include "mozilla/dom/MessagePortBinding.h"
+ #include "mozilla/dom/Navigator.h"
++#include "DarkstrNavigatorHooks.h"  // darkstr 0049 worker coherence
+ #include "mozilla/dom/PRemoteWorkerDebuggerParent.h"
+ #include "mozilla/dom/Performance.h"
+ #include "mozilla/dom/PerformanceStorageWorker.h"
+@@ -404,6 +405,16 @@
+       return false;
+     }
+ 
++    // darkstr 0049: depth prelude (0043 OffscreenCanvas/WebGL/WebGPU) runs
++    // in the worker global before the real main script. No blob wrapping:
++    // self.location, importScripts, modules and constructors stay stock.
++    {
++      JS::Rooted<JSObject*> darkstrGlobal(aCx,
++                                          globalScope->GetGlobalJSObject());
++      DarkstrNavigatorHooks::RunWorkerPrelude(aCx, aWorkerPrivate,
++                                              darkstrGlobal);
++    }
++
+     ErrorResult rv;
+     workerinternals::LoadMainScript(aWorkerPrivate, std::move(mOriginStack),
+                                     mScriptURL, WorkerScript, rv,
+@@ -3120,6 +3131,9 @@
+ }
+ 
+ WorkerPrivate::~WorkerPrivate() {
++  // darkstr 0049: drop this worker's persona entry.
++  DarkstrNavigatorHooks::ForgetWorkerPersona(this);
++
+   MOZ_DIAGNOSTIC_ASSERT(mTopLevelWorkerFinishedRunnableCount == 0);
+   MOZ_DIAGNOSTIC_ASSERT(mWorkerFinishedRunnableCount == 0);
+   MOZ_DIAGNOSTIC_ASSERT(mPendingJSAsyncTasks.empty());
+@@ -3260,6 +3274,17 @@
+     return nullptr;
+   }
+ 
++  // darkstr 0049: the worker reports the persona of the document that
++  // created it (dedicated) or of its owning site (shared/service). Resolved
++  // once, before the WorkerPrivate copies aLoadInfo (languages/timezone).
++  RefPtr<DarkstrWorkerPersona> darkstrPersona =
++      DarkstrNavigatorHooks::ResolveWorkerPersona(
++          parent, aIsChromeWorker,
++          aWorkerKind == WorkerKindShared    ? "shared"
++          : aWorkerKind == WorkerKindService ? "service"
++                                             : "dedicated",
++          aScriptURL, *aLoadInfo);
++
+   AgentClusterIdAndCoop idAndCoop = ComputeAgentClusterIdAndCoop(
+       parent, aWorkerKind, aLoadInfo, aIsChromeWorker);
+ 
+@@ -3269,6 +3294,10 @@
+       idAndCoop.mId, idAndCoop.mCoop, std::move(aCancellationCallback),
+       std::move(aTerminationCallback), std::move(aChildEp));
+ 
++  if (darkstrPersona) {
++    DarkstrNavigatorHooks::RegisterWorkerPersona(worker, darkstrPersona);
++  }
++
+   // Gecko contexts always have an explicitly-set default locale (set by
+   // XPJSRuntime::Initialize for the main thread, set by
+   // WorkerThreadPrimaryRunnable::Run for workers just before running worker

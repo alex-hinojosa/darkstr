@@ -91,7 +91,7 @@ Glue reads cached `PersonaSnapshot` **only** when `pollution_active` (`read_cach
 | Process / profile start seed | Browser chrome init / content process launch | M3 | Enum/plan only — live seed wiring private-fork |
 | HTTP User-Agent | **nsHttp** C++ `UserAgent()` + chrome `http-on-modify-request` | M3 / M3-CPP | Live chrome `0003` + C++ `0005` (`DarkstrNsHttpHooks`); Rust label `OverrideUserAgent` |
 | Client Hints | nsHttp request header policy | M3 / M3-CPP | REMOVE in `0003` + C++ `0005` (never SET); Rust `ClientHintsPolicy::Remove` |
-| `navigator.*` / platform / HW | JSWindowActor child + **C++** `Navigator.cpp` | M3 / M3-CPP-NAV | **0051:** chrome child only — per-document, on `Navigator.prototype`, native-shaped; window `Navigator.cpp` global-pref hooks removed (`DarkstrNavigatorHooks` kept for `WorkerNavigator`, 0049). No `deviceMemory` / `userAgentData` (Firefox has neither) |
+| `navigator.*` / platform / HW | JSWindowActor child + **C++** `Navigator.cpp` | M3 / M3-CPP-NAV | **0051:** chrome child only — per-document, on `Navigator.prototype`, native-shaped; window `Navigator.cpp` global-pref hooks removed. **0049:** `WorkerNavigator` reads a per-worker persona (`DarkstrNavigatorHooks::PersonaForWorker`, resolved in `WorkerPrivate::Constructor` from the creating document / owning site); no global-pref worker HW. No `deviceMemory` / `userAgentData` (Firefox has neither) |
 | Feature flag | `darkstr.nativePersonaHooks` | M3 | Pref + WebExt MAIN inject gate + chrome plan |
 
 **Headed skim:** avoid `general.useragent.override` contamination — nsHttpHandler falls through to it when darkstr hooks are idle; clear it for CreepJS/BrowserLeaks on fork profiles.
@@ -138,14 +138,14 @@ M4 named **strict-next-nav** (`duppel_persona::strict_next_nav_armed`). Live arm
 | WebGL renderer strings | Same actor — `getParameter(0x9245/0x9246)` + `readPixels` noise | M4→**P3 pin 2** | `DepthSurface::WebGl` + `depth_webgl_gpu`; **live in `0017`** |
 | WebGL cap buckets + OffscreenCanvas | Same actor — persona-family MAX_*/viewport/line/point/anisotropy; `OffscreenCanvas.convertToBlob` + OC2D `getImageData` | M4→**P3 optional `0023`** | Honest subset vs Phase 1 `webgl.js`; **live in `0023`** (ext lists / precision / fail-closed unknown **not** claimed) |
 | Audio fingerprint | Same actor — page-compartment `AudioBuffer.getChannelData` + OfflineAudio `startRendering` | M4→**P3 pin 2** + **0019 v2** | `DepthSurface::{AudioContext, OfflineAudioContext}` + `depth_audio_seed`; **live in `0017`/`0019`**; chrome Xray set FAIL → page `installAudioInPage` |
-| Workers | Dedicated/Shared worker globals | M4→**P3 pin 3** | `DepthSurface::{DedicatedWorker, SharedWorker}`; **live in `0018`** (default-off) |
+| Workers | Dedicated/Shared/Service worker globals | M4→**P3 pin 3**→**0049** | `DepthSurface::{DedicatedWorker, SharedWorker}`; live in `0018` (default-off). **0049:** native C++ per-worker persona + depth prelude; blob constructor wrap retired |
 
 Depth seeds readable only when `pollution_active` (`duppel_bridge::read_depth_seeds`); chrome also requires `darkstr.nativePersonaHooks` (default-off).  
 Enums: `duppel_bridge::m4_depth_surfaces` / `m4_applicator_surfaces`.  
 **Live depth patch:** [`../patches/0017-darkstr-depth-canvas-webgl-audio.patch`](../patches/0017-darkstr-depth-canvas-webgl-audio.patch).  
 **Live worker patch:** [`../patches/0018-darkstr-worker-globals-coherence.patch`](../patches/0018-darkstr-worker-globals-coherence.patch). **Soft residuals:** [`../patches/0019-darkstr-phase3-soft-residuals.patch`](../patches/0019-darkstr-phase3-soft-residuals.patch) (lastInstall runtimeOnly; OfflineAudio content-key; HW best-effort). **DocShell SubsequentNav:** [`../patches/0020-darkstr-docshell-strict-next-nav.patch`](../patches/0020-darkstr-docshell-strict-next-nav.patch). Stub `0004` historical. Status: [`PHASE-3-STATUS.md`](PHASE-3-STATUS.md) · [`M4-STATUS.md`](M4-STATUS.md).
 
-M3 first native wins remain UA/CH + navigator minimum set; Phase 3 pin 2 adds canvas/WebGL/Audio chrome depth; pin 3 adds DedicatedWorker/SharedWorker constructor wrap (persona + OffscreenCanvas/WebGL in worker globals). ServiceWorker/Worklets not claimed.
+M3 first native wins remain UA/CH + navigator minimum set; Phase 3 pin 2 adds canvas/WebGL/Audio chrome depth; pin 3 added a DedicatedWorker/SharedWorker constructor wrap (persona + OffscreenCanvas/WebGL in worker globals); **0049 replaced it** with a native per-worker persona (WorkerPrivate/WorkerNavigator) and a C++-evaluated depth prelude, covering ServiceWorkers too. Worklets not claimed.
 
 ---
 

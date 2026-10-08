@@ -565,8 +565,85 @@ All five 0043 Worker/SharedWorker WebGPU XOR gates passed on Proof tip `cc692641
 ### Not in 0051
 
 - Persona version numbers (139/140 vs 156) and seed persistence — **N6**, open for Alex.
-- Worker persona path (0049): worker `deviceMemory` spoof, worker HW mirror,
-  Shared/Service-worker requests (no browsing context → native headers).
+- Worker persona path — done in 0049 (section below): worker `deviceMemory`
+  spoof, worker HW mirror, Shared/Service-worker requests.
+- Chaff (0050).
+
+## In review — 0049 worker coherence (stacked on 0051)
+
+| | |
+|---|---|
+| Pin | **0049** (Rowan QA B3, B4, B5 + no-seed arming, blob: location, relative importScripts, wrapped constructor) |
+| Branch | `builder/0049-worker-coherence` — **stacked on `builder/0051-persona-surface` @ `7d5bfac`** (PR #80, itself on #79); targets `main` |
+| Patch | [`patches/0049-darkstr-worker-coherence.patch`](../patches/0049-darkstr-worker-coherence.patch) |
+| Apply SoT | [`patches/0049-files/`](../patches/0049-files/) (4 modules + `DarkstrNavigatorHooks.{cpp,h}` + `WorkerNavigator.cpp` + `WorkerPrivate.cpp` + `SHA256SUMS`) |
+| Mini helper | [`scripts/apply-0049-worker-coherence-mini.sh`](../scripts/apply-0049-worker-coherence-mini.sh) (needs 0051 applied; C++ → libxul relink) |
+| Tests | [`tests/worker-coherence-0049.test.mjs`](../tests/worker-coherence-0049.test.mjs) |
+| Defaults | unchanged — hooks default-off (C++ never calls chrome then), strictFirstDoc on |
+| Evidence | `~/AgentDocs/proof/darkstr-0049-workers-20261008/` |
+| Merge | after #79 and #80, and only after Proof PASS |
+
+### Approach — native, no script wrapping
+
+- **One persona per top-level worker, resolved natively.**
+  `WorkerPrivate::Constructor` calls
+  `DarkstrNavigatorHooks::ResolveWorkerPersona` before the WorkerPrivate is
+  built. Only when the content-side gate prefs are on, it notifies
+  `darkstr-worker-persona-resolve` with a property bag (kind, script URL,
+  creating innerWindowId, principal origin, partitionKey). The
+  `DarkstrWorkerPersona` JSProcessActor child answers with a sync message to
+  `DarkstrWorkerHooks` (parent):
+  - **Dedicated** (has a window): the creating document's 0051
+    `documentDecision` — the exact decision its page navigator got (frames →
+    top-level document; first document of a tab → native).
+  - **Shared / Service** (no window): the owning site's decision
+    (`DarkstrNativePersona.workerSiteDecision`, top-level site of the
+    partition): armed when a live top-level document of that site is armed,
+    sticky per site for the current plan; native when the site only has a
+    native first document; no live document → armed unless strictFirstDoc.
+  - **Nested** workers share their parent worker's persona.
+- **WorkerNavigator** serves userAgent / platform / hardwareConcurrency from
+  the per-worker entry (no global `darkstr.persona.*` mirror read any more);
+  languages and timezone ride the stock `WorkerLoadInfo`
+  (`mLanguageOverride`, `mTimezoneOverride`), so `navigator.languages`,
+  `language` and `Intl` timezone match the page. No `deviceMemory`.
+- **No wrapping.** The Phase 3 JSWindowActor that replaced
+  `window.Worker` / `window.SharedWorker` with blob `importScripts` /
+  `import()` wrappers is retired, with its Firefox 135 UA list (incl.
+  "Mac OS X 14.0"), its own seed generator and the worker `deviceMemory`
+  spoof. Module SharedWorkers (B4), SharedWorker sharing (B5), the real
+  `self.location`, relative `importScripts` and the native
+  `Worker` / `SharedWorker` constructors all come back unchanged.
+- **Depth (0043) kept.** The OffscreenCanvas / WebGL / WebGPU prelude,
+  seeded from `DarkstrDepthHooks.depthSeedsForBrowsingContext` of the owning
+  document, is evaluated by C++ in the worker global right before the main
+  script (`CompileScriptRunnable`). It never touches navigator.
+- **Arming:** whenever page hooks are on (pollution && !nativeCompatible &&
+  nativePersonaHooks); no seed pref needed.
+- **Headers:** dedicated-worker requests already use their document's
+  decision (0051). Requests without a browsing context (Shared/Service worker
+  scripts and fetches) now use the same owning-site decision as the worker's
+  navigator (`_windowlessDecisionForChannel`). Content principals only.
+
+### Known gaps (documented, not fixed)
+
+- A worker's persona is fixed when it starts. A Shared/Service worker started
+  while its site only had a native first document keeps a native navigator,
+  while its later requests carry the site persona once the site is armed;
+  a SharedWorker started by an armed page and later joined by another tab's
+  native first document reports the persona to that page. Plan or rotation
+  changes apply to new workers only.
+- A service worker woken with no live document of its site (push, sync,
+  periodic fetch) is native under strictFirstDoc.
+- The windowless path trusts the principal / partitionKey the content
+  process reports (persona strings only; same trust as 0051's install IPC).
+- The 0043 depth prelude is still page-visible JS (toString shows source),
+  as before; Depth itself still needs a seed or snapshot to arm.
+- Worklets: not claimed (no navigator persona fields).
+
+### Not in 0049
+
+- Persona version numbers (139/140 vs 156) and seed persistence — **N6**, open for Alex.
 - Chaff (0050).
 
 ## Completed — 0042 Cookie `/echo` QI soft residual
