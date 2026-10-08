@@ -16,7 +16,7 @@ BR="${ROOT}/browser/branding/darkstr"
 THEMES="${ROOT}/browser/themes"
 echo "DARKSTR_GECKO_ROOT=${ROOT}"
 df -h "${ROOT}" | tail -1 || true
-for f in branding/configure.sh branding/locales/en-US/brand.ftl \
+for f in branding/configure.sh branding/dsstore branding/locales/en-US/brand.ftl \
          branding/locales/en-US/brand.properties branding/locales/en-US/brand.dtd \
          theme/manifest.json theme/manifest.violet.json \
          theme/icon.svg theme/preview.svg \
@@ -36,6 +36,10 @@ cp -f "${OVERLAY}/branding/configure.sh" "${BR}/configure.sh"
 cp -f "${OVERLAY}/branding/locales/en-US/brand.ftl" "${BR}/locales/en-US/brand.ftl"
 cp -f "${OVERLAY}/branding/locales/en-US/brand.properties" "${BR}/locales/en-US/brand.properties"
 cp -f "${OVERLAY}/branding/locales/en-US/brand.dtd" "${BR}/locales/en-US/brand.dtd"
+# DMG Finder layout (.DS_Store): LibreWolf shipped Mozilla's generic dsstore (icon positions keyed
+# to "Firefox Nightly.app"/"Nightly.app"). darkstr's positions darkstr.app at the same spot,
+# Applications alias (" ") unchanged. Background alias/blank background.png unchanged.
+cp -f "${OVERLAY}/branding/dsstore" "${BR}/dsstore"
 # Windows NSIS names only (macOS build ignores branding.nsi).
 sed -i '' -E 's/^(!define (BrandFullNameInternal|BrandFullName|CompanyName)[[:space:]]+)"LibreWolf"/\1"darkstr"/' "${BR}/branding.nsi"
 
@@ -208,6 +212,8 @@ PY
 
 # Assertions
 grep -Fq 'MOZ_APP_DISPLAYNAME=darkstr' "${BR}/configure.sh"
+cmp -s "${OVERLAY}/branding/dsstore" "${BR}/dsstore"
+python3 -c 'import sys; b=open(sys.argv[1],"rb").read(); assert "darkstr.app".encode("utf-16-be") in b and "Nightly.app".encode("utf-16-be") not in b' "${BR}/dsstore"
 grep -Fq 'MOZ_APP_NAME=librewolf' "${BR}/configure.sh"
 grep -Fq 'MOZ_MACBUNDLE_ID=librewolf' "${BR}/configure.sh"
 grep -Fq -- '-brand-short-name = darkstr' "${BR}/locales/en-US/brand.ftl"

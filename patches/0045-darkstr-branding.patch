@@ -36,6 +36,7 @@
 #   browser/branding/darkstr/                       (copy of branding/librewolf)
 #   browser/branding/darkstr/configure.sh
 #   browser/branding/darkstr/branding.nsi           (Windows names only)
+#   browser/branding/darkstr/dsstore                (DMG Finder layout: darkstr.app icon position)
 #   browser/branding/darkstr/locales/en-US/brand.ftl
 #   browser/branding/darkstr/locales/en-US/brand.properties
 #   browser/branding/darkstr/locales/en-US/brand.dtd
@@ -63,5 +64,6 @@
 #   Contents/Resources/fonts, not system-wide. font-family only (size/line-height stock).
 #   Kill switch darkstr.ui.cockpitFonts (default true). IBM/plex @763c36ef.
 # Soft residual: static theme API cannot recolor primary buttons / global focus ring;
-#   macOS native menubar/context menus keep the system font
-#   (system accent); DMG .DS_Store layout (branding/dsstore) still names LibreWolf.app.
+#   (system accent); macOS native menubar/context menus keep the system font.
+#   DMG background alias inside dsstore still points at Mozilla's /Volumes/nightly path
+#   (background.png is a blank 1-bit image, same as LibreWolf; no visible effect).
