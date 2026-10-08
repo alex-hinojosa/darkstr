@@ -327,13 +327,35 @@ webgpuSeed diverge, plainAdapterInfo non-empty / familiesCoherent).
 | — | Approach B load-path retirement (**0041**) | **MERGED** / Proof **PASS** (PR #72 `f961d39`); B runtime load retired; soft historical dylib inert |
 | — | Soft historical `libduppel_ffi.dylib` in dist/bin | Soft / inert (chrome A-only does not load) |
 
-## In progress — 0045 darkstr branding + default theme + Cockpit UI fonts
+## In progress — 0046 jet icon (E) + app icon pipeline
+
+| Field | Value |
+|------|-------|
+| Pin | **0046** (app icon swap only: wolf → icon E, upright stealth-jet outline, Shock Diamond) |
+| Train | LibreWolf **156.0.1-1** (on top of 0045) |
+| Branch | `builder/0046-icon` → PR to `main` |
+| Patch | [`patches/0046-darkstr-icon-pipeline.patch`](../patches/0046-darkstr-icon-pipeline.patch) (pointer) |
+| Sources | [`patches/0046-files/icon-e/`](../patches/0046-files/icon-e/) (1024 master, 1024 heavy small-size art, PM `darkstr.iconset`; SHA-256 list) |
+| Inventory | [`patches/0046-files/ICON-INVENTORY.md`](../patches/0046-files/ICON-INVENTORY.md) |
+| Tool | [`scripts/darkstr-icon-from-png.sh`](../scripts/darkstr-icon-from-png.sh) — now `--small <png>` (16/32 icns slots + default PNGs up to `--small-upto`), `--iconset <dir>` (PM iconset verbatim for firefox.icns), `--doc`, `--disk`, `--install` (backs up originals) |
+| Installed | `firefox.icns` = PM iconset (16/32 heavy, 128+ regular); `document.icns`/`disk.icns` = master with heavy 16/32; `default16/32` = PM iconset slots, `default22/24/48` heavy, `default64/128/256` + `about-logo*` regular |
+| DMG | `<objdir>/dist/darkstr-156.0.1.en-US.mac.dmg`, copy `~/AgentDocs/builds/darkstr-0046-45dfe1d8.dmg`; **99,229,127 B**; SHA-256 `45dfe1d8f53116cd0b8acb5a08719b4db0d8e29c76da6195713c41696260d11a`. No stale `LibreWolf * Helper` |
+| vs 0045 DMG | app files differing: `firefox.icns`, `document.icns`, browser `omni.ja` (only `chrome/browser/content/branding/icon{16,32,48,64,128}.png` + `about-logo*.png`), plus BuildID-only changes (`application.ini`, `platform.ini`, `AppConstants`, 77 bytes in the binary); volume icon jet; `.DS_Store` = 0045 |
+| Icon check | `iconutil -c iconset` round-trip of the DMG app's `firefox.icns`: 10 slots, pixel-identical to the PM iconset; Dock shows the jet (macOS 26 draws it inside the system squircle frame) |
+| Web | `chrome://branding/content/about-logo.png` + `aboutDialog.css` and `chrome://darkstr-ui` (CSS/FontFace/fetch) **blocked** from pages; positive controls load; no brand strings |
+| Persona | UA `Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:156.0) Gecko/20100101 Firefox/156.0` and all navigator fields identical to 0045 in both modes |
+| Geometry | fresh profile, real window, start about:home → site: Homogeneous page **1600×900**, outer−inner **0**; Pollution **113** (1280×1040, inner 927), bookmarks bar `always` — identical to 0045/latch |
+| Untouched | `DarkstrModeXor.sys.mjs` (source = pre-0046 backup = DMG omni copy); `librewolf.cfg` (bookmarks `always`) |
+| Evidence | `~/AgentDocs/proof/darkstr-0046-20261008/` (`i-dmg-{homog,poll}*`, `icon-e-from-dmg/firefox-icns-{16,32,128,512}.png`, `icon-e-from-dmg/preview-16-32-128.png`, `icon-e-dock-crop.png`, `diff-0045-vs-0046-*.txt`) |
+| 0045 DMG | preserved `~/AgentDocs/builds/darkstr-0045-1712df51.dmg` (SHA-256 `1712df51…d334`, 99,596,905 B) |
+
+## Completed — 0045 darkstr branding + default theme + Cockpit UI fonts
 
 | Field | Value |
 |------|-------|
 | Pin | **0045** (rename LibreWolf → darkstr; chrome/branding only) |
 | Train | LibreWolf **156.0.1-1** |
-| Branch | `builder/branding-0045` (PR → `main` open for review; **not merged**) |
+| Branch | `builder/branding-0045` — merged via PR #76 (`515a4dbe`) after Proof PASS |
 | Patch | [`patches/0045-darkstr-branding.patch`](../patches/0045-darkstr-branding.patch) (pointer; SoT apply) |
 | Apply SoT | [`patches/0045-files/`](../patches/0045-files/) |
 | Mini helper | [`scripts/apply-0045-branding-mini.sh`](../scripts/apply-0045-branding-mini.sh) / [`PHASE-5-BRANDING-0045-MINI-APPLY.sh`](PHASE-5-BRANDING-0045-MINI-APPLY.sh) |
@@ -346,7 +368,7 @@ webgpuSeed diverge, plainAdapterInfo non-empty / familiesCoherent).
 | First-run prompt | **Not in native build** (only Phase-1 WebExtension `extension/first-run.html`, not bundled). Not built. |
 | Evidence | `~/AgentDocs/proof/darkstr-branding-0045-20261007/` |
 | Latch DMG | preserved `~/AgentDocs/builds/darkstr-latch-0615574e.dmg` (SHA-256 `0615574e…0f1c`) |
-| DMG | `<objdir>/dist/darkstr-156.0.1.en-US.mac.dmg` (Mini, objdir `obj-aarch64-apple-darwin25.6.0`), 99,596,980 B, SHA-256 `1712df5160323fe04f43e2f908e6aeb77878897f0ab9ef5ec1c0adde183cd334`. Volume `darkstr`: `darkstr.app` + Applications alias (`.DS_Store` from `branding/dsstore`, darkstr.app icon position). No stale `LibreWolf * Helper` executables |
+| DMG | `<objdir>/dist/darkstr-156.0.1.en-US.mac.dmg` (Mini, objdir `obj-aarch64-apple-darwin25.6.0`), 99,596,905 B, SHA-256 `1712df5160323fe04f43e2f908e6aeb77878897f0ab9ef5ec1c0adde183cd334`. Volume `darkstr`: `darkstr.app` + Applications alias (`.DS_Store` from `branding/dsstore`, darkstr.app icon position). No stale `LibreWolf * Helper` executables |
 | DMG smoke | App copied from DMG to a temp dir (not /Applications), fresh profile: brand/appinfo darkstr, Shock Diamond active, Cockpit fonts loaded (chrome only), About copy exact + librewolf.net link, 0044 pane present, UA `Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:156.0) Gecko/20100101 Firefox/156.0` (= latch), navigator fields = latch, fonts not web-reachable, prefers-color-scheme follows system |
 | macOS names | `CFBundleName`=darkstr, no `CFBundleDisplayName` (same as latch), `CFBundleExecutable`=librewolf, bundle `darkstr.app`; LaunchServices/Dock/Force Quit/menu bar = darkstr; child processes `darkstrCP …`, `darkstr GPU Helper`; BSD process name (ps/top/pkill) `librewolf`. App icon artwork still the LibreWolf wolf |
 | Signing | Same as latch: app ad-hoc linker-signed (Identifier `librewolf`, no Team ID, not notarized), DMG unsigned; `spctl` rejects both identically |
