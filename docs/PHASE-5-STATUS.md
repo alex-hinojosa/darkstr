@@ -327,21 +327,26 @@ webgpuSeed diverge, plainAdapterInfo non-empty / familiesCoherent).
 | — | Approach B load-path retirement (**0041**) | **MERGED** / Proof **PASS** (PR #72 `f961d39`); B runtime load retired; soft historical dylib inert |
 | — | Soft historical `libduppel_ffi.dylib` in dist/bin | Soft / inert (chrome A-only does not load) |
 
-## In progress — 0046 darkstr app icon pipeline (prep; waiting for PM PNG)
+## In progress — 0046 jet icon (E) + app icon pipeline
 
 | Field | Value |
 |------|-------|
-| Pin | **0046** (icon pipeline only; no Gecko tree change until `--install`) |
+| Pin | **0046** (app icon swap only: wolf → icon E, upright stealth-jet outline, Shock Diamond) |
 | Train | LibreWolf **156.0.1-1** (on top of 0045) |
-| Branch | `builder/0046-icon` (no PR yet) |
+| Branch | `builder/0046-icon` → PR to `main` |
 | Patch | [`patches/0046-darkstr-icon-pipeline.patch`](../patches/0046-darkstr-icon-pipeline.patch) (pointer) |
+| Sources | [`patches/0046-files/icon-e/`](../patches/0046-files/icon-e/) (1024 master, 1024 heavy small-size art, PM `darkstr.iconset`; SHA-256 list) |
 | Inventory | [`patches/0046-files/ICON-INVENTORY.md`](../patches/0046-files/ICON-INVENTORY.md) |
-| Tool | [`scripts/darkstr-icon-from-png.sh`](../scripts/darkstr-icon-from-png.sh): 1024×1024 PNG → `firefox.icns`, `document.icns`, `disk.icns` (iconutil, full 16–512 @1x/@2x), `default16…256.png`, `content/about-logo{,-private}{,@2x}.png`; validates size/format, SHA256SUMS; `--install` backs up originals then copies into `browser/branding/darkstr` |
-| Tested | generation + size checks on a 1024 test image; `--install` exercised only against a copy of the branding dir (`DARKSTR_BRANDING_DIR`) — real tree still has the wolf |
-| Bookmarks bar | PM withdrew the `newtab` request: stays LibreWolf `defaultPref(..., "always")` in both modes; `DarkstrModeXor` untouched. Re-verified on staged app (fresh profile, real window, start on about:home → site): Homogeneous page sees **1600×900**, outerH−innerH **0**; Pollution **113** (1280×1040, inner 927) — identical to latch; UA/navigator identical |
-| Build | tree back to 0045 state for that pref/ModeXor; incremental `./mach build` + `stage-package` OK (25.6.0 objdir). **Not packaged** (waiting for PM icon) |
-| Next | PM PNG → `scripts/darkstr-icon-from-png.sh <png> --install` → build → stage → web reach re-check → `./mach package` |
-| Evidence | `~/AgentDocs/proof/darkstr-0046-20261008/` (`r-new-{homog,poll}` vs `f-latch-{homog,poll}`) |
+| Tool | [`scripts/darkstr-icon-from-png.sh`](../scripts/darkstr-icon-from-png.sh) — now `--small <png>` (16/32 icns slots + default PNGs up to `--small-upto`), `--iconset <dir>` (PM iconset verbatim for firefox.icns), `--doc`, `--disk`, `--install` (backs up originals) |
+| Installed | `firefox.icns` = PM iconset (16/32 heavy, 128+ regular); `document.icns`/`disk.icns` = master with heavy 16/32; `default16/32` = PM iconset slots, `default22/24/48` heavy, `default64/128/256` + `about-logo*` regular |
+| DMG | `<objdir>/dist/darkstr-156.0.1.en-US.mac.dmg`, copy `~/AgentDocs/builds/darkstr-0046-45dfe1d8.dmg`; **99,229,127 B**; SHA-256 `45dfe1d8f53116cd0b8acb5a08719b4db0d8e29c76da6195713c41696260d11a`. No stale `LibreWolf * Helper` |
+| vs 0045 DMG | app files differing: `firefox.icns`, `document.icns`, browser `omni.ja` (only `chrome/browser/content/branding/icon{16,32,48,64,128}.png` + `about-logo*.png`), plus BuildID-only changes (`application.ini`, `platform.ini`, `AppConstants`, 77 bytes in the binary); volume icon jet; `.DS_Store` = 0045 |
+| Icon check | `iconutil -c iconset` round-trip of the DMG app's `firefox.icns`: 10 slots, pixel-identical to the PM iconset; Dock shows the jet (macOS 26 draws it inside the system squircle frame) |
+| Web | `chrome://branding/content/about-logo.png` + `aboutDialog.css` and `chrome://darkstr-ui` (CSS/FontFace/fetch) **blocked** from pages; positive controls load; no brand strings |
+| Persona | UA `Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:156.0) Gecko/20100101 Firefox/156.0` and all navigator fields identical to 0045 in both modes |
+| Geometry | fresh profile, real window, start about:home → site: Homogeneous page **1600×900**, outer−inner **0**; Pollution **113** (1280×1040, inner 927), bookmarks bar `always` — identical to 0045/latch |
+| Untouched | `DarkstrModeXor.sys.mjs` (source = pre-0046 backup = DMG omni copy); `librewolf.cfg` (bookmarks `always`) |
+| Evidence | `~/AgentDocs/proof/darkstr-0046-20261008/` (`i-dmg-{homog,poll}*`, `icon-e-from-dmg/firefox-icns-{16,32,128,512}.png`, `icon-e-from-dmg/preview-16-32-128.png`, `icon-e-dock-crop.png`, `diff-0045-vs-0046-*.txt`) |
 | 0045 DMG | preserved `~/AgentDocs/builds/darkstr-0045-1712df51.dmg` (SHA-256 `1712df51…d334`, 99,596,905 B) |
 
 ## Completed — 0045 darkstr branding + default theme + Cockpit UI fonts

@@ -1,10 +1,12 @@
-# darkstr pin 0046 — app icon pipeline (prep only; no Gecko tree change yet)
+# darkstr pin 0046 — jet icon (E) + app icon pipeline
 # Train: LibreWolf 156.0.1-1. Requires pin 0045 (browser/branding/darkstr).
-# Tool: scripts/darkstr-icon-from-png.sh <icon-1024.png> [OUT_DIR] [--install] [--doc png] [--disk png]
+# Tool: scripts/darkstr-icon-from-png.sh <icon-1024.png> [OUT_DIR] [--install] [--small png] [--small-upto px]
+#   [--iconset dir] [--doc png] [--disk png]
 # Inventory: patches/0046-files/ICON-INVENTORY.md
-# State: LibreWolf wolf art still in browser/branding/darkstr (byte-identical to
-#   browser/branding/librewolf). The PM 1024 PNG lands later; then --install, build, stage,
-#   ./mach package (one DMG for icon + any queued changes).
+# State: icon E (upright stealth-jet outline, Shock Diamond) installed from patches/0046-files/icon-e
+#   (master + heavy small-size art + PM iconset) via:
+#   scripts/darkstr-icon-from-png.sh icon-e/icon-e-jet-outline.png <OUT> --small icon-e/icon-e-jet-outline-heavy.png \
+#     --small-upto 48 --iconset icon-e/darkstr.iconset --install
 #
 # --install replaces (originals backed up to OUT_DIR/replaced-originals/):
 #   browser/branding/darkstr/firefox.icns   (CFBundleIconFile: Dock/Finder/Cmd-Tab)
@@ -14,7 +16,7 @@
 #     (16..128 also chrome://branding/content/iconNN.png)
 #   browser/branding/darkstr/content/about-logo{,-private}{,@2x}.png (About, about:home/newtab,
 #     private browsing page)
-# Web check after --install: chrome://branding/content is contentaccessible=yes; re-run the 0045
-#   reach probe and confirm pages still cannot load chrome://branding/content/* (0045: blocked).
+# Web check: chrome://branding/content is contentaccessible=yes; 0046 DMG reach probe: pages still
+#   cannot load chrome://branding/content/* or chrome://darkstr-ui (blocked; positive controls load).
 # No pref, persona, engine or fingerprinting change. Bookmarks toolbar stays LibreWolf "always"
 #   (the 0046 bookmarks-newtab draft was withdrawn by PM and removed from this pin).
