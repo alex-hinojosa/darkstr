@@ -327,6 +327,27 @@ webgpuSeed diverge, plainAdapterInfo non-empty / familiesCoherent).
 | — | Approach B load-path retirement (**0041**) | **MERGED** / Proof **PASS** (PR #72 `f961d39`); B runtime load retired; soft historical dylib inert |
 | — | Soft historical `libduppel_ffi.dylib` in dist/bin | Soft / inert (chrome A-only does not load) |
 
+## In progress — 0045 darkstr branding + default theme + Cockpit UI fonts
+
+| Field | Value |
+|------|-------|
+| Pin | **0045** (rename LibreWolf → darkstr; chrome/branding only) |
+| Train | LibreWolf **156.0.1-1** |
+| Branch | `builder/branding-0045` (PR not opened) |
+| Patch | [`patches/0045-darkstr-branding.patch`](../patches/0045-darkstr-branding.patch) (pointer; SoT apply) |
+| Apply SoT | [`patches/0045-files/`](../patches/0045-files/) |
+| Mini helper | [`scripts/apply-0045-branding-mini.sh`](../scripts/apply-0045-branding-mini.sh) / [`PHASE-5-BRANDING-0045-MINI-APPLY.sh`](PHASE-5-BRANDING-0045-MINI-APPLY.sh) |
+| Branding | `--with-branding=browser/branding/darkstr`; `MOZ_APP_DISPLAYNAME`/`MOZ_APP_BASENAME`=darkstr → `darkstr.app`, appinfo.name, brand.ftl/.properties/.dtd; `MOZ_PKG_APPNAME=darkstr` → `darkstr-156.0.1.en-US.mac.dmg` |
+| Kept | `MOZ_APP_NAME=librewolf` (internal binary), `MOZ_APP_UA_NAME=Firefox`, bundle id `org.mozilla.librewolf` (global define → full rebuild), `MOZ_APP_PROFILE=librewolf` |
+| Web persona | UA/navigator identical to latch `0615574e` (RFP and Pollution); no darkstr/LibreWolf in web-visible strings |
+| Theme | builtin static `darkstr-theme@darkstr`, Shock Diamond default (violet alt), flat colors, `content_color_scheme=system`; top separator transparent (stock height) |
+| Fonts | IBM Plex Sans Condensed (tabs/menus/panels) + IBM Plex Mono (URL bar) via non-contentaccessible `chrome://darkstr-ui`; kill switch `darkstr.ui.cockpitFonts` |
+| Geometry | windowed Pollution: outerH−innerH **113** / outerW−innerW **0** — fonts on = fonts off = stock theme = latch |
+| First-run prompt | **Not in native build** (only Phase-1 WebExtension `extension/first-run.html`, not bundled). Not built. |
+| Evidence | `~/AgentDocs/proof/darkstr-branding-0045-20261007/` |
+| Latch DMG | preserved `~/AgentDocs/builds/darkstr-latch-0615574e.dmg` (SHA-256 `0615574e…0f1c`) |
+| DMG | **not packaged** (stage-package only) |
+
 ## Completed — 0044 native about:preferences pane
 
 | Field | Value |
