@@ -1,0 +1,67 @@
+# darkstr pin 0045 — branding LibreWolf -> darkstr + default darkstr dark theme + About copy
+# Train: LibreWolf 156.0.1-1. Brand: darkstr — built on LibreWolf, not official LibreWolf.
+# Product: user-visible name "darkstr" (lowercase): darkstr.app, appinfo.name, brand.ftl/
+#   .properties/.dtd, About wordmark + copy. Default builtin static theme
+#   darkstr-theme@darkstr (chrome only). Websites keep a coherent Firefox persona.
+# Apply SoT: patches/0045-files via scripts/apply-0045-branding-mini.sh
+# Marker: BEGIN darkstr-0045-branding / about-darkstr / darkstr-theme@darkstr
+# Branding/chrome only — no persona/engine/fingerprinting change. Not anti-detect.
+#
+# Web persona guard (unchanged, verified vs latch DMG 0615574e):
+#   UA comes from MOZ_APP_UA_NAME=Firefox (LibreWolf toolkit/moz.configure default), not
+#   MOZ_APP_BASENAME/MOZ_APP_NAME. navigator.appName/appCodeName/product/vendor are
+#   hardcoded in dom/base/Navigator.cpp. MOZ_APP_NAME stays "librewolf" (internal binary,
+#   Contents/MacOS/librewolf, dist/librewolf stage dir). chrome://branding/content
+#   (contentaccessible=yes) is kept byte-identical to LibreWolf's.
+# Kept on purpose:
+#   MOZ_MACBUNDLE_ID=librewolf -> org.mozilla.librewolf (set_define in mozilla-config.h;
+#     changing it = full C++ rebuild + macOS TCC/defaults reset). Follow-up pin if wanted.
+#   MOZ_APP_PROFILE=librewolf -> profile root ~/Library/Application Support/librewolf.
+#   MOZ_APP_REMOTINGNAME (mozconfig exports LibreWolf).
+# Profile note: same profile root, but the install path changes (LibreWolf.app ->
+#   darkstr.app), so the dedicated-profile install hash changes: an existing install
+#   gets a new default profile on first darkstr launch (old one stays in profiles.ini).
+# Theme: ALL colors in one file (static theme manifest); flat colors only — no images,
+#   no tab/toolbar shape/size changes (window outer-vs-inner size stays stock Firefox).
+#   Default palette Shock Diamond (#0E0F14 frame/#14151C toolbar/#1C1E28 tab+fields+popup/
+#   #2A2D3C borders/#E8E9F0 text/#C5C7D4 icons/#8B8EA0 inactive/#9AAEFF accent on #0B1030).
+#   Non-default alternative: violet (#15161A/#22242A/#2E3037/#E8E9EC/#9A9DA6/#8B7CF6).
+#   toolbar_top_separator=transparent keeps stock height (any lwtheme otherwise adds a 1px
+#   tabs/nav-bar border: measured outerH-innerH 114 vs stock 113).
+# Theme note: content_color_scheme=system; layout.css.prefers-color-scheme.content-override=2
+#   (156 has 0 dark / 1 light / 2 theme-derived; no 3). RFP (Homogeneous) still forces
+#   prefers-color-scheme: light for sites — stock LibreWolf, untouched.
+#
+# Files installed by the apply script:
+#   browser/branding/darkstr/                       (copy of branding/librewolf)
+#   browser/branding/darkstr/configure.sh
+#   browser/branding/darkstr/branding.nsi           (Windows names only)
+#   browser/branding/darkstr/locales/en-US/brand.ftl
+#   browser/branding/darkstr/locales/en-US/brand.properties
+#   browser/branding/darkstr/locales/en-US/brand.dtd
+#   browser/themes/addons/darkstr/manifest.json     (from theme/manifest.json = Shock Diamond, or
+#       theme/manifest.violet.json with DARKSTR_THEME_PALETTE=violet)
+#   browser/themes/addons/darkstr/icon.svg
+#   browser/themes/addons/darkstr/preview.svg
+#   browser/themes/addons/darkstr-ui/darkstr-cockpit-fonts.css
+#   browser/themes/addons/darkstr-ui/fonts/IBMPlexSansCondensed-Regular.woff2  (IBM/plex, OFL 1.1)
+#   browser/themes/addons/darkstr-ui/fonts/IBMPlexMono-Regular.woff2           (IBM/plex, OFL 1.1)
+#   browser/themes/addons/darkstr-ui/fonts/LICENSE-IBM-Plex-OFL.txt
+#   browser/themes/addons/jar.mn                    (theme files + chrome://darkstr-ui package)
+#   browser/themes/shared/browser-shared.css        (@import darkstr-cockpit-fonts.css)
+#   browser/themes/BuiltInThemeConfig.sys.mjs
+#   toolkit/mozapps/extensions/internal/XPIInstall.sys.mjs (first-run theme race: treat
+#       darkstr-theme@darkstr like a @mozilla.org builtin so default-theme can't win)
+#   browser/base/content/aboutDialog.xhtml
+#   browser/locales/en-US/browser/aboutDialog.ftl
+#   mozconfig + lw/mozconfig.new                    (--with-branding, MOZ_PKG_APPNAME=darkstr)
+#   lw/librewolf.cfg                                (activeThemeID + color-scheme defaults)
+#   lw/policies.json                                (blocked_install_message brand)
+#
+# Cockpit UI fonts: chrome://darkstr-ui (NOT contentaccessible; chrome://browser and
+#   chrome://branding ARE, so fonts must not live there), private family names, not in
+#   Contents/Resources/fonts, not system-wide. font-family only (size/line-height stock).
+#   Kill switch darkstr.ui.cockpitFonts (default true). IBM/plex @763c36ef.
+# Soft residual: static theme API cannot recolor primary buttons / global focus ring;
+#   macOS native menubar/context menus keep the system font
+#   (system accent); DMG .DS_Store layout (branding/dsstore) still names LibreWolf.app.

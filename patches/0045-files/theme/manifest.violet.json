@@ -1,0 +1,57 @@
+{
+  "manifest_version": 2,
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "darkstr-theme@darkstr"
+    }
+  },
+  "name": "darkstr",
+  "description": "darkstr dark theme — violet palette (non-default alternative). Flat colors only (no images, no tab/toolbar size changes). Chrome only: websites keep following the system color scheme.",
+  "author": "darkstr",
+  "version": "1.0.0",
+  "icons": {
+    "32": "icon.svg"
+  },
+  "theme": {
+    "properties": {
+      "color_scheme": "dark",
+      "content_color_scheme": "system"
+    },
+    "colors": {
+      "frame": "#15161A",
+      "frame_inactive": "#15161A",
+      "toolbar": "#15161A",
+      "sidebar": "#15161A",
+      "tab_selected": "#22242A",
+      "toolbar_field": "#22242A",
+      "toolbar_field_focus": "#22242A",
+      "popup": "#22242A",
+      "toolbar_field_border": "#2E3037",
+      "toolbar_top_separator": "transparent",
+      "toolbar_bottom_separator": "#2E3037",
+      "toolbar_vertical_separator": "#2E3037",
+      "toolbar_field_separator": "#2E3037",
+      "tab_background_separator": "#2E3037",
+      "popup_border": "#2E3037",
+      "sidebar_border": "#2E3037",
+      "popup_highlight": "#2E3037",
+      "sidebar_highlight": "#2E3037",
+      "toolbar_text": "#E8E9EC",
+      "tab_text": "#E8E9EC",
+      "toolbar_field_text": "#E8E9EC",
+      "toolbar_field_text_focus": "#E8E9EC",
+      "popup_text": "#E8E9EC",
+      "popup_highlight_text": "#E8E9EC",
+      "sidebar_text": "#E8E9EC",
+      "sidebar_highlight_text": "#E8E9EC",
+      "tab_background_text": "#9A9DA6",
+      "icons": "#9A9DA6",
+      "tab_line": "#8B7CF6",
+      "toolbar_field_border_focus": "#8B7CF6",
+      "icons_attention": "#8B7CF6",
+      "tab_loading": "#8B7CF6",
+      "toolbar_field_highlight": "#8B7CF6",
+      "toolbar_field_highlight_text": "#15161A"
+    }
+  }
+}

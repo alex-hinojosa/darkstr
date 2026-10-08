@@ -1,0 +1,16 @@
+// BEGIN darkstr-0045-branding
+// darkstr default dark theme — chrome only (builtin static theme darkstr-theme@darkstr).
+// Websites follow the macOS appearance, never the darkstr theme: the theme declares
+// content_color_scheme=system -> browser.theme.content-theme=2 (system), and
+// content-override=2 means "use the theme's content scheme" (Firefox 156 values:
+// 0 dark / 1 light / 2 theme-derived; there is no value 3). unified-color-scheme=false
+// keeps content from inheriting the dark toolbar scheme.
+// RFP (Homogeneous default) still reports prefers-color-scheme: light to sites —
+// stock LibreWolf behaviour, intentionally untouched (no fingerprinting change).
+defaultPref("extensions.activeThemeID", "darkstr-theme@darkstr");
+defaultPref("browser.theme.unified-color-scheme", false);
+defaultPref("layout.css.prefers-color-scheme.content-override", 2);
+// Cockpit UI fonts (IBM Plex, chrome-only chrome://darkstr-ui package; not web-reachable).
+// false = stock UI fonts. Geometry identical either way (Proof measures outer-inner).
+defaultPref("darkstr.ui.cockpitFonts", true);
+// END darkstr-0045-branding

@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="680" height="92" viewBox="0 0 680 92">
+  <!-- darkstr theme preview (pin 0045): frame/toolbar, selected tab, URL field, accent line. -->
+  <rect width="680" height="92" fill="#0E0F14"/>
+  <rect x="8" y="6" width="180" height="34" rx="4" fill="#1C1E28"/>
+  <rect x="8" y="6" width="180" height="2" fill="#9AAEFF"/>
+  <rect x="20" y="20" width="110" height="6" rx="3" fill="#E8E9F0"/>
+  <rect x="204" y="20" width="110" height="6" rx="3" fill="#8B8EA0"/>
+  <rect x="0" y="46" width="680" height="1" fill="#2A2D3C"/>
+  <rect x="60" y="54" width="560" height="30" rx="4" fill="#1C1E28" stroke="#2A2D3C"/>
+  <rect x="78" y="66" width="200" height="6" rx="3" fill="#E8E9F0"/>
+  <circle cx="30" cy="69" r="7" fill="#8B8EA0"/>
+  <circle cx="650" cy="69" r="7" fill="#8B8EA0"/>
+</svg>
