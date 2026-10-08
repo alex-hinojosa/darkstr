@@ -327,7 +327,24 @@ webgpuSeed diverge, plainAdapterInfo non-empty / familiesCoherent).
 | — | Approach B load-path retirement (**0041**) | **MERGED** / Proof **PASS** (PR #72 `f961d39`); B runtime load retired; soft historical dylib inert |
 | — | Soft historical `libduppel_ffi.dylib` in dist/bin | Soft / inert (chrome A-only does not load) |
 
-## In progress — 0046 jet icon (E) + app icon pipeline
+## In progress — 0047 darkstr start page + full-bleed Dock icon
+
+| | |
+|---|---|
+| Pin | **0047** (start page LibreWolf → darkstr branding; Dock icon gray-plate fix) |
+| Branch | `builder/0047-startpage` (from `main` 48ff688) → PR to `main` |
+| Patch | [`patches/0047-darkstr-startpage-dockicon.patch`](../patches/0047-darkstr-startpage-dockicon.patch) (text diffs + header) + binaries in [`patches/0047-files/`](../patches/0047-files/); apply [`scripts/apply-0047-startpage-dockicon-mini.sh`](../scripts/apply-0047-startpage-dockicon-mini.sh) |
+| LibreWolf on start page (before) | about:home (default homepage + new window) and about:newtab, both modes: "LibreWolf" wordmark = `chrome://branding/content/firefox-wordmark.svg` next to the 0046 jet tile (`about-logo.png`). Private window about:privatebrowsing: same wordmark + `about-logo-private.png`. No "LibreWolf" text in page DOM. about:welcome → about:home. Homepage `about:home` (not LibreWolf-branded) kept |
+| After | PM jet mark (outline, #9AAEFF, no tile) + lowercase `darkstr` wordmark (#E8E9F0 dark / #1C1E28 light), in the existing newtab row (mark left, wordmark right: stacking would need a web-accessible activity-stream CSS change) |
+| Mechanism | branding-package files only: `content/firefox-wordmark.svg`, `content/about-logo{,-private}{,@2x}.png`. No activity-stream CSS/HTML/strings touched; `chrome://branding/content/*` blocked to pages (img + fetch) |
+| Dock | `firefox.icns` = PM full-bleed iconset (heavy 16/32) **plus** `Assets.car` (actool, Icon Composer-style `AppIcon.icon`) + `CFBundleIconName=AppIcon` (`browser/app/moz.build`, `Info.plist.in`, `package-manifest.in`). The .icns alone is still plated on macOS 27.0.1; Assets.car removes the plate |
+| Inventory | [`patches/0047-files/ICON-INVENTORY.md`](../patches/0047-files/ICON-INVENTORY.md) |
+| DMG | `~/AgentDocs/builds/darkstr-0047-85eb9bc3.dmg`; **100,388,409 B**; SHA-256 `85eb9bc3f7c889a68542001103181f3f86f2dcae7898adcbe31f69c3921e6731` (`darkstr-0047-9dc12e4d.dmg` = icns-only intermediate, superseded). App diff vs 0046: 5 branding files in browser omni, `Assets.car`, `Info.plist` (+CFBundleIconName), build IDs. No stale LibreWolf helpers |
+| Smoke | fresh profiles, both modes: no LibreWolf on start/new tab/private page; UA/navigator/headers = 0046; brandHits none; Homogeneous 1600×900 (outer−inner 0); Pollution 113, bookmarks `always`; Dock icon no gray plate |
+| Untouched | `DarkstrModeXor.sys.mjs`, `librewolf.cfg`, prefs, search engines, fingerprinting code |
+| Evidence | `~/AgentDocs/proof/darkstr-0047-20261008/` (`shots/before-*`, `shots/after-*`, `shots/final-*`, `f-0047-{homog,poll}*`, `dock-full-final.png`, `nsicon-*.png`, `tmp/iconexp/`) |
+
+## Completed — 0046 jet icon (E) + app icon pipeline
 
 | Field | Value |
 |------|-------|

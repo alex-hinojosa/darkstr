@@ -1,5 +1,7 @@
 # darkstr branding icon inventory (browser/branding/darkstr) — icon E (stealth-jet outline)
 
+> **Superseded in part by pin 0047** — `firefox.icns`, new `Assets.car`, `content/about-logo*`, `content/firefox-wordmark.svg`: see [`../0047-files/ICON-INVENTORY.md`](../0047-files/ICON-INVENTORY.md).
+
 Installed with:
 
     scripts/darkstr-icon-from-png.sh patches/0046-files/icon-e/icon-e-jet-outline.png <OUT> \
