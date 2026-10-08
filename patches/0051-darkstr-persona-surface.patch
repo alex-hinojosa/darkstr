@@ -1,0 +1,2080 @@
+diff -ruN a51/browser/components/DarkstrCookieFirewallChild.sys.mjs b51/browser/components/DarkstrCookieFirewallChild.sys.mjs
+--- a51/browser/components/DarkstrCookieFirewallChild.sys.mjs	2026-10-08 17:54:14.350204862 -0500
++++ b51/browser/components/DarkstrCookieFirewallChild.sys.mjs	2026-10-08 17:54:14.350204862 -0500
+@@ -24,6 +24,14 @@
+  *
+  * Idle / passthrough / allowlist / non-http(s) principal → uninstall (real
+  * jar behavior), no IPC.
++ *
++ * 0051 (Rowan N4): hooks live where the native members live — the `cookie`
++ * accessor on Document.prototype (found through the document's prototype
++ * chain) and get/getAll/set/delete on CookieStore.prototype — never as own
++ * properties of document / cookieStore. The replacement keeps the native
++ * name, length, attributes and [native code] toString; `this` picks the
++ * sandboxed record, any other receiver is forwarded to the original native
++ * member. Prototypes are restored once no document of that window is hooked.
+  */
+ 
+ const lazy = {};
+@@ -54,6 +62,17 @@
+   }
+ }
+ 
++function unwaive(obj) {
++  if (obj === null || (typeof obj !== "object" && typeof obj !== "function")) {
++    return obj;
++  }
++  try {
++    return Cu.unwaiveXrays(obj);
++  } catch (_e) {
++    return obj;
++  }
++}
++
+ function waive(obj) {
+   try {
+     const w = Cu.waiveXrays(obj);
+@@ -78,16 +97,6 @@
+   }
+ }
+ 
+-function restoreDescriptor(target, name, descriptor) {
+-  try {
+-    if (descriptor) {
+-      Object.defineProperty(target, name, descriptor);
+-    } else {
+-      delete target[name];
+-    }
+-  } catch (_e) {}
+-}
+-
+ function baseOfHost(host) {
+   const Core = lazy.DarkstrCookieCore;
+   const h = Core.normalizeHost(host);
+@@ -256,25 +265,204 @@
+   return { name, raw: parts.join("; ") };
+ }
+ 
++/** unwaived prototype → { originals: Map(name → descriptor), users: Set } */
++const protoHooks = new WeakMap();
++/** unwaived cookieStore → install record (prototype-level dispatch). */
++const recordByStore = new WeakMap();
++
++/** Native-like `length` on an exported function (exportFunction gives 0). */
++function setLength(fn, length) {
++  try {
++    Object.defineProperty(waive(fn), "length", {
++      value: length,
++      writable: false,
++      enumerable: false,
++      configurable: true,
++    });
++  } catch (_e) {}
++  return fn;
++}
++
++/** Object on `obj`'s prototype chain that owns `name` (never `obj` itself). */
++function protoOwning(obj, name) {
++  let proto = Object.getPrototypeOf(obj);
++  while (proto) {
++    if (Object.getOwnPropertyDescriptor(proto, name)) {
++      return proto;
++    }
++    proto = Object.getPrototypeOf(proto);
++  }
++  return null;
++}
++
++/**
++ * Replace `names` on `proto` (once per prototype) with descriptors from
++ * makeDescriptor(name, originalDescriptor); register `user`.
++ */
++function hookProto(proto, names, user, makeDescriptor) {
++  const key = unwaive(proto);
++  let state = protoHooks.get(key);
++  if (!state) {
++    state = { proto, originals: new Map(), users: new Set() };
++    for (const name of names) {
++      const desc = Object.getOwnPropertyDescriptor(proto, name);
++      if (!desc || !desc.configurable) {
++        continue;
++      }
++      Object.defineProperty(proto, name, makeDescriptor(name, desc));
++      state.originals.set(name, desc);
++    }
++    protoHooks.set(key, state);
++  }
++  state.users.add(unwaive(user));
++  return state;
++}
++
++function unhookProto(proto, user) {
++  const key = unwaive(proto);
++  const state = protoHooks.get(key);
++  if (!state) {
++    return;
++  }
++  state.users.delete(unwaive(user));
++  if (state.users.size) {
++    return;
++  }
++  for (const [name, desc] of state.originals) {
++    try {
++      Object.defineProperty(state.proto, name, desc);
++    } catch (_e) {}
++  }
++  protoHooks.delete(key);
++}
++
+ export function uninstallCookieHooks(document) {
+-  const record = installedByDocument.get(document);
++  const record = installedByDocument.get(unwaive(document));
+   if (!record) {
+     return "idle";
+   }
++  installedByDocument.delete(unwaive(document));
+   try {
+-    if (record.docCookie) {
+-      restoreDescriptor(record.docCookie.target, "cookie", record.docCookie.original);
++    if (record.docProto) {
++      unhookProto(record.docProto, record.docKey);
+     }
+   } catch (_e) {}
+   try {
+-    for (const h of record.storeHooks || []) {
+-      restoreDescriptor(record.cookieStore, h.name, h.original);
++    if (record.cookieStore) {
++      recordByStore.delete(unwaive(record.cookieStore));
++      if (record.storeProto) {
++        unhookProto(record.storeProto, record.cookieStore);
++      }
+     }
+   } catch (_e) {}
+-  installedByDocument.delete(document);
+   return "uninstalled";
+ }
+ 
++/** Native-shaped `cookie` accessor dispatching on `this`. */
++function cookieAccessor(_name, original) {
++  const holder = {
++    get cookie() {
++      const record = installedByDocument.get(unwaive(this));
++      if (!record) {
++        return Reflect.apply(original.get, this, []);
++      }
++      try {
++        return readCookieString(record.ctx);
++      } catch (error) {
++        record.onRuntimeError("document.cookie.get", error);
++        return "";
++      }
++    },
++    set cookie(raw) {
++      const record = installedByDocument.get(unwaive(this));
++      if (!record) {
++        Reflect.apply(original.set, this, [raw]);
++        return;
++      }
++      try {
++        writeCookieString(record.ctx, raw, record.send);
++      } catch (error) {
++        record.onRuntimeError("document.cookie.set", error);
++      }
++    },
++  };
++  return Object.getOwnPropertyDescriptor(holder, "cookie");
++}
++
++const STORE_METHODS = ["get", "getAll", "set", "delete"];
++const STORE_LENGTHS = { get: 0, getAll: 0, set: 1, delete: 1 };
++
++function storeImpl(record, pageWindow) {
++  const items = (name) => {
++    const Core = lazy.DarkstrCookieCore;
++    const map = processCache.get(record.ctx.cacheKey);
++    const recs = Core.matchForScript(map, docView(record.ctx), envFor(record.ctx));
++    return recs
++      .filter((r) => !name || r.name === name)
++      .map((r) => ({ name: r.name, value: r.value }));
++  };
++  const nameOf = (nameOrOpts) =>
++    typeof nameOrOpts === "string" ? nameOrOpts : nameOrOpts?.name;
++  return {
++    get(nameOrOpts) {
++      return new pageWindow.Promise((resolve) => {
++        const list = items(nameOf(nameOrOpts));
++        resolve(list.length ? Cu.cloneInto(list[0], pageWindow) : null);
++      });
++    },
++    getAll(nameOrOpts) {
++      return new pageWindow.Promise((resolve) => {
++        resolve(Cu.cloneInto(items(nameOf(nameOrOpts)), pageWindow));
++      });
++    },
++    set(nameOrOpts, value) {
++      return new pageWindow.Promise((resolve) => {
++        const { name, raw } = cookieStoreRaw(nameOrOpts, value, false);
++        if (name || raw) {
++          writeCookieString(record.ctx, raw, record.send);
++        }
++        resolve(undefined);
++      });
++    },
++    delete(nameOrOpts) {
++      return new pageWindow.Promise((resolve) => {
++        const { raw } = cookieStoreRaw(nameOrOpts, "", true);
++        writeCookieString(record.ctx, raw, record.send);
++        resolve(undefined);
++      });
++    },
++  };
++}
++
++/** Native-shaped CookieStore.prototype method dispatching on `this`. */
++function storeMethod(name, original, pageWindow) {
++  const holder = {
++    get(...args) {
++      return dispatch(this, args);
++    },
++    getAll(...args) {
++      return dispatch(this, args);
++    },
++    set(...args) {
++      return dispatch(this, args);
++    },
++    delete(...args) {
++      return dispatch(this, args);
++    },
++  };
++  function dispatch(self, args) {
++    const record = recordByStore.get(unwaive(self));
++    if (!record) {
++      return Reflect.apply(original.value, self, args);
++    }
++    return record.storeImpl[name](...args);
++  }
++  return setLength(
++    Cu.exportFunction(holder[name], pageWindow),
++    STORE_LENGTHS[name]
++  );
++}
++
+ function sameCtx(a, b) {
+   return (
+     a &&
+@@ -292,7 +480,7 @@
+  * document; `send(raw)` forwards a write to the parent.
+  */
+ export function installCookieHooks(document, window, ctx, send, onRuntimeError) {
+-  const prior = installedByDocument.get(document);
++  const prior = installedByDocument.get(unwaive(document));
+   if (prior && sameCtx(prior.ctx, ctx)) {
+     return "already-installed";
+   }
+@@ -302,41 +490,37 @@
+ 
+   const pageWindow = waive(window);
+   const doc = waive(document);
+-  const record = { ctx, docCookie: null, cookieStore: null, storeHooks: [] };
+-
+-  let originalCookieDesc = null;
+-  try {
+-    originalCookieDesc = Object.getOwnPropertyDescriptor(doc, "cookie") || null;
+-  } catch (_e) {}
+-
+-  // Plain accessor names (no brand string in Function.prototype.name).
+-  const accessors = {
+-    get cookie() {
+-      try {
+-        return readCookieString(record.ctx);
+-      } catch (error) {
+-        onRuntimeError("document.cookie.get", error);
+-        return "";
+-      }
+-    },
+-    set cookie(raw) {
+-      try {
+-        writeCookieString(record.ctx, raw, send);
+-      } catch (error) {
+-        onRuntimeError("document.cookie.set", error);
+-      }
+-    },
++  const record = {
++    ctx,
++    send,
++    onRuntimeError,
++    docKey: document,
++    docProto: null,
++    cookieStore: null,
++    storeProto: null,
++    storeImpl: null,
+   };
+-  const acc = Object.getOwnPropertyDescriptor(accessors, "cookie");
++
++  const docProto = protoOwning(doc, "cookie");
++  if (!docProto) {
++    const error = new Error("Document.prototype cookie accessor not found");
++    onRuntimeError("document.cookie.define", error);
++    throw error;
++  }
++  installedByDocument.set(unwaive(document), record);
+   try {
+-    Object.defineProperty(doc, "cookie", {
+-      configurable: true,
+-      enumerable: true,
+-      get: Cu.exportFunction(acc.get, pageWindow),
+-      set: Cu.exportFunction(acc.set, pageWindow),
++    hookProto(docProto, ["cookie"], document, (name, original) => {
++      const acc = cookieAccessor(name, original);
++      return {
++        configurable: original.configurable,
++        enumerable: original.enumerable,
++        get: Cu.exportFunction(acc.get, pageWindow),
++        set: setLength(Cu.exportFunction(acc.set, pageWindow), 1),
++      };
+     });
+-    record.docCookie = { target: doc, original: originalCookieDesc };
++    record.docProto = docProto;
+   } catch (error) {
++    installedByDocument.delete(unwaive(document));
+     onRuntimeError("document.cookie.define", error);
+     throw error;
+   }
+@@ -344,75 +528,30 @@
+   try {
+     const store = pageWindow.cookieStore;
+     if (store && typeof store.get === "function") {
+-      record.cookieStore = store;
+-      const items = (name) => {
+-        const Core = lazy.DarkstrCookieCore;
+-        const map = processCache.get(record.ctx.cacheKey);
+-        const recs = Core.matchForScript(map, docView(record.ctx), envFor(record.ctx));
+-        return recs
+-          .filter((r) => !name || r.name === name)
+-          .map((r) => ({ name: r.name, value: r.value }));
+-      };
+-      const nameOf = (nameOrOpts) =>
+-        typeof nameOrOpts === "string" ? nameOrOpts : nameOrOpts?.name;
+-      const methods = {
+-        get(nameOrOpts) {
+-          return new pageWindow.Promise((resolve) => {
+-            const list = items(nameOf(nameOrOpts));
+-            resolve(list.length ? Cu.cloneInto(list[0], pageWindow) : null);
+-          });
+-        },
+-        getAll(nameOrOpts) {
+-          return new pageWindow.Promise((resolve) => {
+-            resolve(Cu.cloneInto(items(nameOf(nameOrOpts)), pageWindow));
+-          });
+-        },
+-        set(nameOrOpts, value) {
+-          return new pageWindow.Promise((resolve) => {
+-            const { name, raw } = cookieStoreRaw(nameOrOpts, value, false);
+-            if (name || raw) {
+-              writeCookieString(record.ctx, raw, send);
+-            }
+-            resolve(undefined);
+-          });
+-        },
+-        delete(nameOrOpts) {
+-          return new pageWindow.Promise((resolve) => {
+-            const { raw } = cookieStoreRaw(nameOrOpts, "", true);
+-            writeCookieString(record.ctx, raw, send);
+-            resolve(undefined);
+-          });
+-        },
+-      };
+-      for (const name of ["get", "getAll", "set", "delete"]) {
+-        let originalDesc = null;
+-        try {
+-          originalDesc = Object.getOwnPropertyDescriptor(store, name) || null;
+-        } catch (_e) {}
+-        try {
+-          Object.defineProperty(store, name, {
+-            configurable: true,
+-            enumerable: true,
+-            writable: true,
+-            value: Cu.exportFunction(methods[name], pageWindow),
+-          });
+-          record.storeHooks.push({ name, original: originalDesc });
+-        } catch (error) {
+-          onRuntimeError(`cookieStore.${name}.define`, error);
+-        }
++      const storeProto = protoOwning(store, "get");
++      if (storeProto) {
++        record.cookieStore = store;
++        record.storeImpl = storeImpl(record, pageWindow);
++        recordByStore.set(unwaive(store), record);
++        hookProto(storeProto, STORE_METHODS, store, (name, original) => ({
++          configurable: original.configurable,
++          enumerable: original.enumerable,
++          writable: original.writable,
++          value: storeMethod(name, original, pageWindow),
++        }));
++        record.storeProto = storeProto;
+       }
+     }
+   } catch (error) {
+     onRuntimeError("cookieStore", error);
+   }
+ 
+-  installedByDocument.set(document, record);
+   return prior ? "reinstalled" : "installed";
+ }
+ 
+ /** Test hook: current install record of a document. */
+ export function installRecordFor(document) {
+-  return installedByDocument.get(document) || null;
++  return installedByDocument.get(unwaive(document)) || null;
+ }
+ 
+ /** Test hook: process cache. */
+@@ -458,7 +597,7 @@
+       return;
+     }
+     if (!isHttpContentPrincipal(document.nodePrincipal)) {
+-      if (installedByDocument.has(document)) {
++      if (installedByDocument.has(unwaive(document))) {
+         uninstallCookieHooks(document);
+       }
+       return;
+diff -ruN a51/browser/components/DarkstrNativePersona.sys.mjs b51/browser/components/DarkstrNativePersona.sys.mjs
+--- a51/browser/components/DarkstrNativePersona.sys.mjs	2026-10-08 17:54:14.342204841 -0500
++++ b51/browser/components/DarkstrNativePersona.sys.mjs	2026-10-08 17:54:14.342204841 -0500
+@@ -30,6 +30,28 @@
+  *   - Homogeneous / hooks off: idle — no rotation side-effects.
+  *   - Snapshot still FFI (0008) if present else JS mulberry seed path; mirrors
+  *     (UA/HW/langs/TZ) stay coherent per effective seed.
++ *
++ * 0051 persona surface (Rowan QA N2/N3/N5):
++ *   - One decision per document: { armed, top-level site, snapshot }. Phase is
++ *     per tab (BrowserId top-level http(s) document count, redirects not
++ *     counted) — never the global darkstr.persona.docShellPhase pref, so a
++ *     new tab cannot flip other tabs. Subresources and frames use the
++ *     decision of their top-level document (WindowContext.topWindowContext).
++ *   - HTTP: User-Agent AND Accept-Language are set per request from that
++ *     decision (persona of the TOP-LEVEL site, same snapshot as the page's
++ *     navigator). Accept-Language uses Gecko's own q-value format.
++ *     intl.accept_languages / darkstr.persona.languages are no longer written
++ *     (no global last-site-wins, no cross-tab languagechange); a value saved
++ *     by an older build is restored once.
++ *   - Navigator: the child installs synchronously before page script from
++ *     the same decision (ppmm "DarkstrNativePersona:Install").
++ *   - Lock (N5): only explicit prefs lock — a pasted darkstr.persona.snapshot
++ *     (persistent) or darkstr.persona.rotatePerSite=false (single global
++ *     persona from the seed while false). The seed path no longer writes
++ *     darkstr.persona.snapshot, so turning rotation back on resumes rotation.
++ *   - Residual (0049): requests with no browsing context (Shared/Service
++ *     worker) keep Gecko's native headers; global UA/platform/HW mirrors are
++ *     still written for the C++ WorkerNavigator path only.
+  */
+ 
+ const MODE_PREF = "darkstr.mode";
+@@ -68,6 +90,46 @@
+   "darkstr.persona.savedPeerConnectionHadUserValue";
+ /** Soft failure reason for Proof (e.g. languageOverride SetRealmLocaleOverride). */
+ const PERSONA_LAST_ERROR_PREF = "darkstr.persona.lastError";
++/** 0051 diag: last top-level document decision {site, armed, ua, al}. */
++const LAST_DECISION_PREF = "darkstr.persona.lastDecision";
++const ACTOR_NAME = "DarkstrNativePersona";
++const MSG_INSTALL = "DarkstrNativePersona:Install";
++const MSG_REFRESH = "DarkstrNativePersona:Refresh";
++const NATIVE_DECISION = Object.freeze({ armed: false, site: null, snapshot: null });
++
++/**
++ * Port of netwerk/base/rust-helper rust_prepare_accept_languages (156):
++ * "en-US, en ,es" → "en-US,en;q=0.9,es;q=0.8"; tags canonicalised the same way.
++ */
++export function prepareAcceptLanguages(input) {
++  const list = Array.isArray(input) ? input : String(input || "").split(",");
++  const out = [];
++  for (const raw of list) {
++    let token = String(raw).replace(/^[ \t]+/, "");
++    const cut = token.search(/[; \t]/);
++    if (cut >= 0) {
++      token = token.slice(0, cut);
++    }
++    if (!token) {
++      continue;
++    }
++    const subs = token.toLowerCase().split("-");
++    for (let i = 1; i < subs.length; i++) {
++      if (subs[i].length === 1) {
++        break;
++      }
++      if (subs[i].length === 2) {
++        subs[i] = subs[i].toUpperCase();
++      } else if (subs[i].length === 4) {
++        subs[i] = subs[i][0].toUpperCase() + subs[i].slice(1);
++      }
++    }
++    const n = out.length;
++    const q = Math.max(10 - Math.min(10, n), 1);
++    out.push(subs.join("-") + (n > 0 && q < 10 ? `;q=0.${q}` : ""));
++  }
++  return out.join(",");
++}
+ 
+ const CLIENT_HINT_HEADERS = [
+   "sec-ch-ua",
+@@ -167,7 +229,23 @@
+     this._etldSeedMap = new Map();
+     this._etldSnapshotCache = new Map();
+     this._sessionBaseSeed = 0;
++    this._docDecisions = new WeakMap();
++    this._lockedSnapCache = null;
++    this._planSignature = "";
+     this._resetNavPhaseMirror("init");
++    this._syncListener = {
++      receiveMessage: message => {
++        try {
++          return this._onSyncInstall(message);
++        } catch (e) {
++          console.error("darkstr 0051: persona install IPC failed", e);
++          return { decision: "native", snapshot: null };
++        }
++      },
++    };
++    try {
++      Services.ppmm.addMessageListener(MSG_INSTALL, this._syncListener);
++    } catch (_e) {}
+ 
+     this._prefObserver = this._observePref.bind(this);
+     for (const p of [
+@@ -185,7 +263,8 @@
+     this._httpObserver = this._onModifyRequest.bind(this);
+     Services.obs.addObserver(this._httpObserver, "http-on-modify-request");
+ 
+-    this._registerActor();
++    // 0051: the actor is registered on first arm (refreshPlan), not here —
++    // idle profiles get no persona actor at all.
+     this._installProgressListener();
+     this.refreshPlan();
+   },
+@@ -197,6 +276,10 @@
+     try {
+       Services.obs.removeObserver(this._httpObserver, "http-on-modify-request");
+     } catch (_e) {}
++    try {
++      Services.ppmm.removeMessageListener(MSG_INSTALL, this._syncListener);
++    } catch (_e) {}
++    this._syncListener = null;
+     for (const p of [
+       MODE_PREF,
+       NATIVE_PREF,
+@@ -239,7 +322,7 @@
+       return;
+     }
+     try {
+-      ChromeUtils.registerWindowActor("DarkstrNativePersona", {
++      ChromeUtils.registerWindowActor(ACTOR_NAME, {
+         parent: {
+           esModuleURI:
+             "moz-src:///browser/components/DarkstrNativePersonaParent.sys.mjs",
+@@ -249,12 +332,17 @@
+             "moz-src:///browser/components/DarkstrNativePersonaChild.sys.mjs",
+           events: {
+             DOMWindowCreated: {},
++            // Same-origin navigation of an initial about:blank reuses the
++            // inner window (no second DOMWindowCreated).
++            DOMDocElementInserted: {},
+             pageshow: {},
+           },
+         },
+         allFrames: true,
+         messageManagerGroups: ["browsers"],
+-        matches: ["*://*/*", "file://*"],
++        // 0051: no `matches` — about:blank / srcdoc / blob: documents that
++        // inherit an http(s) principal need the same navigator as their
++        // parent. The child filters on principal before any IPC.
+         // Required for Fission webIsolated / web content processes.
+         safeForUntrustedWebProcess: true,
+       });
+@@ -329,6 +417,15 @@
+       if (li.externalContentPolicyType !== Ci.nsIContentPolicy.TYPE_DOCUMENT) {
+         return null;
+       }
++      // 0051: a redirect (incl. internal, e.g. https upgrade) is the same
++      // navigation — count the first channel only.
++      try {
++        const chain =
++          li.redirectChainIncludingInternalRedirects || li.redirectChain || [];
++        if (chain.length > 0) {
++          return null;
++        }
++      } catch (_eChain) {}
+       const bc = li.browsingContext?.top;
+       if (!bc) {
+         return null;
+@@ -510,15 +607,15 @@
+   },
+ 
+   /**
+-   * Build snapshot from seed. When persist=false (per-site rotate), never write
+-   * SNAPSHOT_PREF — a pasted/global snapshot must stay the Proof lock signal.
++   * Build snapshot from seed. Never writes SNAPSHOT_PREF (0051 N5) — a pasted
++   * snapshot stays the only persistent lock signal.
+    */
+-  _snapshotFromSeed(seed, persist) {
++  _snapshotFromSeed(seed, _persist) {
+     const s = seed >>> 0;
+     if (!s) {
+       return null;
+     }
+-    const ffiSnap = this._readSnapshotFromFfi(s, !!persist);
++    const ffiSnap = this._readSnapshotFromFfi(s);
+     if (ffiSnap) {
+       return ffiSnap;
+     }
+@@ -588,11 +685,8 @@
+         HW_MIRROR_PREF,
+         Number(snapshot.hardwareConcurrency) || 8
+       );
+-      const langs = Array.isArray(snapshot.languages)
+-        ? snapshot.languages.join(",")
+-        : "en-US,en";
+-      this._forceLanguagesMirrorNotify(langs);
+-      this._applyAcceptLanguagesForPersona(langs);
++      // 0051: no darkstr.persona.languages / intl.accept_languages writes —
++      // languages are per document (navigator) and per request (header).
+     } catch (_e) {}
+   },
+ 
+@@ -704,7 +798,16 @@
+       }
+     } catch (_e) {}
+ 
+-    // Mirrors for C++ DarkstrNavigatorHooks / DarkstrDocShellHooks (patches/0006).
++    // 0051: languages are per document / per request now. Undo any global
++    // accept-languages / languages mirror an older build left behind.
++    this._restoreAcceptLanguagesIfSaved();
++    try {
++      if (Services.prefs.prefHasUserValue(LANGS_MIRROR_PREF)) {
++        Services.prefs.clearUserPref(LANGS_MIRROR_PREF);
++      }
++    } catch (_eLangs) {}
++
++    // Mirrors for the C++ WorkerNavigator path (0006/0027; worker scope 0049).
+     try {
+       if (this._plan.applyNativeBase && snapshot?.userAgent) {
+         this._applyPersonaMirrors(snapshot);
+@@ -721,7 +824,6 @@
+             Services.prefs.clearUserPref(p);
+           }
+         }
+-        this._restoreAcceptLanguagesIfSaved();
+         if (this._etldSeedMap) {
+           this._etldSeedMap.clear();
+         }
+@@ -731,9 +833,72 @@
+       }
+     } catch (_e) {}
+ 
++    this._onPlanChanged();
+     return this._plan;
+   },
+ 
++  /**
++   * 0051: when the effective plan changes, forget per-document decisions,
++   * register the actor on first arm and ask every live document to
++   * re-install (or restore native) navigator fields.
++   */
++  _onPlanChanged() {
++    const p = this._plan || {};
++    let seed = 0;
++    try {
++      seed = Services.prefs.getIntPref(SEED_PREF, 0) >>> 0;
++    } catch (_e) {}
++    const signature = JSON.stringify([
++      !!p.pollutionActive,
++      !!p.nativeHooks,
++      !!p.strictFirstDoc,
++      !!p.applyNativeBase,
++      !!p.rotatePerSite,
++      p.snapshot?.userAgent || "",
++      p.snapshot?.platform || "",
++      p.snapshot?.hardwareConcurrency || 0,
++      (p.snapshot?.languages || []).join(","),
++      seed,
++    ]);
++    if (signature === this._planSignature) {
++      return;
++    }
++    this._planSignature = signature;
++    this._docDecisions = new WeakMap();
++    if (p.applyNativeBase) {
++      this._registerActor();
++    }
++    if (this._actorRegistered) {
++      this._refreshAllDocuments();
++    }
++  },
++
++  _refreshAllDocuments() {
++    const seen = new Set();
++    const send = wg => {
++      if (!wg || seen.has(wg) || wg.isInProcess) {
++        return;
++      }
++      seen.add(wg);
++      try {
++        wg.getActor(ACTOR_NAME).sendAsyncMessage(MSG_REFRESH, {});
++      } catch (_e) {}
++    };
++    try {
++      for (const win of Services.wm.getEnumerator("navigator:browser")) {
++        for (const browser of win.gBrowser?.browsers || []) {
++          const top = browser.browsingContext;
++          if (!top) {
++            continue;
++          }
++          for (const bc of top.getAllBrowsingContextsInSubtree()) {
++            send(bc.currentWindowGlobal);
++          }
++        }
++      }
++    } catch (_e) {}
++  },
++
+ 
+   /** 0028: save current media.peerconnection.enabled state, then kill WebRTC. */
+   _applyWebRtcKillForPollution() {
+@@ -784,56 +949,6 @@
+   },
+ 
+   /**
+-   * Write darkstr.persona.languages and always emit a prefchange when the CSV
+-   * is unchanged. Content nsGlobalWindowInner (0011) observes this pref and
+-   * calls ClearCachedLanguage(s)Value — required because pageshow JS re-spoof
+-   * cannot break the WebIDL [Cached] languages array, and a no-op set leaves
+-   * the first AcceptLanguages / early-miss read stuck as [en-US, en].
+-   */
+-  _forceLanguagesMirrorNotify(langsCsv) {
+-    const next = langsCsv || "en-US,en";
+-    try {
+-      if (Services.prefs.prefHasUserValue(LANGS_MIRROR_PREF)) {
+-        const cur = Services.prefs.getStringPref(LANGS_MIRROR_PREF);
+-        if (cur === next) {
+-          Services.prefs.clearUserPref(LANGS_MIRROR_PREF);
+-        }
+-      }
+-      Services.prefs.setStringPref(LANGS_MIRROR_PREF, next);
+-    } catch (_e) {}
+-  },
+-
+-  /**
+-   * 0014/0015: when hooks apply, save stock intl.accept_languages once, then
+-   * force-notify set to persona langs CSV (clear+set if unchanged) so content
+-   * nsGlobalWindowInner observer clears WebIDL languages + fires languagechange.
+-   * 0015: never persist Gecko "und" (undefined locale) — normalize to "".
+-   */
+-  _applyAcceptLanguagesForPersona(langsCsv) {
+-    const next = langsCsv || "en-US,en";
+-    try {
+-      if (!Services.prefs.prefHasUserValue(SAVED_ACCEPT_LANGS_PREF)) {
+-        let cur = "";
+-        try {
+-          cur = Services.prefs.getCharPref(ACCEPT_LANGS_PREF, "");
+-        } catch (_e) {
+-          try {
+-            cur = Services.prefs.getStringPref(ACCEPT_LANGS_PREF, "");
+-          } catch (_e2) {
+-            cur = "";
+-          }
+-        }
+-        // Soft park 0015: getCharPref can return "und" when no real user value.
+-        Services.prefs.setStringPref(
+-          SAVED_ACCEPT_LANGS_PREF,
+-          this._normalizeSavedAcceptLanguages(cur)
+-        );
+-      }
+-      this._forceAcceptLanguagesNotify(next);
+-    } catch (_e) {}
+-  },
+-
+-  /**
+    * Soft park 0015: empty / "und" (any case) → "" so restore never writes und.
+    */
+   _normalizeSavedAcceptLanguages(value) {
+@@ -845,41 +960,7 @@
+   },
+ 
+   /**
+-   * Write intl.accept_languages and always emit prefchange when unchanged
+-   * (same pattern as _forceLanguagesMirrorNotify).
+-   */
+-  _forceAcceptLanguagesNotify(langsCsv) {
+-    const next = langsCsv || "en-US,en";
+-    try {
+-      let cur = "";
+-      try {
+-        cur = Services.prefs.getCharPref(ACCEPT_LANGS_PREF, "");
+-      } catch (_e) {
+-        try {
+-          cur = Services.prefs.getStringPref(ACCEPT_LANGS_PREF, "");
+-        } catch (_e2) {
+-          cur = "";
+-        }
+-      }
+-      if (cur === next) {
+-        if (Services.prefs.prefHasUserValue(ACCEPT_LANGS_PREF)) {
+-          Services.prefs.clearUserPref(ACCEPT_LANGS_PREF);
+-        } else {
+-          // Default-branch equal: clear is a no-op; briefly set a different
+-          // value then the target so observers still fire.
+-          Services.prefs.setCharPref(ACCEPT_LANGS_PREF, next + ",tmp");
+-        }
+-      }
+-      Services.prefs.setCharPref(ACCEPT_LANGS_PREF, next);
+-    } catch (_e) {
+-      try {
+-        Services.prefs.setStringPref(ACCEPT_LANGS_PREF, next);
+-      } catch (_e2) {}
+-    }
+-  },
+-
+-  /**
+-   * When hooks idle: restore intl.accept_languages from saved and clear saved.
++   * Restore intl.accept_languages saved by a pre-0051 build and clear saved.
+    * Soft park 0015: empty/"und" (incl. prior-run migrate) → clearUserPref, never set und.
+    */
+   _restoreAcceptLanguagesIfSaved() {
+@@ -931,13 +1012,19 @@
+       seed = 0;
+     }
+     if (!seed) {
++      this._lockedSnapCache = null;
+       return null;
+     }
+-    const ffiSnap = this._readSnapshotFromFfi(seed >>> 0);
+-    if (ffiSnap) {
+-      return ffiSnap;
+-    }
+-    return this._generateFromSeed(seed >>> 0);
++    // 0051 (N5): computed from the seed, never written back to
++    // darkstr.persona.snapshot — a seed must not become a permanent lock.
++    if (this._lockedSnapCache?.seed === seed >>> 0) {
++      return this._lockedSnapCache.snapshot;
++    }
++    const snapshot =
++      this._readSnapshotFromFfi(seed >>> 0) ||
++      this._generateFromSeed(seed >>> 0);
++    this._lockedSnapCache = { seed: seed >>> 0, snapshot };
++    return snapshot;
+   },
+ 
+   /**
+@@ -945,31 +1032,15 @@
+    * Soft-fail when A unavailable → JS mulberry seed fallback.
+    * Approach B cdylib runtime load retired (0041).
+    */
+-  _readSnapshotFromFfi(seed, persist = true) {
++  _readSnapshotFromFfi(seed) {
+     try {
+       const { DarkstrFfi } = ChromeUtils.importESModule(
+         "moz-src:///browser/components/DarkstrFfi.sys.mjs"
+       );
+       const snap = DarkstrFfi.personaSnapshotFromSeed(seed, detectHostOs());
+       if (snap && typeof snap.userAgent === "string") {
+-        // Persist so about:config / Proof can see FFI SoT (not mulberry).
+-        // 0030: skip persist under per-site rotate — writing SNAPSHOT_PREF would
+-        // lock rotation (_rotationLocked) for the rest of the session.
+-        if (persist) {
+-          try {
+-            Services.prefs.setStringPref(
+-              SNAPSHOT_PREF,
+-              JSON.stringify({
+-                userAgent: snap.userAgent,
+-                platform: snap.platform,
+-                hardwareConcurrency: snap.hardwareConcurrency,
+-                deviceMemory: snap.deviceMemory,
+-                languages: snap.languages,
+-                ...(snap.timezone ? { timezone: snap.timezone } : {}),
+-              })
+-            );
+-          } catch (_e) {}
+-        }
++        // 0051 (N5): never persisted to darkstr.persona.snapshot (that pref
++        // is an explicit operator lock only; see _rotationLocked).
+         return snap;
+       }
+       try {
+@@ -996,47 +1067,31 @@
+     };
+   },
+ 
++  /** Tab key for phase counting: BrowserId is tab-stable across Fission swaps. */
++  _tabKey(bc) {
++    const top = bc?.top || bc;
++    return top ? top.browserId || top.id || 0 : 0;
++  },
++
+   /**
+-   * DocShellNavPhase for a channel's browsing context.
+-   * First top-level load → FirstDocument; else SubsequentNav.
+-   */
+-  /**
+-   * Resolve DocShellNavPhase for a channel. READ-ONLY — must not write phase
+-   * prefs (fallthrough used to poison subsequent_nav on background HTTP /
+-   * about:blank Proof sessions). Only _noteTopLevelDocument / C++ SyncPhaseMirror
+-   * write the mirror.
++   * 0051 (N2): per-tab phase. FirstDocument while this tab has had at most one
++   * counted top-level http(s) document; never reads a global pref.
+    */
++  tabPhase(bc) {
++    const key = this._tabKey(bc);
++    const n = key && this._bcTopLoads ? this._bcTopLoads.get(key) || 0 : 0;
++    return n > 1 ? "subsequent_nav" : "first_document";
++  },
++
++  /** Kept for callers/diag: per-tab phase of the channel's tab. READ-ONLY. */
+   navPhaseForChannel(channel) {
+     try {
+-      const plan = this.getPlan();
+-      if (plan?.nativeHooks && plan?.pollutionActive) {
+-        const cppPhase = Services.prefs.getStringPref(
+-          DOCSHELL_PHASE_MIRROR_PREF,
+-          ""
+-        );
+-        if (
+-          cppPhase === "first_document" ||
+-          cppPhase === "subsequent_nav"
+-        ) {
+-          return cppPhase;
+-        }
+-      }
+-      const bc = channel.loadInfo?.browsingContext?.top;
+-      if (bc && this._bcTopLoads) {
+-        const key = bc.browserId || bc.id;
+-        const n = this._bcTopLoads.get(key) || 0;
+-        if (n > 1) {
+-          return "subsequent_nav";
+-        }
+-        // n==0 or n==1 → first_document (strict-first default; do not write prefs)
+-        return "first_document";
+-      }
+-    } catch (_e) {}
+-    // Unknown → first_document under strict-first (do NOT write subsequent_nav).
+-    return "first_document";
++      return this.tabPhase(channel.loadInfo?.browsingContext);
++    } catch (_e) {
++      return "first_document";
++    }
+   },
+ 
+-
+   /**
+    * duppel_persona::strict_next_nav_armed — persona surfaces arm on SubsequentNav
+    * when strictFirstDoc (default). Phase 3 / 0020 chrome mirror of C++ SoT.
+@@ -1060,63 +1115,276 @@
+     } catch (_e) {}
+   },
+ 
+-  shouldApplyForChannel(channel) {
++  _tabArmed(bc) {
++    return this.strictNextNavArmed(this.tabPhase(bc));
++  },
++
++  /** Decision for a top-level site URI + phase. */
++  _decisionFor(uri, armed) {
+     const plan = this.getPlan();
+-    if (!plan.applyNativeBase) {
+-      return false;
++    const site = this._etldPlus1FromUri(uri);
++    if (!plan.applyNativeBase || !armed) {
++      return { armed: false, site, snapshot: null };
+     }
+     let snap = plan.snapshot;
+     if (this._rotationActive(plan)) {
++      snap = site ? this.resolveSnapshotForUri(uri) : null;
++    }
++    return snap?.userAgent
++      ? { armed: true, site, snapshot: snap }
++      : { armed: false, site, snapshot: null };
++  },
++
++  _documentUri(wgp) {
++    try {
++      const p = wgp.documentPrincipal;
++      if (p?.isContentPrincipal && p.URI) {
++        return p.URI;
++      }
++    } catch (_e) {}
++    try {
++      return wgp.documentURI;
++    } catch (_e) {
++      return null;
++    }
++  },
++
++  /**
++   * 0051: one decision per document (WindowGlobalParent), stable for its
++   * lifetime (bfcache included). Frames inherit their top-level document's
++   * decision so the whole tab shows one persona.
++   */
++  documentDecision(wgp) {
++    const plan = this.getPlan();
++    if (!plan.applyNativeBase || !wgp) {
++      return NATIVE_DECISION;
++    }
++    if (!this._docDecisions) {
++      this._docDecisions = new WeakMap();
++    }
++    const cached = this._docDecisions.get(wgp);
++    if (cached) {
++      return cached;
++    }
++    let decision = NATIVE_DECISION;
++    const bc = wgp.browsingContext;
++    if (bc && bc.parent) {
++      let topWc = null;
+       try {
+-        snap = this.resolveSnapshotForUri(channel.URI || channel.originalURI);
+-      } catch (_e) {
+-        snap = null;
++        topWc = wgp.topWindowContext;
++      } catch (_e) {}
++      if (!topWc || topWc === wgp) {
++        topWc = bc.top?.currentWindowGlobal || null;
+       }
++      decision =
++        topWc && topWc !== wgp
++          ? this.documentDecision(topWc)
++          : this._decisionFor(bc.top?.currentURI, this._tabArmed(bc));
++    } else if (bc) {
++      const uri = this._documentUri(wgp);
++      const scheme = String(uri?.scheme || "").toLowerCase();
++      let openerWc = null;
++      if (scheme !== "http" && scheme !== "https" && scheme !== "file") {
++        // window.open() about:blank / blob: inherits the opener's principal;
++        // it must not show a different navigator than the opener.
++        try {
++          openerWc = bc.opener?.top?.currentWindowGlobal || null;
++        } catch (_e) {}
++      }
++      decision =
++        openerWc && openerWc !== wgp
++          ? this.documentDecision(openerWc)
++          : this._decisionFor(uri, this._tabArmed(bc));
+     }
+-    if (!snap) {
+-      return false;
++    this._docDecisions.set(wgp, decision);
++    return decision;
++  },
++
++  _isTopLevelDocumentChannel(li) {
++    return li?.externalContentPolicyType === Ci.nsIContentPolicy.TYPE_DOCUMENT;
++  },
++
++  /**
++   * 0051 (N2/N3): decision for one request — the top-level document load
++   * itself (tab phase after counting, its own site) or the requesting
++   * document's top-level decision. No browsing context (Shared/Service
++   * worker) → null: native headers (worker scope 0049).
++   */
++  decisionForChannel(channel) {
++    const plan = this.getPlan();
++    if (!plan.applyNativeBase) {
++      return null;
++    }
++    const li = channel.loadInfo;
++    if (!li) {
++      return null;
+     }
+-    // Read-only phase resolve — diag prefs written only by count paths.
+-    return this.strictNextNavArmed(this.navPhaseForChannel(channel));
++    let bc = null;
++    try {
++      bc = li.browsingContext;
++    } catch (_e) {}
++    if (this._isTopLevelDocumentChannel(li)) {
++      if (!bc) {
++        return null;
++      }
++      return this._decisionFor(
++        channel.URI || channel.originalURI,
++        this._tabArmed(bc)
++      );
++    }
++    let wgp = null;
++    try {
++      if (li.innerWindowID) {
++        wgp = WindowGlobalParent.getByInnerWindowId(li.innerWindowID);
++      }
++    } catch (_e) {}
++    if (wgp) {
++      return this.documentDecision(wgp);
++    }
++    const top = bc?.top;
++    if (!top) {
++      return null;
++    }
++    if (top.currentWindowGlobal) {
++      return this.documentDecision(top.currentWindowGlobal);
++    }
++    return this._decisionFor(top.currentURI, this._tabArmed(top));
+   },
+ 
+-  /** Snapshot for JSWindowActor child (null when idle / first-doc). READ-ONLY. */
++  shouldApplyForChannel(channel) {
++    return !!this.decisionForChannel(channel)?.snapshot;
++  },
++
++  /**
++   * Snapshot for a document's browsing context (Worker/Depth hooks gate on
++   * this). Null when idle / first document of the tab. READ-ONLY.
++   */
+   snapshotForBrowsingContext(bc) {
+     const plan = this.getPlan();
+-    if (!plan.applyNativeBase) {
++    if (!plan.applyNativeBase || !bc) {
+       return null;
+     }
+-    let snap = plan.snapshot;
+-    if (this._rotationActive(plan)) {
+-      snap = this.resolveSnapshotForBrowsingContext(bc);
++    try {
++      const wgp = bc.currentWindowGlobal;
++      if (wgp) {
++        return this.documentDecision(wgp).snapshot;
++      }
++      const top = bc.top || bc;
++      return this._decisionFor(top.currentURI, this._tabArmed(top)).snapshot;
++    } catch (_e) {
++      return null;
+     }
+-    if (!snap) {
++  },
++
++  /** Fields the content child may see (Firefox navigator surface only). */
++  _childSnapshot(snap) {
++    if (!snap?.userAgent) {
+       return null;
+     }
++    return {
++      userAgent: String(snap.userAgent),
++      platform: String(snap.platform || "MacIntel"),
++      hardwareConcurrency: Number(snap.hardwareConcurrency) || 8,
++      languages: Array.isArray(snap.languages)
++        ? snap.languages.map(String)
++        : ["en-US", "en"],
++    };
++  },
++
++  /** ppmm sync handler: navigator decision for one document. */
++  _onSyncInstall(message) {
++    const id = message?.data?.innerWindowId;
++    let wgp = null;
++    try {
++      wgp = id ? WindowGlobalParent.getByInnerWindowId(id) : null;
++    } catch (_e) {}
++    if (!wgp) {
++      return { decision: "retry" };
++    }
++    try {
++      const senderPid = message.target?.osPid;
++      if (
++        typeof senderPid === "number" &&
++        typeof wgp.osPid === "number" &&
++        senderPid > 0 &&
++        wgp.osPid > 0 &&
++        senderPid !== wgp.osPid
++      ) {
++        return { decision: "native", snapshot: null, error: "pid-mismatch" };
++      }
++    } catch (_e) {}
++    return this.installForWindowGlobal(wgp);
++  },
++
++  installForWindowGlobal(wgp) {
++    const decision = this.documentDecision(wgp);
+     try {
+-      if (plan.strictFirstDoc) {
+-        const cppPhase = Services.prefs.getStringPref(
+-          DOCSHELL_PHASE_MIRROR_PREF,
+-          ""
+-        );
+-        if (cppPhase === "subsequent_nav") {
+-          return snap;
+-        }
+-        if (cppPhase === "first_document" || cppPhase === "") {
+-          // Fallback Map when C++ mirror unset / race (BrowserId key).
+-          const top = bc?.top;
+-          if (top && this._bcTopLoads) {
+-            const key = top.browserId || top.id;
+-            const n = this._bcTopLoads.get(key) || 0;
+-            if (n > 1) {
+-              return snap;
+-            }
+-          }
+-          return null;
+-        }
++      if (!wgp.browsingContext?.parent) {
++        this._syncTimezoneOverride(wgp.browsingContext, decision.snapshot);
+       }
+     } catch (_e) {}
+-    return snap;
++    const snapshot = this._childSnapshot(decision.snapshot);
++    return snapshot
++      ? { decision: "persona", snapshot }
++      : { decision: "native", snapshot: null };
++  },
++
++  /**
++   * 0028: native realm/worker timezone follows the top-level document's
++   * decision (empty = host timezone for a native first document).
++   */
++  _syncTimezoneOverride(bc, snapshot) {
++    try {
++      const top = bc?.top || bc;
++      if (!top) {
++        return;
++      }
++      const tz = snapshot?.timezone ? String(snapshot.timezone).trim() : "";
++      if (top.timezoneOverride !== tz) {
++        top.timezoneOverride = tz;
++      }
++    } catch (e) {
++      try {
++        Services.prefs.setStringPref(
++          PERSONA_LAST_ERROR_PREF,
++          ("timezoneOverride: " + String(e?.message || e)).slice(0, 200)
++        );
++      } catch (_e2) {}
++    }
++  },
++
++  /**
++   * Gecko's default Accept-Language header values for this profile (what
++   * nsHttpHandler put on the channel before any page header).
++   */
++  _isNativeAcceptLanguage(value) {
++    const candidates = new Set();
++    try {
++      candidates.add(prepareAcceptLanguages(Services.locale.acceptLanguages));
++    } catch (_e) {}
++    try {
++      candidates.add(
++        prepareAcceptLanguages(Services.prefs.getCharPref(ACCEPT_LANGS_PREF, ""))
++      );
++    } catch (_e) {}
++    candidates.add(prepareAcceptLanguages("en-US, en"));
++    candidates.delete("");
++    return candidates.has(value);
++  },
++
++  _writeDecisionDiag(channel, decision, ua, al) {
++    try {
++      Services.prefs.setStringPref(
++        LAST_DECISION_PREF,
++        JSON.stringify({
++          site: decision?.site || "",
++          armed: !!decision?.snapshot,
++          phase: this.navPhaseForChannel(channel),
++          ua: ua || "",
++          al: al || "",
++        })
++      );
++    } catch (_e) {}
+   },
+ 
+   _onModifyRequest(subject, topic) {
+@@ -1153,23 +1421,40 @@
+       }
+     }
+ 
+-    if (!this.shouldApplyForChannel(channel)) {
++    if (!plan.applyNativeBase) {
+       return;
+     }
+-    let snap = plan.snapshot;
+-    if (this._rotationActive(plan)) {
+-      try {
+-        snap = this.resolveSnapshotForUri(channel.URI || channel.originalURI);
+-      } catch (_e) {
+-        snap = null;
++    const decision = this.decisionForChannel(channel);
++    const snap = decision?.snapshot;
++    const topDoc = this._isTopLevelDocumentChannel(channel.loadInfo);
++    if (!snap?.userAgent) {
++      if (topDoc) {
++        this._writeDecisionDiag(channel, decision, "", "");
+       }
+-    }
+-    const ua = snap?.userAgent;
+-    if (!ua) {
+       return;
+     }
++    const ua = String(snap.userAgent);
+     try {
+       channel.setRequestHeader("User-Agent", ua, false);
+     } catch (_e) {}
++    // Accept-Language from the same snapshot as navigator.languages. Leave a
++    // value the page set itself (anything but Gecko's default) alone.
++    const al = prepareAcceptLanguages(
++      Array.isArray(snap.languages) ? snap.languages : ["en-US", "en"]
++    );
++    try {
++      let current = "";
++      try {
++        current = channel.getRequestHeader("Accept-Language");
++      } catch (_e) {
++        current = "";
++      }
++      if (al && (!current || this._isNativeAcceptLanguage(current))) {
++        channel.setRequestHeader("Accept-Language", al, false);
++      }
++    } catch (_e) {}
++    if (topDoc) {
++      this._writeDecisionDiag(channel, decision, ua, al);
++    }
+   },
+ };
+diff -ruN a51/browser/components/DarkstrNativePersonaChild.sys.mjs b51/browser/components/DarkstrNativePersonaChild.sys.mjs
+--- a51/browser/components/DarkstrNativePersonaChild.sys.mjs	2026-10-08 17:54:14.342204841 -0500
++++ b51/browser/components/DarkstrNativePersonaChild.sys.mjs	2026-10-08 17:58:45.890912690 -0500
+@@ -3,139 +3,319 @@
+  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+ 
+ /**
+- * darkstr M3 — JSWindowActor child. Minimum Navigator fields from same seed as HTTP UA.
++ * darkstr M3 — JSWindowActor child. Navigator persona fields for one document,
++ * from the same per-document decision the parent uses for that document's
++ * HTTP User-Agent / Accept-Language (pins 0003 / 0030 / 0051).
+  * Brand: darkstr — not official LibreWolf. No Client Hints SET (Firefox host).
+  *
+- * Soft residual: re-query snapshot on pageshow so FFI-filled langs (e.g. +es)
+- * win over a sticky early spoof from DOMWindowCreated.
+- *
+- * P0 FP coherence (0025): instance-first hardwareConcurrency.
+- * 0026: waiveXrays + exportFunction (DepthHooks lesson) — chrome defineProperty on
+- * Xray Navigator does not stick for HW when RFP is off; page-compartment getters do.
+- *
+- * Soft residual (0033): languages getter must Cu.cloneInto the array into the page
+- * compartment. exportFunction returning a chrome Array makes page (and Marionette)
+- * hits on .length throw "Permission denied" after SubsequentNav — worker langs OK
+- * because WorkerHooks injects a page-source JSON literal. DepthHooks cloneInto lesson.
++ * 0051 surface rules (Rowan QA N2–N4):
++ *   - Install is synchronous at DOMWindowCreated (and DOMDocElementInserted
++ *     for a document that reuses an initial about:blank inner window), before
++ *     page script, keyed by innerWindowId so the parent answers for THIS
++ *     document (tab phase + top-level site), never from a global pref.
++ *   - Only fields stock Firefox has: userAgent, platform, hardwareConcurrency,
++ *     language, languages. No deviceMemory, no userAgentData.
++ *   - Overrides replace the accessor on Navigator.prototype (where the native
++ *     one lives) — never own properties of navigator. Getter name / length /
++ *     toString / attributes match the native accessor. `this` decides: this
++ *     window's navigator gets the persona value; any other receiver is
++ *     forwarded to the original native getter (same value, same TypeError).
++ *   - languages is one frozen page-compartment array per document, so
++ *     navigator.languages === navigator.languages like the [Cached] binding.
++ *   - Native decision (first document in a tab under strictFirstDoc, idle,
++ *     unarmed) restores the native accessors.
+  */
+ 
+-function contentWindowFor(rawWindow) {
++const MSG_INSTALL = "DarkstrNativePersona:Install";
++const MSG_REFRESH = "DarkstrNativePersona:Refresh";
++const PROPS = ["userAgent", "platform", "hardwareConcurrency", "language", "languages"];
++
++/** unwaived navigator → { values: Map(prop → value) } */
++const navValues = new WeakMap();
++/** unwaived Navigator.prototype → Map(prop → original descriptor) */
++const protoOriginals = new WeakMap();
++/** Documents whose decision was already fetched (one sync IPC per document). */
++const checkedDocuments = new WeakSet();
++
++function waive(obj) {
+   try {
+-    const waived = Cu.waiveXrays(rawWindow);
+-    if (waived) {
+-      return waived;
++    const w = Cu.waiveXrays(obj);
++    if (w) {
++      return w;
+     }
+   } catch (_e) {}
++  if (obj?.wrappedJSObject) {
++    return obj.wrappedJSObject;
++  }
++  return obj;
++}
++
++function unwaive(obj) {
++  if (obj === null || (typeof obj !== "object" && typeof obj !== "function")) {
++    return obj;
++  }
+   try {
+-    if (rawWindow?.wrappedJSObject) {
+-      return rawWindow.wrappedJSObject;
+-    }
+-  } catch (_e) {}
+-  return rawWindow;
++    return Cu.unwaiveXrays(obj);
++  } catch (_e) {
++    return obj;
++  }
+ }
+ 
+-function spoofGetter(pageWindow, obj, prop, value) {
+-  if (!obj) {
++function isPersonaPrincipal(principal) {
++  try {
++    if (!principal?.isContentPrincipal) {
++      return false;
++    }
++    return (
++      principal.schemeIs("http") ||
++      principal.schemeIs("https") ||
++      principal.schemeIs("file")
++    );
++  } catch (_e) {
+     return false;
+   }
++}
++
++function hooksPrefOn() {
+   try {
+-    const getter = Cu.exportFunction(function darkstrNavGetter() {
+-      return value;
+-    }, pageWindow);
+-    Object.defineProperty(obj, prop, {
+-      configurable: true,
+-      enumerable: true,
+-      get: getter,
+-    });
+-    return true;
++    return (
++      Services.prefs.getBoolPref("darkstr.nativePersonaHooks", false) &&
++      Services.prefs.getBoolPref("darkstr.pollutionActive", false) &&
++      !Services.prefs.getBoolPref("darkstr.nativeCompatible", false)
++    );
+   } catch (_e) {
+     return false;
+   }
+ }
+ 
+-function applySnapshot(rawWindow, snapshot) {
+-  if (!snapshot || !snapshot.userAgent || !rawWindow) {
++/**
++ * Accessors named like the native ones ("get userAgent"). Static accessor
++ * names, not computed keys: exportFunction keeps the compiled function name
++ * (a computed key would export as an anonymous function). The forwarded
++ * `this` picks persona vs native.
++ */
++function makeGetters(originals) {
++  const read = (self, prop) => {
++    const entry = navValues.get(unwaive(self));
++    if (entry && entry.values.has(prop)) {
++      return entry.values.get(prop);
++    }
++    return Reflect.apply(originals.get(prop).get, self, []);
++  };
++  const holder = {
++    get userAgent() {
++      return read(this, "userAgent");
++    },
++    get platform() {
++      return read(this, "platform");
++    },
++    get hardwareConcurrency() {
++      return read(this, "hardwareConcurrency");
++    },
++    get language() {
++      return read(this, "language");
++    },
++    get languages() {
++      return read(this, "languages");
++    },
++  };
++  return prop => Object.getOwnPropertyDescriptor(holder, prop).get;
++}
++
++function hookPrototype(pageWindow, navProto) {
++  const key = unwaive(navProto);
++  if (protoOriginals.has(key)) {
++    return true;
++  }
++  const originals = new Map();
++  for (const prop of PROPS) {
++    const desc = Object.getOwnPropertyDescriptor(navProto, prop);
++    if (!desc?.get || !desc.configurable) {
++      continue;
++    }
++    originals.set(prop, desc);
++  }
++  if (!originals.size) {
++    return false;
++  }
++  protoOriginals.set(key, originals);
++  const getterFor = makeGetters(originals);
++  for (const [prop, desc] of originals) {
++    try {
++      Object.defineProperty(navProto, prop, {
++        configurable: desc.configurable,
++        enumerable: desc.enumerable,
++        get: Cu.exportFunction(getterFor(prop), pageWindow),
++        set: desc.set,
++      });
++    } catch (e) {
++      originals.delete(prop);
++      console.error("darkstr 0051: navigator hook failed", prop, e);
++    }
++  }
++  return true;
++}
++
++function unhookPrototype(navProto) {
++  const key = unwaive(navProto);
++  const originals = protoOriginals.get(key);
++  if (!originals) {
+     return;
+   }
+-  let pageWindow;
++  for (const [prop, desc] of originals) {
++    try {
++      Object.defineProperty(navProto, prop, desc);
++    } catch (_e) {}
++  }
++  protoOriginals.delete(key);
++}
++
++/** Persona values for one window's navigator (page-compartment values). */
++export function installNavigatorPersona(window, snapshot) {
++  if (!window || !snapshot?.userAgent) {
++    return "skipped";
++  }
++  const pageWindow = waive(window);
++  const navProto = pageWindow?.Navigator?.prototype;
++  const nav = pageWindow?.navigator;
++  if (!navProto || !nav) {
++    return "no-navigator";
++  }
++  const langs =
++    Array.isArray(snapshot.languages) && snapshot.languages.length
++      ? snapshot.languages.map(String)
++      : ["en-US", "en"];
++  let pageLangs;
+   try {
+-    pageWindow = contentWindowFor(rawWindow);
++    pageLangs = Cu.cloneInto(langs, pageWindow);
++    pageWindow.Object.freeze(pageLangs);
+   } catch (_e) {
+-    return;
++    pageLangs = Object.freeze(langs.slice());
+   }
+-  if (!pageWindow?.Navigator) {
+-    return;
++  const values = new Map([
++    ["userAgent", String(snapshot.userAgent)],
++    ["platform", String(snapshot.platform || "MacIntel")],
++    ["hardwareConcurrency", Number(snapshot.hardwareConcurrency) || 8],
++    ["language", langs[0]],
++    ["languages", pageLangs],
++  ]);
++  if (!hookPrototype(pageWindow, navProto)) {
++    return "no-hookable-accessor";
+   }
+-  const navProto = pageWindow.Navigator.prototype;
+-  let nav = null;
++  navValues.set(unwaive(nav), { values, proto: navProto });
++  return "installed";
++}
++
++export function uninstallNavigatorPersona(window) {
++  let pageWindow;
+   try {
+-    nav = pageWindow.navigator;
+-  } catch (_e) {}
+-  const hw = Number(snapshot.hardwareConcurrency) || 8;
+-  const mem = Number(snapshot.deviceMemory) || 8;
+-  const langs = Array.isArray(snapshot.languages)
+-    ? snapshot.languages.slice()
+-    : ["en-US", "en"];
+-  const langsCopy = langs.slice();
+-  const spoofBoth = (prop, value) => {
+-    // Instance first — own property wins over prototype getter.
+-    spoofGetter(pageWindow, nav, prop, value);
+-    spoofGetter(pageWindow, navProto, prop, value);
+-  };
+-  spoofBoth("userAgent", snapshot.userAgent);
+-  spoofBoth("platform", snapshot.platform || "MacIntel");
+-  spoofBoth("hardwareConcurrency", hw);
+-  spoofBoth("deviceMemory", mem);
+-  spoofBoth("language", langs[0] || "en-US");
+-  // Fresh page-compartment array each get (cloneInto). Chrome Array return from
+-  // exportFunction Xray-denies .length to page principal after SubsequentNav (0033).
+-  try {
+-    const langsGetter = Cu.exportFunction(function darkstrLangsGetter() {
+-      try {
+-        return Cu.cloneInto(langsCopy.slice(), pageWindow);
+-      } catch (_e) {
+-        // Fallback: build via page Array so content never sees a chrome Array.
+-        try {
+-          const A = pageWindow.Array;
+-          return A.from(Cu.cloneInto(langsCopy, pageWindow));
+-        } catch (_e2) {
+-          return langsCopy.slice();
+-        }
+-      }
+-    }, pageWindow);
+-    if (nav) {
+-      Object.defineProperty(nav, "languages", {
+-        configurable: true,
+-        enumerable: true,
+-        get: langsGetter,
+-      });
+-    }
+-    Object.defineProperty(navProto, "languages", {
+-      configurable: true,
+-      enumerable: true,
+-      get: langsGetter,
+-    });
+-  } catch (_e) {}
++    pageWindow = waive(window);
++  } catch (_e) {
++    return "idle";
++  }
++  const nav = pageWindow?.navigator;
++  const entry = nav ? navValues.get(unwaive(nav)) : null;
++  if (!entry) {
++    return "idle";
++  }
++  navValues.delete(unwaive(nav));
++  // One navigator per inner window: the prototype has no other user.
++  unhookPrototype(entry.proto);
++  return "uninstalled";
++}
++
++/** Test hook. */
++export function personaValuesFor(window) {
+   try {
+-    spoofBoth("userAgentData", undefined);
+-  } catch (_e) {}
++    const nav = waive(window)?.navigator;
++    const entry = nav ? navValues.get(unwaive(nav)) : null;
++    return entry ? Object.fromEntries(entry.values) : null;
++  } catch (_e) {
++    return null;
++  }
+ }
+ 
+ export class DarkstrNativePersonaChild extends JSWindowActorChild {
+-  async pullAndApply() {
+-    let snapshot;
++  _decisionSync() {
+     try {
+-      snapshot = await this.sendQuery("DarkstrNativePersona:GetSnapshot");
+-    } catch (_e) {
+-      return;
++      const results = Services.cpmm.sendSyncMessage(MSG_INSTALL, {
++        innerWindowId: this.manager.innerWindowId,
++      });
++      return results?.[0] || null;
++    } catch (e) {
++      console.error("darkstr 0051: persona install IPC failed", e);
++      return null;
+     }
+-    applySnapshot(this.contentWindow, snapshot);
+   }
+ 
+-  async handleEvent(event) {
+-    if (event.type !== "DOMWindowCreated" && event.type !== "pageshow") {
++  _install(eventType) {
++    let document;
++    let window;
++    try {
++      document = this.document;
++      window = this.contentWindow;
++    } catch (_e) {}
++    if (!document || !window) {
++      return;
++    }
++    const hooked = !!personaValuesFor(window);
++    if (!isPersonaPrincipal(document.nodePrincipal)) {
++      if (hooked) {
++        uninstallNavigatorPersona(window);
++      }
++      return;
++    }
++    if (eventType !== MSG_REFRESH && !hooked && !hooksPrefOn()) {
++      // Idle: no IPC, native navigator.
+       return;
+     }
+-    await this.pullAndApply();
++    const decision = this._decisionSync();
++    if (!decision || decision.decision === "retry") {
++      return;
++    }
++    checkedDocuments.add(document);
++    if (decision.decision !== "persona" || !decision.snapshot) {
++      uninstallNavigatorPersona(window);
++      return;
++    }
++    try {
++      installNavigatorPersona(window, decision.snapshot);
++    } catch (e) {
++      console.error("darkstr 0051: navigator persona install failed", e);
++    }
++  }
++
++  handleEvent(event) {
++    switch (event.type) {
++      case "DOMWindowCreated":
++        this._install(event.type);
++        break;
++      case "DOMDocElementInserted": {
++        // Same-origin navigation of an initial about:blank reuses the inner
++        // window: no second DOMWindowCreated for the new document.
++        let document = null;
++        try {
++          document = this.document;
++        } catch (_e) {}
++        if (document && !checkedDocuments.has(document)) {
++          this._install(event.type);
++        }
++        break;
++      }
++      case "pageshow":
++        if (event.persisted) {
++          this._install(event.type);
++        }
++        break;
++      default:
++        break;
++    }
++  }
++
++  receiveMessage(message) {
++    if (message.name === MSG_REFRESH) {
++      this._install(MSG_REFRESH);
++    }
++    return null;
+   }
+ }
+diff -ruN a51/browser/components/DarkstrNativePersonaParent.sys.mjs b51/browser/components/DarkstrNativePersonaParent.sys.mjs
+--- a51/browser/components/DarkstrNativePersonaParent.sys.mjs	2026-10-08 17:54:14.346204851 -0500
++++ b51/browser/components/DarkstrNativePersonaParent.sys.mjs	2026-10-08 17:54:14.346204851 -0500
+@@ -3,27 +3,19 @@
+  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+ 
+ /**
+- * darkstr M3 — JSWindowActor parent. Returns persona snapshot for Navigator binds.
++ * darkstr M3 — JSWindowActor parent for the navigator persona.
+  * Brand: darkstr — not official LibreWolf.
+  *
+- * Soft residual (0012): refreshPlan on GetSnapshot so pageshow re-asserts
+- * darkstr.persona.languages (force notify) and content 0011 clears the WebIDL
+- * languages cache. nativePersonaHooks stays default-off.
+- *
+- * Soft residual (0013/0014): BC languageOverride primary tag + intl.accept_languages.
+- *
+- * P0 FP coherence (0025): After SubsequentNav, primary-only languageOverride was
+- * collapsing live navigator.languages to ["en-US"] (cached first-doc / BC path).
+- * Pulse DidSet clear, then clear override to "" so C++ TryGetLanguages +
+- * intl.accept_languages CSV (en-US,en,es) own the DOM list.
+- *
+- * P1 coherence (0028): browsingContext.timezoneOverride follows the armed
+- * persona snapshot (updates Intl/Date and dedicated/shared workers natively).
+- * First-document holdback and Homogeneous clear it back to host behavior.
+- *
+- * Soft residual (0030): per-eTLD+1 sticky seed — GetSnapshot resolves the
+- * site-local snapshot (same map as HTTP UA). When rotate is active, re-assert
+- * mirrors for this BC's eTLD so TZ/HW/langs stay coherent with the seed.
++ * 0051 persona surface: the child installs synchronously through the ppmm
++ * "DarkstrNativePersona:Install" listener in DarkstrNativePersona.sys.mjs
++ * (one decision per document, shared with the HTTP User-Agent /
++ * Accept-Language of every request that document makes). This actor only
++ *   - answers the legacy async GetSnapshot query from that same decision, and
++ *   - clears a BrowsingContext.languageOverride an older build left behind.
++ * No global languages / accept-languages writes, no languageOverride pulse
++ * (they were global "last site wins" signals across tabs — Rowan N3).
++ * Timezone override (0028) is set by installForWindowGlobal for top-level
++ * documents.
+  */
+ 
+ export class DarkstrNativePersonaParent extends JSWindowActorParent {
+@@ -35,108 +27,20 @@
+       const { DarkstrNativePersona } = ChromeUtils.importESModule(
+         "moz-src:///browser/components/DarkstrNativePersona.sys.mjs"
+       );
+-      const plan = DarkstrNativePersona.refreshPlan();
+-      const snapshot = DarkstrNativePersona.snapshotForBrowsingContext(
+-        this.browsingContext
+-      );
+-      // 0030: when rotating, plan.snapshot is null — use BC site snapshot for
+-      // language pulse / accept_languages / C++ mirrors.
+-      const mirrorSnap = snapshot || plan?.snapshot || null;
+-      this._syncBrowsingContextLanguageOverride({
+-        ...plan,
+-        snapshot: mirrorSnap,
+-        applyNativeBase: plan?.applyNativeBase && !!mirrorSnap,
+-      });
+-      // Re-assert accept_languages / langs mirror after override pulse so content
+-      // observers clear WebIDL [Cached] languages toward the full persona CSV.
+-      try {
+-        if (plan?.applyNativeBase && mirrorSnap) {
+-          const langs = Array.isArray(mirrorSnap.languages)
+-            ? mirrorSnap.languages.join(",")
+-            : "en-US,en";
+-          DarkstrNativePersona._forceLanguagesMirrorNotify?.(langs);
+-          DarkstrNativePersona._forceAcceptLanguagesNotify?.(langs);
+-          if (plan.rotatePerSite) {
+-            DarkstrNativePersona._applyPersonaMirrors?.(mirrorSnap);
+-          }
+-        }
+-      } catch (_e) {}
+-      this._syncBrowsingContextTimezoneOverride(snapshot);
+-      return snapshot;
++      this._clearLegacyLanguageOverride();
++      const result = DarkstrNativePersona.installForWindowGlobal(this.manager);
++      return result?.snapshot || null;
+     } catch (_e) {
+       return null;
+     }
+   }
+ 
+-  /**
+-   * 0028: set native realm/worker timezone only when the BC snapshot is armed.
+-   * BrowsingContext::DidSet applies JS::SetRealmTimezoneOverride and updates
+-   * dedicated/shared workers. Null snapshot preserves strict first-doc holdback.
+-   */
+-  _syncBrowsingContextTimezoneOverride(snapshot) {
+-    try {
+-      const top = this.browsingContext?.top;
+-      if (!top) {
+-        return;
+-      }
+-      const timezone = snapshot?.timezone
+-        ? String(snapshot.timezone).trim()
+-        : "";
+-      if (top.timezoneOverride !== timezone) {
+-        top.timezoneOverride = timezone;
+-      }
+-    } catch (e) {
+-      try {
+-        const reason =
+-          "timezoneOverride: " +
+-          (e && e.message ? String(e.message) : String(e)).slice(0, 180);
+-        Services.prefs.setStringPref("darkstr.persona.lastError", reason);
+-      } catch (_e2) {}
+-    }
+-  }
+-
+-  /**
+-   * Pulse languageOverride DidSet (cache clear), then clear to "" when applying
+-   * persona so the multi-tag intl.accept_languages / C++ langs mirror win.
+-   * Primary-tag sticky override collapsed live languages to ["en-US"] (Proof P0).
+-   */
+-  _syncBrowsingContextLanguageOverride(plan) {
++  _clearLegacyLanguageOverride() {
+     try {
+       const top = this.browsingContext?.top;
+-      if (!top) {
+-        return;
+-      }
+-      if (plan?.applyNativeBase && plan.snapshot) {
+-        const langs = plan.snapshot.languages;
+-        const primary =
+-          Array.isArray(langs) && langs.length
+-            ? String(langs[0] || "").trim()
+-            : "";
+-        // Pulse primary → "" to force ClearLanguageCache without leaving a
+-        // single-tag override that shrinks navigator.languages.
+-        if (primary) {
+-          try {
+-            if (top.languageOverride !== primary) {
+-              top.languageOverride = primary;
+-            } else {
+-              top.languageOverride = "";
+-              top.languageOverride = primary;
+-            }
+-          } catch (_e) {}
+-        }
+-        top.languageOverride = "";
+-        return;
+-      }
+-      if (top.languageOverride) {
++      if (top && top.languageOverride) {
+         top.languageOverride = "";
+       }
+-    } catch (e) {
+-      try {
+-        const reason =
+-          "languageOverride: " +
+-          (e && e.message ? String(e.message) : String(e)).slice(0, 180);
+-        Services.prefs.setStringPref("darkstr.persona.lastError", reason);
+-      } catch (_e2) {}
+-    }
++    } catch (_e) {}
+   }
+ }
+diff -ruN a51/dom/base/Navigator.cpp b51/dom/base/Navigator.cpp
+--- a51/dom/base/Navigator.cpp	2026-10-08 17:54:14.350204862 -0500
++++ b51/dom/base/Navigator.cpp	2026-10-08 17:54:14.354204872 -0500
+@@ -4,7 +4,6 @@
+ 
+ // Needs to be first.
+ #include "Navigator.h"
+-#include "DarkstrNavigatorHooks.h"
+ 
+ #include "Geolocation.h"
+ #include "base/basictypes.h"
+@@ -271,10 +270,8 @@
+ 
+ void Navigator::GetUserAgent(nsAString& aUserAgent, CallerType aCallerType,
+                              ErrorResult& aRv) const {
+-  // darkstr M3-CPP-NAV: persona UA when pollution + nativePersonaHooks.
+-  if (DarkstrNavigatorHooks::TryGetUserAgent(aUserAgent)) {
+-    return;
+-  }
++  // darkstr 0051: window navigator persona is a per-document chrome hook
++  // (DarkstrNativePersonaChild); no global-pref override here.
+ 
+   nsCOMPtr<nsPIDOMWindowInner> window;
+ 
+@@ -417,10 +414,7 @@
+ }
+ 
+ void Navigator::GetLanguages(nsTArray<nsString>& aLanguages) {
+-  // darkstr M3-CPP-NAV: persona languages when pollution + hooks.
+-  if (DarkstrNavigatorHooks::TryGetLanguages(aLanguages)) {
+-    return;
+-  }
++  // darkstr 0051: per-document languages come from DarkstrNativePersonaChild.
+ 
+   BrowsingContext* bc = mWindow ? mWindow->GetBrowsingContext() : nullptr;
+   if (bc) {
+@@ -443,10 +437,7 @@
+ 
+ void Navigator::GetPlatform(nsAString& aPlatform, CallerType aCallerType,
+                             ErrorResult& aRv) const {
+-  // darkstr M3-CPP-NAV: persona platform when pollution + hooks.
+-  if (DarkstrNavigatorHooks::TryGetPlatform(aPlatform)) {
+-    return;
+-  }
++  // darkstr 0051: per-document platform comes from DarkstrNativePersonaChild.
+ 
+   if (mWindow) {
+     BrowsingContext* bc = mWindow->GetBrowsingContext();
+@@ -712,11 +703,8 @@
+ }
+ 
+ uint64_t Navigator::HardwareConcurrency() {
+-  // darkstr M3-CPP-NAV: persona HW concurrency when pollution + hooks.
+-  uint64_t darkstrHw = 0;
+-  if (DarkstrNavigatorHooks::TryGetHardwareConcurrency(darkstrHw)) {
+-    return darkstrHw;
+-  }
++  // darkstr 0051: per-document hardwareConcurrency comes from
++  // DarkstrNativePersonaChild (workers: WorkerNavigator, pin 0049).
+ 
+   workerinternals::RuntimeService* rts =
+       workerinternals::RuntimeService::GetOrCreateService();
+diff -ruN a51/netwerk/protocol/http/DarkstrNsHttpHooks.cpp b51/netwerk/protocol/http/DarkstrNsHttpHooks.cpp
+--- a51/netwerk/protocol/http/DarkstrNsHttpHooks.cpp	2026-10-08 17:54:14.354204872 -0500
++++ b51/netwerk/protocol/http/DarkstrNsHttpHooks.cpp	2026-10-08 17:54:14.354204872 -0500
+@@ -25,26 +25,6 @@
+     "sec-ch-ua-wow64",
+ };
+ 
+-// Storage for UserAgentOverride() return — refreshed each call.
+-static nsCString gDarkstrUaOverride;
+-
+-namespace {
+-
+-/** SubsequentNav arm via DocShell phase mirror (0007/0020). Multi-tab limited. */
+-bool StrictNextNavArmedMirror() {
+-  if (!Preferences::GetBool("darkstr.strictFirstDoc", true)) {
+-    return true;
+-  }
+-  nsAutoCString phase;
+-  if (NS_FAILED(Preferences::GetCString("darkstr.persona.docShellPhase", phase)) ||
+-      phase.IsEmpty()) {
+-    return false;
+-  }
+-  return phase.EqualsLiteral("subsequent_nav");
+-}
+-
+-}  // namespace
+-
+ bool DarkstrNsHttpHooks::PollutionNativeHooksActive() {
+   if (!Preferences::GetBool("darkstr.nativePersonaHooks", false)) {
+     return false;
+@@ -57,56 +37,11 @@
+   return mode.EqualsLiteral("pollution");
+ }
+ 
+-static bool ExtractUserAgentFromSnapshotJson(const nsACString& aJson,
+-                                             nsACString& aOutUa) {
+-  // Minimal honest extractor: look for "userAgent":"<value>" only.
+-  // Full JSON parse stays in chrome (0003). This is a C++ fallback mirror.
+-  // Find "userAgent" then the next quoted string value.
+-  nsAutoCString flat(aJson);
+-  int32_t keyPos = flat.Find("\"userAgent\"");
+-  if (keyPos < 0) {
+-    return false;
+-  }
+-  int32_t colon = flat.Find(":", keyPos + 12);
+-  if (colon < 0) {
+-    return false;
+-  }
+-  int32_t firstQuote = flat.Find("\"", colon + 1);
+-  if (firstQuote < 0) {
+-    return false;
+-  }
+-  int32_t secondQuote = flat.Find("\"", firstQuote + 1);
+-  if (secondQuote < 0 || secondQuote <= firstQuote + 1) {
+-    return false;
+-  }
+-  aOutUa.Assign(Substring(flat, firstQuote + 1, secondQuote - firstQuote - 1));
+-  return !aOutUa.IsEmpty();
+-}
+-
+ const nsCString* DarkstrNsHttpHooks::UserAgentOverride() {
+-  gDarkstrUaOverride.Truncate();
+-  // UA follows strict-next-nav (chrome shouldApplyForChannel parity).
+-  // CH REMOVE stays pollution+hooks only (chrome 0003 asymmetry).
+-  if (!PollutionNativeHooksActive() || !StrictNextNavArmedMirror()) {
+-    return nullptr;
+-  }
+-
+-  nsAutoCString ua;
+-  if (NS_SUCCEEDED(Preferences::GetCString("darkstr.persona.ua", ua)) &&
+-      !ua.IsEmpty()) {
+-    gDarkstrUaOverride.Assign(ua);
+-    return &gDarkstrUaOverride;
+-  }
+-
+-  nsAutoCString snapshot;
+-  if (NS_SUCCEEDED(
+-          Preferences::GetCString("darkstr.persona.snapshot", snapshot)) &&
+-      !snapshot.IsEmpty() &&
+-      ExtractUserAgentFromSnapshotJson(snapshot, ua)) {
+-    gDarkstrUaOverride.Assign(ua);
+-    return &gDarkstrUaOverride;
+-  }
+-
++  // darkstr 0051 (Rowan N2): no global User-Agent override. The persona UA
++  // and Accept-Language are set per request in chrome
++  // (DarkstrNativePersona._onModifyRequest) from the requesting document's
++  // own decision; a process-wide pref cannot tell tabs apart.
+   return nullptr;
+ }
+ 
+diff -ruN a51/netwerk/protocol/http/DarkstrNsHttpHooks.h b51/netwerk/protocol/http/DarkstrNsHttpHooks.h
+--- a51/netwerk/protocol/http/DarkstrNsHttpHooks.h	2026-10-08 17:54:14.358204882 -0500
++++ b51/netwerk/protocol/http/DarkstrNsHttpHooks.h	2026-10-08 17:54:14.358204882 -0500
+@@ -34,9 +34,8 @@
+   static bool PollutionNativeHooksActive();
+ 
+   /**
+-   * Non-null when PollutionNativeHooksActive and a non-empty UA is available
+-   * from `darkstr.persona.ua` or `darkstr.persona.snapshot` JSON.
+-   * Returned pointer is stable until the next call.
++   * 0051: always null. The persona User-Agent is per request (chrome,
++   * DarkstrNativePersona._onModifyRequest), never a process-wide pref.
+    */
+   static const nsCString* UserAgentOverride();
+ 

@@ -518,6 +518,57 @@ All five 0043 Worker/SharedWorker WebGPU XOR gates passed on Proof tip `cc692641
 | Evidence | `~/AgentDocs/proof/darkstr-0048-cookiefw-20261008/` |
 | Merge | only after Proof PASS |
 
+## In review — 0051 persona surface (stacked on 0048)
+
+| | |
+|---|---|
+| Pin | **0051** (Rowan QA N2, N3, N4, N5) |
+| Branch | `builder/0051-persona-surface` — **stacked on `builder/0048-cookie-firewall` @ `a9481cd`** (PR #79); targets `main` |
+| Patch | [`patches/0051-darkstr-persona-surface.patch`](../patches/0051-darkstr-persona-surface.patch) |
+| Apply SoT | [`patches/0051-files/`](../patches/0051-files/) (4 modules + `Navigator.cpp` + `DarkstrNsHttpHooks.{cpp,h}` + `SHA256SUMS`) |
+| Mini helper | [`scripts/apply-0051-persona-surface-mini.sh`](../scripts/apply-0051-persona-surface-mini.sh) (needs 0048 applied; C++ → libxul relink) |
+| Tests | [`tests/persona-surface-0051.test.mjs`](../tests/persona-surface-0051.test.mjs) + prototype-level cookie shape in [`tests/cookie-firewall-0048.test.mjs`](../tests/cookie-firewall-0048.test.mjs) |
+| Defaults | unchanged — hooks default-off, firewall opt-in, strictFirstDoc on |
+| Evidence | `~/AgentDocs/proof/darkstr-0051-persona-20261008/` |
+| Merge | after #79, and only after Proof PASS |
+
+### What changed
+
+- **N2 — per-tab / per-document phase.** One decision per document
+  (WindowGlobalParent): `{armed, top-level site, snapshot}`. The phase is the
+  tab's own count of top-level http(s) documents (BrowserId; redirects and
+  internal redirects not counted). Frames and every request a document makes
+  use its top-level document's decision. The global
+  `darkstr.persona.docShellPhase` / `darkstr.docshell.strictNextNavArmed`
+  prefs are diagnostics only; `DarkstrNsHttpHooks::UserAgentOverride` now
+  returns null and the window `Navigator.cpp` global-pref hooks are removed.
+- **N3 — Accept-Language.** Set per request next to User-Agent from the same
+  snapshot as that document's `navigator.languages`, in Gecko's own format
+  (port of `rust_prepare_accept_languages`). A page-set value is kept.
+  `intl.accept_languages` and `darkstr.persona.languages` are no longer
+  written; a value saved by an older build is restored once.
+- **N4 — Firefox-only, native-shaped surface.** No `deviceMemory`, no
+  `userAgentData`. userAgent / platform / hardwareConcurrency / language /
+  languages are replaced on `Navigator.prototype` (not own properties) with
+  getters whose name / length / toString / attributes / foreign-receiver
+  errors match native; `navigator.languages` is one frozen array per document.
+  Installed synchronously before page script (sync IPC keyed by
+  innerWindowId); native decision restores the original accessors. The 0048
+  `document.cookie` hook moved to `Document.prototype` and the Cookie Store
+  methods to `CookieStore.prototype` (native names and lengths 0/0/1/1).
+- **N5 — explicit lock only.** The seed path never writes
+  `darkstr.persona.snapshot`. Locks are a pasted `darkstr.persona.snapshot`
+  (persistent) or `darkstr.persona.rotatePerSite=false` (reversible). A
+  profile that an older build already self-locked keeps that pasted-looking
+  snapshot: clear `darkstr.persona.snapshot` to resume rotation.
+
+### Not in 0051
+
+- Persona version numbers (139/140 vs 156) and seed persistence — **N6**, open for Alex.
+- Worker persona path (0049): worker `deviceMemory` spoof, worker HW mirror,
+  Shared/Service-worker requests (no browsing context → native headers).
+- Chaff (0050).
+
 ## Completed — 0042 Cookie `/echo` QI soft residual
 
 | Item | Status |
