@@ -504,6 +504,50 @@ All five 0043 Worker/SharedWorker WebGPU XOR gates passed on Proof tip `cc692641
 - Evidence: `~/AgentDocs/proof/darkstr-pr74-0043-xor-20260928-084400/`
 - Apply log: `~/AgentDocs/proof/darkstr-pr74-0043-xor-20260928-084400/darkstr-apply-0043-20260928-084400.log`
 
+## In review — 0057 depth farbling seeded per site (Fable B2)
+
+| | |
+|---|---|
+| Pin | **0057**: canvas / audio / WebGL readPixels / fonts / WebGPU depth farbling, seeded per (container, site) from the 0056 store |
+| Branch | `builder/0057-depth-per-site`, stacked on `builder/0056-persona-seed-store` (0056r3 merged in, not rebased) |
+| Patch | [`patches/0057-darkstr-depth-per-site.patch`](../patches/0057-darkstr-depth-per-site.patch) + `patches/0057-files/` (DepthHooks, DepthHooksChild, DepthHooksParent, NativePersona, WorkerHooks, WorkerHooksChild; `SHA256SUMS`, `BASE_SHA256SUMS`: NativePersona base = 0056r3) |
+| Apply | `scripts/apply-0057-depth-per-site-mini.sh` (chrome JS only) |
+| Tests | `tests/depth-per-site-0057.test.mjs` |
+| DMG | `~/AgentDocs/builds/darkstr-0057-35247c01.dmg` (+ `.sha256`), sha256 `35247c01797681cec6534fc5e219e77186e5131c60f8c90146247bad668c07a0` (r5 = 0057 on 0056r3); omni matches `patches/0057-files`, 0056 store / CookieFirewall / ClearDataService, 0053r2 ModeXor, 0055 Ffi. Superseded: `darkstr-0057-75174927` (r1), `darkstr-0057-c2f8cece` (r4 on 0056r2) |
+| Evidence | `~/AgentDocs/proof/darkstr-0057-r5-20261009-101325/` (`selftest/live-final`, negative control `live-negctl-0056r3`, 0056 suite on this app `run-0056-on-0057r5.log`, `live-rfp-baseline`, `rfpcheck/`); r1–r4: `~/AgentDocs/proof/darkstr-0057-20261009-092626/` |
+
+### Design
+
+- **Arming.** DepthHooks arm on Pollution + native hooks + per-site rotation, with no global `darkstr.persona.seed`. The fixed seed and a locked snapshot stay the deterministic Proof path. The sharedData hint `darkstr:depthArmed` gates the sync pull, so off mode does no IPC.
+- **Seeds.** One seed set per (container, site) per surface (canvas, audio, font, speech, WebGPU), derived from the 0056 store seed. Seeds are resolved for the requesting document's own WindowGlobalParent (`NP.documentDecision(wgp)`), not `bc.currentWindowGlobal`.
+- **Early reads.** The child pulls synchronously (`DarkstrDepthHooks:GetSeedsSync`) at `DOMWindowCreated`, and also at `DOMDocElementInserted` for reused initial windows. An inline script's first read is already farbled.
+- **No stacking.** There is one install per inner global (key: Xray `HTMLCanvasElement.prototype`), with waiver-safe identity checks and an own-wrapper guard.
+- **Canvas.** Noise is keyed by the absolute surface pixel and applied to opaque pixels only. `getImageData` (full and sub-rect), `toDataURL`, `toBlob`, OffscreenCanvas `convertToBlob` and WebGL `readPixels` (with the GL row flip) all agree. The worker prelude mirrors it.
+- **Audio.** Ratio farbling within the fudge. `getFloatFrequencyData` is offset by `20*log10(fudge)` dB. Silence stays silent.
+
+### Live self-test (Mini, headless SWGL, sandbox-exec loopback only, own port 8357)
+
+r5 app: `armed` 63/63, `off_mode` and `fixed_seed` PASS.
+- **Same as the page:** early inline read, repeat reads, same-origin and same-site cross-origin frames, workers (OffscreenCanvas and fonts).
+- **Alternate paths agree:** canvas and GL.
+- **Single-layer seed replay:** canvas, GL, audio and fonts.
+- **Stable:** across reload, and across restart for a kept site.
+- **Differs:** across sites and across user contexts.
+- **Off mode:** native, store untouched.
+
+Negative control (0056r3 app): `armed` FAILs on every farbling check. The 0056 driver's 12 scenarios also PASS on the 0057 r5 app (`run-0056-on-0057r5.log`).
+
+### Residual / for Proof
+
+- **Engine canvas noise under Pollution = baseline FPP.** ModeXor sets RFP and FPP to false, but `privacy.baselineFingerprintingProtection` stays true (Firefox default). Its canvas randomization adds per-session engine noise on top of darkstr's layer, so `toDataURL`/`toBlob`/`convertToBlob` vs `getImageData` and GL sub-rect/`toDataURL` disagree (`engine_rfp`: 94/2944 URL pixels).
+  - With `privacy.baselineFingerprintingProtection=false` and no canvas permission, every check passes (`engine_rfp_nobaseline`: 0/2944).
+  - The self-test grants the `canvas` permission to its probe origins to isolate darkstr's layer.
+  - **Proposed follow-up (not in this PR):** ModeXor also turns baseline FPP off under Pollution, with the same save/restore as RFP/FPP.
+- **Headed real-GPU items (Proof):**
+  - WebGL `readPixels` / `toDataURL` agreement and noise on a real GPU;
+  - WebGPU (`dom.webgpu.enabled`; `navigator.gpu` is absent headless here);
+  - GPU timing.
+
 ## In review — 0056 persisted per-site persona seeds (Fable N6 follow-up)
 
 | | |

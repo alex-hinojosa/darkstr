@@ -11,7 +11,7 @@
 #  - seeds resolved for the requesting document's own WindowGlobalParent (sync pull + DepthHooksParent),
 #    not bc.currentWindowGlobal (still the previous / initial about:blank document at DOMWindowCreated).
 #  - WorkerHooksChild prelude: same rect noise + readPixels flip + OffscreenCanvas measureText fudge.
-# Needs 0052 + 0053 + 0053r2 + 0055r2 + 0056r2 applied. Chrome JS only (no C++).
+# Needs 0052 + 0053 + 0053r2 + 0055r2 + 0056r3 applied. Chrome JS only (no C++).
 # usage: scripts/apply-0057-depth-per-site-mini.sh   (needs DARKSTR_GECKO_ROOT)
 # Atlas: never mv under /Volumes/Mesh.
 set -euo pipefail
