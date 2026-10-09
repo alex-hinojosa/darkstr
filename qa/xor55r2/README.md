@@ -30,3 +30,12 @@ Re-grading Proof's raw runs (`grade/reg/{w49r2,w49swr2,p51r2,p51swr2,pop51r2,pop
 these graders reproduces Proof's `GRADE.json` / `GRADEPOP.json` **byte for byte**.
 
 `python3 qa/xor55r2/selftest_xor55r2.py` (offline); `tests/qa-xor55r2-graders.test.mjs` runs it plus static checks.
+
+## 0058r2 (Proof #92): the popup grader no longer reads "UA changed"
+
+Proof's 0058r2 x51pop run used the 0051-era `h51/x51 grade51pop.py`. Its two armed "(UA != real 156)" checks fail by design, because the persona keeps the native UA. Use **this** `grade51pop.py` instead. Every armed or applied check here, in all three graders, is named and decided by the persona tuple: languages, hardwareConcurrency, timezone and platform != the native tuple. `persona_presence.describe()` gives each one's detail: the tuple, the native tuple, and the fields that differ. Only default-config checks still compare the UA (expected: plain 156).
+
+Checked on a copy of Proof's `raw/s0058r2/x51pop` (pop_armed / armedH / default):
+- **Before** (Proof's stale grader): 133/2, 133/2, 134/0.
+- **After** (this grader): 135/0, 135/0, 134/0.
+- **Negative control** (`XOR_NATIVE_TUPLE` set to the armed opener's own tuple): the opener armed check FAILs.

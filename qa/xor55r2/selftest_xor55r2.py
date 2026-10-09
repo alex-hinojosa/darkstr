@@ -36,6 +36,12 @@ class Presence(unittest.TestCase):
             self.assertTrue(pp.APPLIED(n), k)
             self.assertEqual(pp.applied_fields(n), [k])
 
+    def test_describe_never_reports_ua(self):
+        pp = load()
+        d = pp.describe(dict(MINI, languages=['de-DE', 'de'], tz='Europe/Berlin'))
+        self.assertEqual(d['differs'], ['languages', 'tz'])
+        self.assertNotIn('Firefox', json.dumps(d))
+
     def test_language_order_matters(self):
         self.assertTrue(load().APPLIED(dict(MINI, languages=['en', 'en-US'])))
 
