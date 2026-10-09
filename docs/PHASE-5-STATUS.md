@@ -1684,3 +1684,34 @@ Spec (Alex): each site gets one persona that stays the same on that site, so the
 1. Apple persona, real display, `dom.webgpu.enabled=true`: `requestAdapter()` info (vendor / architecture / device / description, plus `isFallbackAdapter`, features, limits) must equal a native profile's, field for field.
 2. Intel persona, same setup: `navigator.gpu` and all `GPU*` globals absent in the page and in all worker kinds. The page diff against stock with `dom.webgpu.enabled=false` must be empty.
 3. Mixed tabs: an Intel-persona site and an Apple-persona site open at the same time; each keeps its own gate across reloads and navigations (fix F).
+
+## 0054 (Fable B6): Pollution requires native persona hooks
+- **Gap (main 789f66c):** `darkstr.nativePersonaHooks` defaults to `false`, and ModeXor's `_enterPollution` forced RFP / FPP off whenever `darkstr.mode=pollution`, with or without hooks.
+  - Choosing Pollution in the Settings pane (hooks off by default), or hand-editing `darkstr.mode`, gave a bare browser: RFP and FPP off, no persona. Pages saw the host's real hardwareConcurrency, time zone and languages.
+- **Fix (chrome JS + ftl; `patches/0054-files`):**
+  - **ModeXor** (`DarkstrModeXor.sys.mjs`, base 0057c): `applyModeEffects` refuses Pollution while hooks are off, before any RFP / FPP write. `_refusePollution()` puts `darkstr.mode` back to Homogeneous: it clears the user value when the default is Homogeneous, else writes it, so there is no loop under a cfg default of Pollution.
+    - Leaving Pollution then restores the saved RFP / FPP exactly (0053). A profile an older build left in "Pollution, hooks off" is repaired at the next start the same way.
+    - It runs at startup and on every `darkstr.mode` / `darkstr.nativePersonaHooks` / `darkstr.nativeCompatible` change (new hooks observer): hand-edited prefs, about:config, an extension.
+    - Switching hooks off under Pollution leaves Pollution.
+    - Refusal is the safer of the two options: it never arms a persona the user did not choose, and RFP stays on. In-memory diagnostic: `darkstr.xor.lastRefusal`, plus a `console.warn`.
+  - **Settings pane** (`config/darkstr.mjs`, base 0044): choosing Pollution turns hooks on *before* it writes the mode (the `set` hook runs before the pref write), so the pane never hits the refusal. Leaving Pollution clears hooks, as before.
+    - The hooks checkbox is display-only: checked exactly while Pollution is on. An uncheck in Pollution is ignored.
+    - `preferences.ftl`: the hooks description now reads "On whenever Pollution is on: Pollution always applies the persona. Use Native-Compatible for native identity."
+  - **Native-Compatible stays the documented escape:** Pollution + hooks + nativeCompatible leaves RFP off with native identity, unchanged.
+- **Tests:** `tests/pollution-requires-hooks-0054.test.mjs` (7 tests, real ModeXor + pane module on a Gecko-like pref store):
+  - all 8 hand-edited startup states;
+  - all 64 runtime transitions in 4 write orders, with the invariant checked after every single write;
+  - hooks off under Pollution restores RFP / FPP exactly;
+  - the cfg-default-Pollution no-loop case and the pre-0054 bare profile;
+  - the NC escape;
+  - the pane, with `Setting.mjs` semantics: choose Pollution / uncheck / leave / NC + Pollution.
+  - npm 324/324. `off-mode-hands-off-0053` stays pinned to the 0057c ModeXor it was written for: its Pollution-with-hooks-off scenarios are now refused by design.
+- **DMG `darkstr-0054-255a6df8.dmg`** (main 789f66c + 0054). dmgverify: ModeXor and pane MATCH, and the packaged `preferences.ftl` carries the new string.
+- **Live self-test** (`darkstr-0054-*/selftest`, port 8471, own hosts, loopback-only sandbox, fresh profiles):
+  - Phases: (A) 8 hand-edited startup profiles; (B) 27 runtime targets × 3 write orders on one profile, invariants after every write; (C) the real Settings pane in about:preferences.
+  - Each document is graded on the chrome prefs, NativePersona's decision for that document, page + dedicated worker values, and the document's own request headers.
+  - Invariants: never Pollution with hooks off; RFP off only with an applied persona or under Native-Compatible; a page showing the host's real values only under Native-Compatible; an applied persona coherent across page, worker, Accept-Language and UA.
+  - **0054: 435/435 PASS.** Hand-edited Pollution with hooks off starts in Homogeneous with RFP on (page hc 8, `Atlantic/Reykjavik`). Pollution + hooks applies a persona; Pollution + hooks + NC shows native identity (the documented case). The pane turns hooks on with Pollution, and its hooks control is disabled.
+  - **Negative control on main's DMG (`darkstr-0058b-318ac5b0`, = 789f66c): FAIL 376/503** (127 failures: I1 39, I2 48, I3 9, plus expectation and pane checks). Pollution with hooks off has RFP off, no persona, and pages show the host values (hc 12, America/Chicago, en-US). Choosing Pollution in main's pane leaves hooks off, with the same result.
+- **Regression on 255a6df8:** WebGL / depth 605/605, private windows 71/71, Fable S1 PASS. Keychain: S1's own seed item deleted; the 0054 self-test profiles write no seed store (clear-on-shutdown, no keep exception), so they create no keychain items.
+- **Note for other writers:** anything that sets `darkstr.mode=pollution` must set `darkstr.nativePersonaHooks=true` first (Proof's armed harness already does), or it is refused.
