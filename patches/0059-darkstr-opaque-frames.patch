@@ -1,0 +1,161 @@
+--- a/browser/components/DarkstrNativePersonaChild.sys.mjs
++++ b/browser/components/DarkstrNativePersonaChild.sys.mjs
+@@ -79,6 +79,33 @@
+       principal.schemeIs("http") ||
+       principal.schemeIs("https") ||
+       principal.schemeIs("file")
++    );
++  } catch (_e) {
++    return false;
++  }
++}
++
++/**
++ * 0059 (Fable B7): an opaque-origin document -- sandboxed without
++ * allow-same-origin, data:, blob: created by an opaque origin, srcdoc in a
++ * sandbox, any nesting of those -- takes the persona of its top-level site,
++ * the same decision its own requests and its timezone already use (the
++ * parent's documentDecision gives a frame its top document's decision). Any
++ * opaque subframe qualifies (the parent decides; a non-web top gets native);
++ * a top-level opaque document only with a web precursor (sandboxed popup).
++ */
++export function isOpaquePersonaDocument(principal, browsingContext) {
++  try {
++    if (!principal?.isNullPrincipal) {
++      return false;
++    }
++    if (browsingContext?.parent) {
++      return true;
++    }
++    const pre = principal.precursorPrincipal;
++    return (
++      !!pre?.isContentPrincipal &&
++      (pre.schemeIs("http") || pre.schemeIs("https") || pre.schemeIs("file"))
+     );
+   } catch (_e) {
+     return false;
+@@ -280,7 +307,10 @@
+       return;
+     }
+     const hooked = !!personaValuesFor(window);
+-    if (!isPersonaPrincipal(document.nodePrincipal)) {
++    if (
++      !isPersonaPrincipal(document.nodePrincipal) &&
++      !isOpaquePersonaDocument(document.nodePrincipal, this.browsingContext)
++    ) {
+       if (hooked) {
+         uninstallNavigatorPersona(window);
+       }
+--- a/browser/components/DarkstrDepthHooksChild.sys.mjs
++++ b/browser/components/DarkstrDepthHooksChild.sys.mjs
+@@ -2394,6 +2394,51 @@
+       } catch (_e) {}
+     }
+     throw error;
++  }
++}
++
++/**
++ * 0059 (Fable B7): an opaque-origin document -- sandboxed without
++ * allow-same-origin, data:, blob: created by an opaque origin, srcdoc in a
++ * sandbox, any nesting of those -- gets its top-level site's depth noise,
++ * from the same decision its own requests and its timezone already use (the
++ * parent's documentDecision gives a frame its top document's decision). Any
++ * opaque subframe qualifies (the parent decides; a non-web top gets native);
++ * a top-level opaque document only with a web precursor (sandboxed popup).
++ */
++export function isOpaquePersonaDocument(principal, browsingContext) {
++  try {
++    if (!principal?.isNullPrincipal) {
++      return false;
++    }
++    if (browsingContext?.parent) {
++      return true;
++    }
++    const pre = principal.precursorPrincipal;
++    return (
++      !!pre?.isContentPrincipal &&
++      (pre.schemeIs("http") || pre.schemeIs("https") || pre.schemeIs("file"))
++    );
++  } catch (_e) {
++    return false;
++  }
++}
++
++/**
++ * 0059: documents the depth actor serves. The actor has no `matches` any more
++ * (0057's http(s) / file URL patterns never matched data:, about:srcdoc or
++ * blob: documents); this keeps exactly what they admitted and adds opaque
++ * documents.
++ */
++export function depthDocumentEligible(document, browsingContext) {
++  try {
++    const scheme = String(document?.documentURIObject?.scheme || "").toLowerCase();
++    if (scheme === "http" || scheme === "https" || scheme === "file") {
++      return true;
++    }
++    return isOpaquePersonaDocument(document?.nodePrincipal, browsingContext);
++  } catch (_e) {
++    return false;
+   }
+ }
+ 
+@@ -2503,6 +2548,15 @@
+     ) {
+       return;
+     }
++    let eligible = false;
++    try {
++      eligible = depthDocumentEligible(this.document, this.browsingContext);
++    } catch (_e) {}
++    if (!eligible) {
++      // 0059: not a web / opaque-web document (about:, chrome, moz-extension
++      // ...): no IPC, nothing installed -- what `matches` used to filter.
++      return;
++    }
+     await this.pullAndInstall(event.type);
+   }
+ }
+--- a/browser/components/DarkstrDepthHooks.sys.mjs
++++ b/browser/components/DarkstrDepthHooks.sys.mjs
+@@ -320,7 +320,11 @@
+         },
+         allFrames: true,
+         messageManagerGroups: ["browsers"],
+-        matches: ["*://*/*", "file://*"],
++        // 0059 (Fable B7): no `matches` -- opaque-origin frames (data:,
++        // about:srcdoc, blob: from an opaque origin) need their top-level
++        // site's depth noise too. The child admits exactly the old
++        // http(s)/file documents plus opaque ones (depthDocumentEligible)
++        // before any IPC.
+         // Required for Fission webIsolated / web content processes.
+         safeForUntrustedWebProcess: true,
+       });
+--- a/dom/base/DarkstrNavigatorHooks.cpp
++++ b/dom/base/DarkstrNavigatorHooks.cpp
+@@ -204,7 +204,13 @@
+     return nullptr;
+   }
+   nsIPrincipal* principal = aLoadInfo.mPrincipal;
+-  if (!principal || !principal->GetIsContentPrincipal()) {
++  // 0059 (Fable B7): an opaque-origin worker owned by a window (data: worker,
++  // blob: worker of a sandboxed / data: / srcdoc document) resolves through
++  // that window like any dedicated worker: the owning document's decision,
++  // i.e. its top-level site's persona -- the one its requests already carry.
++  if (!principal ||
++      !(principal->GetIsContentPrincipal() ||
++        (principal->GetIsNullPrincipal() && aLoadInfo.mWindow))) {
+     return nullptr;
+   }
+   nsCOMPtr<nsIObserverService> obs = services::GetObserverService();
+@@ -427,7 +433,9 @@
+     return false;
+   }
+   nsIPrincipal* principal = win->GetPrincipal();
+-  if (!principal || !principal->GetIsContentPrincipal()) {
++  // 0059: opaque-origin documents follow their top-level site's gate too.
++  if (!principal ||
++      !(principal->GetIsContentPrincipal() || principal->GetIsNullPrincipal())) {
+     return false;
+   }
+   const uint64_t innerWindowId = win->WindowID();
