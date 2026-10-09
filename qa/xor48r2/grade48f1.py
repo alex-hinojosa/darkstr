@@ -1,0 +1,22 @@
+#!/usr/bin/env python3
+"""grade F1 stress: usage grade48f1.py <raw dir>  (reads f1_*.json)"""
+import json, sys, glob, os
+R = {}
+for f in sorted(glob.glob(os.path.join(sys.argv[1], 'f1_*.json'))):
+    d = json.load(open(f)); tag = os.path.basename(f)[:-5]
+    docs = d.get('f1') or []; it = [x for r in docs for x in r.get('iters', [])]; cc = [x for r in docs for x in r.get('conc', [])]
+    bad = [r for r in docs if not r.get('iters')]
+    miss = lambda k: [(x['p'], x[k]) for x in it if x.get(k)]
+    durs = [x['dur'] for x in it] + [x['dur'] for x in cc]
+    R[tag] = {'config': d['config'], 'docs': len(docs), 'docsWithoutResult': [ (r.get('doc'), {k: r.get(k) for k in ('exception', 'harnessTimeout')}) for r in bad],
+              'fetchIterations': len(it), 'cookiesPerResponse': 6, 'concurrentBatches': len(cc),
+              'missTop': miss('missTop'), 'missSameOriginIframe1': miss('missSo1'), 'missSameOriginIframe2': miss('missSo2'),
+              'popupChecked': sum(1 for x in it if x.get('missPop') is not None), 'missPopup': miss('missPop'),
+              'missConcurrentTop': [(x['p'], x['missTop']) for x in cc if x['missTop']], 'missConcurrentIframe': [(x['p'], x['missSo1']) for x in cc if x['missSo1']],
+              'hiddenLeak(HttpOnly or Path=/sub visible)': miss('leak'), 'deletionStale': miss('staleDel'),
+              'durMs': {'max': max(durs) if durs else None, 'p50': sorted(durs)[len(durs)//2] if durs else None, 'ge1900(2s safety timeout suspect)': sum(1 for x in durs if x >= 1900)},
+              'hooks': sorted({r.get('hook') for r in docs if r.get('hook') is not None}, key=str), 'harnessError': d.get('harnessError'), 'lsof': d.get('lsof'), 'secs': d.get('f1Secs')}
+    r = R[tag]
+    r['PASS'] = (not r['harnessError'] and not bad and r['fetchIterations'] >= 300 and not any(r[k] for k in ('missTop', 'missSameOriginIframe1', 'missSameOriginIframe2', 'missPopup', 'missConcurrentTop', 'missConcurrentIframe', 'hiddenLeak(HttpOnly or Path=/sub visible)', 'deletionStale'))
+                 and r['durMs']['ge1900(2s safety timeout suspect)'] == 0 and (r['lsof'] or {}).get('samplesWithNonLoopback', 1) == 0)
+print(json.dumps(R, indent=1))
