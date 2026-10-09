@@ -361,6 +361,9 @@ export var DarkstrNativePersona = {
     if (this._bcTopLoads) {
       this._bcTopLoads.clear();
     }
+    if (this._openedTabs) {
+      this._openedTabs.clear();
+    }
   },
 
   /**
@@ -1191,13 +1194,143 @@ export var DarkstrNativePersona = {
           openerWc = bc.opener?.top?.currentWindowGlobal || null;
         } catch (_e) {}
       }
-      decision =
-        openerWc && openerWc !== wgp
-          ? this.documentDecision(openerWc)
-          : this._decisionFor(uri, this._tabArmed(bc));
+      if (openerWc && openerWc !== wgp) {
+        decision = this.documentDecision(openerWc);
+      } else {
+        decision =
+          this._openedContextDecision(bc, uri) ||
+          this._decisionFor(uri, this._tabArmed(bc));
+      }
     }
     this._docDecisions.set(wgp, decision);
     return decision;
+  },
+
+  /**
+   * 0051r2 (Proof F1, popups): a top-level browsing context opened from a
+   * page, while its tab is still on its first counted document.
+   *  - Opener relationship (window.open, target=_blank without noopener,
+   *    incl. about:blank and its later same-origin navigations): the opener
+   *    document's decision, recorded once when the popup is first seen. A
+   *    same-site document reuses it verbatim (same persona as the opener it
+   *    can script); a cross-site document keeps the opener's armed bit with
+   *    its own site's persona (no cross-site persona linking).
+   *  - No opener but opened from a page (crossGroupOpener: noopener /
+   *    rel=noopener / implicit noopener): the site's live armed decision,
+   *    the 0049 shared-worker rule.
+   *  - Anything else (URL bar, bookmarks, GUI new tab, external): null, so
+   *    strictFirstDoc is unchanged.
+   */
+  _openedContextDecision(bc, uri) {
+    const plan = this.getPlan();
+    if (!plan.applyNativeBase || !bc) {
+      return null;
+    }
+    const top = bc.top || bc;
+    if (this.tabPhase(top) !== "first_document") {
+      return null;
+    }
+    const key = this._tabKey(top);
+    if (!this._openedTabs) {
+      this._openedTabs = new Map();
+    }
+    let rec = key ? this._openedTabs.get(key) : null;
+    if (!rec) {
+      let opener = null;
+      let crossGroupOpener = null;
+      try {
+        opener = top.opener;
+      } catch (_e) {}
+      try {
+        crossGroupOpener = top.crossGroupOpener;
+      } catch (_e) {}
+      if (opener) {
+        let openerWc = null;
+        try {
+          openerWc = opener.top?.currentWindowGlobal || null;
+        } catch (_e) {}
+        if (!openerWc || openerWc.browsingContext?.top === top) {
+          return null;
+        }
+        rec = { kind: "opener", decision: this.documentDecision(openerWc) };
+      } else if (crossGroupOpener) {
+        rec = { kind: "noopener" };
+      } else {
+        return null;
+      }
+      if (key) {
+        this._openedTabs.set(key, rec);
+      }
+    }
+    const site = uri ? this._etldPlus1FromUri(uri) : null;
+    if (rec.kind === "opener") {
+      const d = rec.decision || NATIVE_DECISION;
+      if (!site || site === d.site) {
+        return d;
+      }
+      return this._decisionFor(uri, !!d.armed);
+    }
+    return this._liveSiteDecision(uri, key);
+  },
+
+  /** Top-level documents of every open tab (chrome windows). */
+  _liveTopDocuments() {
+    const out = [];
+    try {
+      for (const win of Services.wm.getEnumerator("navigator:browser")) {
+        for (const browser of win.gBrowser?.browsers || []) {
+          const wgp = browser.browsingContext?.currentWindowGlobal;
+          if (wgp) {
+            out.push(wgp);
+          }
+        }
+      }
+    } catch (_e) {}
+    return out;
+  },
+
+  /**
+   * Site's live armed decision (0049 shared-worker rule): armed when a live
+   * top-level document of that site (other tab) is armed — same snapshot;
+   * native when the live ones are native; no live document: armed unless
+   * strictFirstDoc.
+   */
+  _liveSiteDecision(uri, excludeKey) {
+    const plan = this.getPlan();
+    const site = uri ? this._etldPlus1FromUri(uri) : null;
+    if (!plan.applyNativeBase || !site) {
+      return { armed: false, site, snapshot: null };
+    }
+    if (!this._liveDeciding) {
+      this._liveDeciding = new Set();
+    }
+    if (this._liveDeciding.has(excludeKey)) {
+      return { armed: false, site, snapshot: null };
+    }
+    this._liveDeciding.add(excludeKey);
+    try {
+      let liveNative = false;
+      for (const wgp of this._liveTopDocuments()) {
+        const k = this._tabKey(wgp.browsingContext);
+        if (k === excludeKey || this._liveDeciding.has(k)) {
+          continue;
+        }
+        const d = this.documentDecision(wgp);
+        if (d.site !== site) {
+          continue;
+        }
+        if (d.snapshot) {
+          return d;
+        }
+        liveNative = true;
+      }
+      if (liveNative) {
+        return { armed: false, site, snapshot: null };
+      }
+      return this._decisionFor(uri, !plan.strictFirstDoc);
+    } finally {
+      this._liveDeciding.delete(excludeKey);
+    }
   },
 
   _isTopLevelDocumentChannel(li) {
@@ -1227,9 +1360,10 @@ export var DarkstrNativePersona = {
       if (!bc) {
         return null;
       }
-      return this._decisionFor(
-        channel.URI || channel.originalURI,
-        this._tabArmed(bc)
+      const docUri = channel.URI || channel.originalURI;
+      return (
+        this._openedContextDecision(bc, docUri) ||
+        this._decisionFor(docUri, this._tabArmed(bc))
       );
     }
     let wgp = null;

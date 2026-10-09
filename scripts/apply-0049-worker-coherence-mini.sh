@@ -34,7 +34,7 @@ MAP=(
 )
 (cd "$F" && shasum -a 256 -c SHA256SUMS)
 # 0051-applied baseline the patch was cut against.
-BASE_SUMS="ffd1b2c6335c35d7e247799907d6dd4418b178d147afcaf134b6f30681caac43  browser/components/DarkstrNativePersona.sys.mjs
+BASE_SUMS="65caff30ad138bd6ed63be3dc9c43e7504afa37fb2fdee3a0a9dcb9e6f2b8dcb  browser/components/DarkstrNativePersona.sys.mjs
 6e773cdba9b5e78be6ed3c050bd5705ac5c937dc4024d07ed4808ff53f4d670f  browser/components/DarkstrWorkerHooks.sys.mjs
 42b1f83a30a82cd97e95b1a2b589be037755a66a7d038cda0d06fe8e9c0fc304  browser/components/DarkstrWorkerHooksChild.sys.mjs
 28e2f31288feef0e7843a659ae88bc933721f4db3d456602f1b0c8b6683e171f  browser/components/DarkstrWorkerHooksParent.sys.mjs

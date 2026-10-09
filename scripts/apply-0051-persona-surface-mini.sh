@@ -48,6 +48,7 @@ for e in "${MAP[@]}"; do
 done
 C="$R/browser/components"
 grep -Fq 'decisionForChannel' "$C/DarkstrNativePersona.sys.mjs"
+grep -Fq '_openedContextDecision' "$C/DarkstrNativePersona.sys.mjs"
 grep -Fq 'Navigator?.prototype' "$C/DarkstrNativePersonaChild.sys.mjs"
 grep -Fq 'protoOwning' "$C/DarkstrCookieFirewallChild.sys.mjs"
 if grep -Eq 'darkstrNavGetter|"deviceMemory"|"userAgentData"' "$C/DarkstrNativePersonaChild.sys.mjs"; then

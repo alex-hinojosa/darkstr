@@ -532,6 +532,8 @@ All five 0043 Worker/SharedWorker WebGPU XOR gates passed on Proof tip `cc692641
 | Tests | [`tests/persona-surface-0051.test.mjs`](../tests/persona-surface-0051.test.mjs) + prototype-level cookie shape in [`tests/cookie-firewall-0048.test.mjs`](../tests/cookie-firewall-0048.test.mjs) |
 | Defaults | unchanged — hooks default-off, firewall opt-in, strictFirstDoc on |
 | Evidence | `~/AgentDocs/proof/darkstr-0051-persona-20261008/` |
+| Proof (`ea7f9d1a`) | **FAILED** F1: a script-opened popup (`window.open('about:blank')`, same-origin URL popup) from an armed page got the native identity (navigator + HTTP). Evidence `~/AgentDocs/proof/darkstr-0051-xor-20261008-191731/` |
+| Respin (0051r2) | Top-level contexts opened from a page, while still on their first counted document: with an opener → the opener document's decision (same-site docs verbatim; cross-site docs keep the opener's armed bit with their own site persona); noopener (`crossGroupOpener`) → the site's live armed decision (0049 shared-worker rule). URL bar / bookmarks / GUI new tab keep strictFirstDoc. Evidence `~/AgentDocs/proof/darkstr-0051r2-persona-20261008/` |
 | Merge | after #79, and only after Proof PASS |
 
 ### What changed

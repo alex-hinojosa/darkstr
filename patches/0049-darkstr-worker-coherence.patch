@@ -1,6 +1,6 @@
 --- a/browser/components/DarkstrNativePersona.sys.mjs
 +++ b/browser/components/DarkstrNativePersona.sys.mjs
-@@ -865,6 +865,7 @@
+@@ -868,6 +868,7 @@ export var DarkstrNativePersona = {
      }
      this._planSignature = signature;
      this._docDecisions = new WeakMap();
@@ -8,7 +8,7 @@
      if (p.applyNativeBase) {
        this._registerActor();
      }
-@@ -1208,7 +1209,8 @@
+@@ -1341,7 +1342,8 @@ export var DarkstrNativePersona = {
     * 0051 (N2/N3): decision for one request — the top-level document load
     * itself (tab phase after counting, its own site) or the requesting
     * document's top-level decision. No browsing context (Shared/Service
@@ -18,7 +18,7 @@
     */
    decisionForChannel(channel) {
      const plan = this.getPlan();
-@@ -1243,7 +1245,7 @@
+@@ -1377,7 +1379,7 @@ export var DarkstrNativePersona = {
      }
      const top = bc?.top;
      if (!top) {
@@ -27,7 +27,7 @@
      }
      if (top.currentWindowGlobal) {
        return this.documentDecision(top.currentWindowGlobal);
-@@ -1255,6 +1257,136 @@
+@@ -1389,6 +1391,121 @@ export var DarkstrNativePersona = {
      return !!this.decisionForChannel(channel)?.snapshot;
    },
  
@@ -77,21 +77,6 @@
 +    } catch (_e) {
 +      return null;
 +    }
-+  },
-+
-+  _liveTopDocuments() {
-+    const out = [];
-+    try {
-+      for (const win of Services.wm.getEnumerator("navigator:browser")) {
-+        for (const browser of win.gBrowser?.browsers || []) {
-+          const wgp = browser.browsingContext?.currentWindowGlobal;
-+          if (wgp) {
-+            out.push(wgp);
-+          }
-+        }
-+      }
-+    } catch (_e) {}
-+    return out;
 +  },
 +
 +  /**
