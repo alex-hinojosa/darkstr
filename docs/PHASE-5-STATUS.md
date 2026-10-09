@@ -1644,3 +1644,17 @@ Spec (Alex): each site gets one persona that stays the same on that site, so the
   restart. Its store entry is on disk after the flush (disk 1) and gone at the next start (disk 0, same key and label),
   so shutdown clearing drops it. Follow-up on the 0056 store keep rule vs LibreWolf's shutdown sanitizing.
 - Evidence: `~/AgentDocs/proof/darkstr-0058fp-20261009-105055/`.
+
+### 0058r3: rebuild with 0056r5, 0057r4 and the 0057c pbmode carry (Proof #92 / 0058r2 FAIL)
+
+- **0056r5 (#94):** the seed store now writes keep permission changes. This fixes Proof #93's latekeepnm and re-add-after-clear findings.
+- **0057r4 (#88):**
+  - item 5a: WebGL RENDERER / UNMASKED formatted as Gecko's sanitizer would produce them.
+  - private windows: Pollution owns `privacy.fingerprintingProtection.pbmode` / `privacy.resistFingerprinting.pbmode`.
+- **0057c:** `patches/0057c-files/DarkstrModeXor.sys.mjs` carries the same pbmode change. Its pin is regenerated on the new 0057 base; the 0057c delta is unchanged.
+- **0051 popup grading:** `qa/xor55r2/grade51pop.py` grades by persona tuple (languages, cores, TZ, platform) and never by "UA changed".
+
+**DMG `darkstr-0058r3-0e4d1c7e.dmg`** (full stack: 0056r5 + 0057r4 + 0058 + 0057c + 0058fp; no 0058b). dmgverify: 10/10 omni files MATCH.
+- Fable S1 (`run58fp.sh` / `grade58fp.py`): **PASS**, 19 documents, 0 fails. The known-issue line flips: A keeps its persona after the restart (**True**; it was False on 0058r2, the 0056 late-keep bug).
+- Private windows, part of the armed suite (`selftest-pbm2`, `tools/runS1armed.sh`): **71/71**, 0 px in every window and scope. The pbmode prefs are owned under Pollution and restored exactly on exit.
+- Evidence: `~/AgentDocs/proof/darkstr-0058r3-20261009-121711/`.
