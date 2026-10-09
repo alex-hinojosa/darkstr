@@ -1,0 +1,1503 @@
+--- a/browser/components/DarkstrNativePersona.sys.mjs
++++ b/browser/components/DarkstrNativePersona.sys.mjs
+@@ -128,6 +128,22 @@
+   },
+ };
+ const ACTOR_NAME = "DarkstrNativePersona";
++/** 0056: persisted per-site seeds (parent-only store; loaded on first use). */
++const SEED_STORE_URI = "moz-src:///browser/components/DarkstrPersonaSeedStore.sys.mjs";
++function seedStore() {
++  return ChromeUtils.importESModule(SEED_STORE_URI).DarkstrPersonaSeedStore;
++}
++/** 0056: persona context of origin attributes: "p" private, else userContextId. */
++export function personaContextKey(oa) {
++  try {
++    if (oa && Number(oa.privateBrowsingId) > 0) {
++      return "p";
++    }
++    return String(Number(oa?.userContextId) >>> 0 || 0);
++  } catch (_e) {
++    return "0";
++  }
++}
+ const MSG_INSTALL = "DarkstrNativePersona:Install";
+ const MSG_REFRESH = "DarkstrNativePersona:Refresh";
+ const NATIVE_DECISION = Object.freeze({ armed: false, site: null, snapshot: null });
+@@ -423,6 +439,12 @@
+       this._etldSnapshotCache.clear();
+     }
+     this._sessionBaseSeed = 0;
++    if (this._seedFlushListener) {
++      try {
++        seedStore().removeFlushListener(this._seedFlushListener);
++      } catch (_e) {}
++      this._seedFlushListener = null;
++    }
+     this._removeProgressListener();
+     if (this._actorRegistered) {
+       try {
+@@ -568,7 +590,10 @@
+       // counted (SubsequentNav / chrome actor still gate apply separately).
+       try {
+         if (this._rotationActive()) {
+-          const siteSnap = this.resolveSnapshotForUri(uri);
++          const siteSnap = this.resolveSnapshotForUri(
++            uri,
++            this._ctxOfLoadInfo(li)
++          );
+           if (siteSnap) {
+             this._applyPersonaMirrors(siteSnap);
+           }
+@@ -708,18 +733,123 @@
+     return h || 1;
+   },
+ 
+-  _seedForEtld(etld) {
++  /** 0056: darkstr.persona.seed set (Proof test seed) -> store bypassed. */
++  _fixedSeedSet() {
++    try {
++      return (Services.prefs.getIntPref(SEED_PREF, 0) >>> 0) !== 0;
++    } catch (_e) {
++      return false;
++    }
++  },
++
++  /**
++   * 0056: start the persisted seed store (rotation armed, no fixed seed).
++   * Never called in off mode.
++   */
++  _activateSeedStore() {
++    try {
++      const store = seedStore();
++      if (!this._seedFlushListener) {
++        this._seedFlushListener = pred => this._flushSeedCopies(pred);
++        store.addFlushListener(this._seedFlushListener);
++      }
++      store.activate();
++      return store;
++    } catch (e) {
++      console.error("darkstr 0056: seed store unavailable", e);
++      return null;
++    }
++  },
++
++  /**
++   * 0056: drop in-memory copies derived from cleared seeds (NP caches and
++   * DepthHooks diagnostics). pred(ctx, site) or null = everything. Live
++   * documents keep their decision until they navigate (0051 rule).
++   */
++  _flushSeedCopies(pred) {
++    const match = key => {
++      if (!pred) {
++        return true;
++      }
++      const i = key.indexOf("|");
++      return i < 0 ? pred("0", key) : pred(key.slice(0, i), key.slice(i + 1));
++    };
++    for (const m of [this._etldSeedMap, this._etldSnapshotCache, this._workerSiteDecisions]) {
++      if (!m) {
++        continue;
++      }
++      for (const k of [...m.keys()]) {
++        if (match(k)) {
++          m.delete(k);
++        }
++      }
++    }
++    try {
++      ChromeUtils.importESModule(
++        "moz-src:///browser/components/DarkstrDepthHooks.sys.mjs"
++      ).DarkstrDepthHooks.flushSeedCopies?.();
++    } catch (_e) {}
++  },
++
++  _ctxOfBC(bc) {
++    try {
++      return personaContextKey((bc?.top || bc)?.originAttributes);
++    } catch (_e) {
++      return "0";
++    }
++  },
++
++  _ctxOfWgp(wgp) {
++    try {
++      const oa = wgp?.documentPrincipal?.originAttributes;
++      if (oa) {
++        return personaContextKey(oa);
++      }
++    } catch (_e) {}
++    return this._ctxOfBC(wgp?.browsingContext);
++  },
++
++  _ctxOfLoadInfo(li) {
++    try {
++      return personaContextKey(li?.originAttributes);
++    } catch (_e) {
++      return "0";
++    }
++  },
++
++  /**
++   * Sticky seed for (persona context, eTLD+1). 0056: from the persisted
++   * store (separate per container; private = memory only) unless
++   * darkstr.persona.seed is set — then the deterministic mix (the default
++   * context keeps the pre-0056 value, so seed goldens are unchanged).
++   */
++  _seedForEtld(etld, ctx) {
+     if (!etld) {
+       return this._baseSeedU32();
+     }
++    const c = String(ctx || "0");
++    if (!this._fixedSeedSet()) {
++      const store = this._activateSeedStore();
++      if (store) {
++        try {
++          return store.seedFor(c, etld) >>> 0;
++        } catch (e) {
++          console.error("darkstr 0056: seed store lookup failed", e);
++        }
++      }
++    }
+     if (!this._etldSeedMap) {
+       this._etldSeedMap = new Map();
+     }
+-    if (this._etldSeedMap.has(etld)) {
+-      return this._etldSeedMap.get(etld) >>> 0;
++    const key = c === "0" ? etld : `${c}|${etld}`;
++    if (this._etldSeedMap.has(key)) {
++      return this._etldSeedMap.get(key) >>> 0;
+     }
+-    const seed = this._mixSeed(this._baseSeedU32(), etld);
+-    this._etldSeedMap.set(etld, seed);
++    const seed = this._mixSeed(
++      this._baseSeedU32(),
++      c === "0" ? etld : `${etld}\u0000${c}`
++    );
++    this._etldSeedMap.set(key, seed);
+     return seed;
+   },
+ 
+@@ -752,7 +882,8 @@
+    * Resolve persona snapshot for a top-level site URI / BC.
+    * Locked path → global plan.snapshot; rotate → sticky per eTLD+1.
+    */
+-  resolveSnapshotForUri(uri) {
++  resolveSnapshotForUri(uri, ctx) {
++    const c = String(ctx || "0");
+     const plan = this.getPlan();
+     if (!plan?.pollutionActive || !plan?.nativeHooks) {
+       return null;
+@@ -767,15 +898,16 @@
+     if (!this._etldSnapshotCache) {
+       this._etldSnapshotCache = new Map();
+     }
+-    if (this._etldSnapshotCache.has(etld)) {
+-      const cached = this._etldSnapshotCache.get(etld);
+-      this._writeEffectiveDiag(etld, this._seedForEtld(etld));
++    const cacheKey = `${c}|${etld}`;
++    if (this._etldSnapshotCache.has(cacheKey)) {
++      const cached = this._etldSnapshotCache.get(cacheKey);
++      this._writeEffectiveDiag(etld, this._seedForEtld(etld, c));
+       return cached;
+     }
+-    const seed = this._seedForEtld(etld);
++    const seed = this._seedForEtld(etld, c);
+     const snap = this._snapshotFromSeed(seed, false);
+     if (snap) {
+-      this._etldSnapshotCache.set(etld, snap);
++      this._etldSnapshotCache.set(cacheKey, snap);
+       this._writeEffectiveDiag(etld, seed);
+     }
+     return snap;
+@@ -785,7 +917,7 @@
+     try {
+       const top = bc?.top || bc;
+       const uri = top?.currentURI || top?.currentWindowGlobal?.documentURI;
+-      return this.resolveSnapshotForUri(uri);
++      return this.resolveSnapshotForUri(uri, this._ctxOfBC(top));
+     } catch (_e) {
+       return null;
+     }
+@@ -862,6 +994,10 @@
+       nativeHooks &&
+       !this._rotationLocked() &&
+       this._rotationWanted();
++    // 0056: persisted seeds only while rotation runs without a fixed seed.
++    if (rotateWanted && !this._fixedSeedSet()) {
++      this._activateSeedStore();
++    }
+     // Drop sticky maps when rotation is off/locked so Proof golden cannot see
+     // a stale per-site seed from a prior Pollution rotate session.
+     if (!rotateWanted) {
+@@ -1263,19 +1399,20 @@
+   },
+ 
+   /** Decision for a top-level site URI + phase. */
+-  _decisionFor(uri, armed) {
++  _decisionFor(uri, armed, ctx) {
+     const plan = this.getPlan();
+     const site = this._etldPlus1FromUri(uri);
++    const c = String(ctx || "0");
+     if (!plan.applyNativeBase || !armed) {
+-      return { armed: false, site, snapshot: null };
++      return { armed: false, site, ctx: c, snapshot: null };
+     }
+     let snap = plan.snapshot;
+     if (this._rotationActive(plan)) {
+-      snap = site ? this.resolveSnapshotForUri(uri) : null;
++      snap = site ? this.resolveSnapshotForUri(uri, c) : null;
+     }
+     return snap?.userAgent
+-      ? { armed: true, site, snapshot: snap }
+-      : { armed: false, site, snapshot: null };
++      ? { armed: true, site, ctx: c, snapshot: snap }
++      : { armed: false, site, ctx: c, snapshot: null };
+   },
+ 
+   _documentUri(wgp) {
+@@ -1322,7 +1459,11 @@
+       decision =
+         topWc && topWc !== wgp
+           ? this.documentDecision(topWc)
+-          : this._decisionFor(bc.top?.currentURI, this._tabArmed(bc));
++          : this._decisionFor(
++              bc.top?.currentURI,
++              this._tabArmed(bc),
++              this._ctxOfBC(bc)
++            );
+     } else if (bc) {
+       const uri = this._documentUri(wgp);
+       const scheme = String(uri?.scheme || "").toLowerCase();
+@@ -1337,9 +1478,10 @@
+       if (openerWc && openerWc !== wgp) {
+         decision = this.documentDecision(openerWc);
+       } else {
++        const ctx = this._ctxOfWgp(wgp);
+         decision =
+-          this._openedContextDecision(bc, uri) ||
+-          this._decisionFor(uri, this._tabArmed(bc));
++          this._openedContextDecision(bc, uri, ctx) ||
++          this._decisionFor(uri, this._tabArmed(bc), ctx);
+       }
+     }
+     this._docDecisions.set(wgp, decision);
+@@ -1361,7 +1503,8 @@
+    *  - Anything else (URL bar, bookmarks, GUI new tab, external): null, so
+    *    strictFirstDoc is unchanged.
+    */
+-  _openedContextDecision(bc, uri) {
++  _openedContextDecision(bc, uri, ctx) {
++    const c = String(ctx || "0");
+     const plan = this.getPlan();
+     if (!plan.applyNativeBase || !bc) {
+       return null;
+@@ -1405,12 +1548,12 @@
+     const site = uri ? this._etldPlus1FromUri(uri) : null;
+     if (rec.kind === "opener") {
+       const d = rec.decision || NATIVE_DECISION;
+-      if (!site || site === d.site) {
++      if (!site || (site === d.site && (d.ctx || "0") === c)) {
+         return d;
+       }
+-      return this._decisionFor(uri, !!d.armed);
++      return this._decisionFor(uri, !!d.armed, c);
+     }
+-    return this._liveSiteDecision(uri, key);
++    return this._liveSiteDecision(uri, key, c);
+   },
+ 
+   /** Top-level documents of every open tab (chrome windows). */
+@@ -1435,17 +1578,18 @@
+    * native when the live ones are native; no live document: armed unless
+    * strictFirstDoc.
+    */
+-  _liveSiteDecision(uri, excludeKey) {
++  _liveSiteDecision(uri, excludeKey, ctx) {
+     const plan = this.getPlan();
+     const site = uri ? this._etldPlus1FromUri(uri) : null;
++    const c = String(ctx || "0");
+     if (!plan.applyNativeBase || !site) {
+-      return { armed: false, site, snapshot: null };
++      return { armed: false, site, ctx: c, snapshot: null };
+     }
+     if (!this._liveDeciding) {
+       this._liveDeciding = new Set();
+     }
+     if (this._liveDeciding.has(excludeKey)) {
+-      return { armed: false, site, snapshot: null };
++      return { armed: false, site, ctx: c, snapshot: null };
+     }
+     this._liveDeciding.add(excludeKey);
+     try {
+@@ -1456,7 +1600,7 @@
+           continue;
+         }
+         const d = this.documentDecision(wgp);
+-        if (d.site !== site) {
++        if (d.site !== site || (d.ctx || "0") !== c) {
+           continue;
+         }
+         if (d.snapshot) {
+@@ -1465,9 +1609,9 @@
+         liveNative = true;
+       }
+       if (liveNative) {
+-        return { armed: false, site, snapshot: null };
++        return { armed: false, site, ctx: c, snapshot: null };
+       }
+-      return this._decisionFor(uri, !plan.strictFirstDoc);
++      return this._decisionFor(uri, !plan.strictFirstDoc, c);
+     } finally {
+       this._liveDeciding.delete(excludeKey);
+     }
+@@ -1502,9 +1646,10 @@
+         return null;
+       }
+       const docUri = channel.URI || channel.originalURI;
++      const ctx = this._ctxOfLoadInfo(li);
+       return (
+-        this._openedContextDecision(bc, docUri) ||
+-        this._decisionFor(docUri, this._tabArmed(bc))
++        this._openedContextDecision(bc, docUri, ctx) ||
++        this._decisionFor(docUri, this._tabArmed(bc), ctx)
+       );
+     }
+     let wgp = null;
+@@ -1535,7 +1680,11 @@
+     if (top.currentWindowGlobal) {
+       return this.documentDecision(top.currentWindowGlobal);
+     }
+-    return this._decisionFor(top.currentURI, this._tabArmed(top));
++    return this._decisionFor(
++      top.currentURI,
++      this._tabArmed(top),
++      this._ctxOfBC(top)
++    );
+   },
+ 
+   shouldApplyForChannel(channel) {
+@@ -1598,37 +1747,43 @@
+    * requests agree. No live document (service worker wake-up): armed unless
+    * strictFirstDoc. Returns { decision, browsingContext }.
+    */
+-  workerSiteDecision(uri) {
++  workerSiteDecision(uri, ctx) {
+     const plan = this.getPlan();
+     const site = uri ? this._etldPlus1FromUri(uri) : null;
++    const c = String(ctx || "0");
+     if (!plan.applyNativeBase || !uri || !site) {
+       return { decision: NATIVE_DECISION, browsingContext: null };
+     }
+     if (!this._workerSiteDecisions) {
+       this._workerSiteDecisions = new Map();
+     }
++    // 0056: one persona per (context, site): containers / private differ.
++    const wkey = `${c}|${site}`;
+     let liveNative = false;
+     for (const wgp of this._liveTopDocuments()) {
+       const d = this.documentDecision(wgp);
+-      if (d.site !== site) {
++      if (d.site !== site || (d.ctx || "0") !== c) {
+         continue;
+       }
+       if (d.snapshot) {
+-        this._workerSiteDecisions.set(site, d);
++        this._workerSiteDecisions.set(wkey, d);
+         return { decision: d, browsingContext: wgp.browsingContext };
+       }
+       liveNative = true;
+     }
+-    const sticky = this._workerSiteDecisions.get(site);
++    const sticky = this._workerSiteDecisions.get(wkey);
+     if (sticky) {
+       return { decision: sticky, browsingContext: null };
+     }
+     if (liveNative) {
+-      return { decision: { armed: false, site, snapshot: null }, browsingContext: null };
++      return {
++        decision: { armed: false, site, ctx: c, snapshot: null },
++        browsingContext: null,
++      };
+     }
+-    const d = this._decisionFor(uri, !plan.strictFirstDoc);
++    const d = this._decisionFor(uri, !plan.strictFirstDoc, c);
+     if (d.snapshot) {
+-      this._workerSiteDecisions.set(site, d);
++      this._workerSiteDecisions.set(wkey, d);
+     }
+     return { decision: d, browsingContext: null };
+   },
+@@ -1661,7 +1816,11 @@
+       return this.documentDecision(wgp);
+     }
+     const top = abc.top || abc;
+-    return this._decisionFor(top.currentURI, this._tabArmed(top));
++    return this._decisionFor(
++      top.currentURI,
++      this._tabArmed(top),
++      this._ctxOfBC(top)
++    );
+   },
+ 
+   _windowlessDecisionForChannel(li) {
+@@ -1685,7 +1844,7 @@
+     if (!uri) {
+       return null;
+     }
+-    return this.workerSiteDecision(uri).decision;
++    return this.workerSiteDecision(uri, this._ctxOfLoadInfo(li)).decision;
+   },
+ 
+   /**
+@@ -1703,7 +1862,11 @@
+         return this.documentDecision(wgp).snapshot;
+       }
+       const top = bc.top || bc;
+-      return this._decisionFor(top.currentURI, this._tabArmed(top)).snapshot;
++      return this._decisionFor(
++        top.currentURI,
++        this._tabArmed(top),
++        this._ctxOfBC(top)
++      ).snapshot;
+     } catch (_e) {
+       return null;
+     }
+--- a/browser/components/DarkstrCookieFirewall.sys.mjs
++++ b/browser/components/DarkstrCookieFirewall.sys.mjs
+@@ -1189,7 +1189,7 @@
+    * golden lock (snapshot non-empty OR rotatePerSite=false) → global seed;
+    * else sticky per-eTLD+1 via NativePersona._seedForEtld.
+    */
+-  _effectiveSeedForEtld(etld) {
++  _effectiveSeedForEtld(etld, oa) {
+     try {
+       const { DarkstrNativePersona } = ChromeUtils.importESModule(
+         "moz-src:///browser/components/DarkstrNativePersona.sys.mjs"
+@@ -1203,7 +1203,16 @@
+         plan?.nativeHooks &&
+         DarkstrNativePersona._rotationWanted()
+       ) {
+-        return DarkstrNativePersona._seedForEtld(etld) >>> 0;
++        // 0056: per persona context (container / private).
++        let ctx = "0";
++        try {
++          if (oa && Number(oa.privateBrowsingId) > 0) {
++            ctx = "p";
++          } else {
++            ctx = String(Number(oa?.userContextId) >>> 0 || 0);
++          }
++        } catch (_eCtx) {}
++        return DarkstrNativePersona._seedForEtld(etld, ctx) >>> 0;
+       }
+       return DarkstrNativePersona._baseSeedU32() >>> 0;
+     } catch (_e) {
+@@ -1356,7 +1365,8 @@
+     // Legacy single key (diag / Proof scripts): the bucket a plain cookie
+     // set by this document lands in, else its partition.
+     out.cacheKey = out.cacheKeys[0];
+-    out.seed = this._effectiveSeedForEtld(top.base) >>> 0;
++    out.seed =
++      this._effectiveSeedForEtld(top.base, docPrincipal.originAttributes) >>> 0;
+     const env = this._env(docPrincipal.originAttributes);
+     out.laxByDefault = env.laxByDefault;
+     out.noneRequiresSecure = env.noneRequiresSecure;
+@@ -1986,7 +1996,10 @@
+       return;
+     }
+     const now = Date.now();
+-    const seed = plan.mode === "synthetic" ? this._effectiveSeedForEtld(ctx.top.base) : 0;
++    const seed =
++      plan.mode === "synthetic"
++        ? this._effectiveSeedForEtld(ctx.top.base, ctx.oa)
++        : 0;
+     const sink = [];
+     for (const line of String(raw).split(/\r?\n/)) {
+       if (!line.trim()) {
+--- a/browser/components/DarkstrDepthHooks.sys.mjs
++++ b/browser/components/DarkstrDepthHooks.sys.mjs
+@@ -429,7 +429,13 @@
+           let seed = 0;
+           if (etld && DarkstrNativePersona._seedForEtld) {
+             try {
+-              seed = DarkstrNativePersona._seedForEtld(etld) >>> 0;
++              seed =
++                DarkstrNativePersona._seedForEtld(
++                  etld,
++                  DarkstrNativePersona._ctxOfBC
++                    ? DarkstrNativePersona._ctxOfBC(bc)
++                    : "0"
++                ) >>> 0;
+             } catch (_eSeed) {
+               seed = 0;
+             }
+@@ -643,6 +649,18 @@
+    * Soft residual (0034): called from depthSeedsForBrowsingContext with the
+    * same seeds handed to content, and from _setArmed for arm/disarm baseline.
+    */
++  /** 0056: a persona seed was cleared — drop the in-memory seed copies. */
++  flushSeedCopies() {
++    try {
++      gDiag.delete(LAST_SEEDS_PREF);
++    } catch (_e) {}
++    try {
++      if (Services.prefs.prefHasUserValue(LAST_SEEDS_PREF)) {
++        Services.prefs.clearUserPref(LAST_SEEDS_PREF);
++      }
++    } catch (_e) {}
++  },
++
+   _writeLastSeeds(seeds) {
+     try {
+       if (seeds) {
+--- a/browser/components/DarkstrWorkerHooks.sys.mjs
++++ b/browser/components/DarkstrWorkerHooks.sys.mjs
+@@ -332,7 +332,12 @@
+       source = "document";
+     } else {
+       const uri = NP.topSiteUriForWorker(data?.principalOrigin, data?.partitionKey);
+-      const r = NP.workerSiteDecision(uri);
++      // 0056: the worker's persona context (container / private).
++      const ctx =
++        Number(data?.privateBrowsingId) > 0
++          ? "p"
++          : String(Number(data?.userContextId) >>> 0 || 0);
++      const r = NP.workerSiteDecision(uri, ctx);
+       decision = r.decision;
+       bc = r.browsingContext;
+       source = "site";
+--- a/browser/components/DarkstrWorkerHooksChild.sys.mjs
++++ b/browser/components/DarkstrWorkerHooksChild.sys.mjs
+@@ -499,6 +499,9 @@
+     innerWindowId: bagU64(bag, "innerWindowId"),
+     principalOrigin: bagString(bag, "principalOrigin"),
+     partitionKey: bagString(bag, "partitionKey"),
++    // 0056: persona context of the worker (containers / private browsing).
++    userContextId: bagU64(bag, "userContextId"),
++    privateBrowsingId: bagU64(bag, "privateBrowsingId"),
+   };
+ }
+ 
+--- a/dom/base/DarkstrNavigatorHooks.cpp
++++ b/dom/base/DarkstrNavigatorHooks.cpp
+@@ -226,6 +226,13 @@
+     partitionKey = aLoadInfo.mOriginAttributes.mPartitionKey;
+   }
+   bag->SetPropertyAsAString(u"partitionKey"_ns, partitionKey);
++  // 0056: persona context (per container; private browsing memory-only).
++  bag->SetPropertyAsUint64(
++      u"userContextId"_ns,
++      principal->OriginAttributesRef().mUserContextId);
++  bag->SetPropertyAsUint64(
++      u"privateBrowsingId"_ns,
++      principal->OriginAttributesRef().mPrivateBrowsingId);
+ 
+   obs->NotifyObservers(static_cast<nsIWritablePropertyBag*>(bag),
+                        kDarkstrWorkerPersonaTopic, nullptr);
+--- a/toolkit/components/cleardata/ClearDataService.sys.mjs
++++ b/toolkit/components/cleardata/ClearDataService.sys.mjs
+@@ -418,6 +418,42 @@
+ 
+     // For deleteByOriginAttributes, we only receive userContextId which is not enough to target specific
+     // site-specific zooms. So we don't clear site-specific zooms here.
++  },
++};
++
++// darkstr 0056: persisted per-site persona seeds are fingerprinting
++// protection state. The store lives in browser/; resolve it lazily.
++const DarkstrPersonaSeedCleaner = {
++  _impl() {
++    try {
++      return ChromeUtils.importESModule(
++        "moz-src:///browser/components/DarkstrPersonaSeedStore.sys.mjs"
++      ).DarkstrPersonaSeedCleaner;
++    } catch (_e) {
++      return null;
++    }
++  },
++  async deleteAll() {
++    await this._impl()?.deleteAll();
++  },
++  async deleteByPrincipal(aPrincipal, aIsUserRequest) {
++    await this._impl()?.deleteByPrincipal(aPrincipal, aIsUserRequest);
++  },
++  async deleteBySite(aSchemelessSite, aOriginAttributesPattern, aIsUserRequest) {
++    await this._impl()?.deleteBySite(
++      aSchemelessSite,
++      aOriginAttributesPattern,
++      aIsUserRequest
++    );
++  },
++  async deleteByHost(aHost, aOriginAttributesPattern) {
++    await this._impl()?.deleteByHost(aHost, aOriginAttributesPattern);
++  },
++  async deleteByRange(aFrom, aTo) {
++    await this._impl()?.deleteByRange(aFrom, aTo);
++  },
++  async deleteByOriginAttributes(aOriginAttributesString) {
++    await this._impl()?.deleteByOriginAttributes(aOriginAttributesString);
+   },
+ };
+ 
+@@ -2309,7 +2345,7 @@
+ 
+   {
+     flag: Ci.nsIClearDataService.CLEAR_FINGERPRINTING_PROTECTION_STATE,
+-    cleaners: [FingerprintingProtectionStateCleaner],
++    cleaners: [FingerprintingProtectionStateCleaner, DarkstrPersonaSeedCleaner],
+   },
+ 
+   {
+--- a/browser/components/moz.build
++++ b/browser/components/moz.build
+@@ -133,6 +133,7 @@
+     "DarkstrNativePersona.sys.mjs",
+     "DarkstrNativePersonaChild.sys.mjs",
+     "DarkstrNativePersonaParent.sys.mjs",
++    "DarkstrPersonaSeedStore.sys.mjs",
+     "DarkstrWorkerHooks.sys.mjs",
+     "DarkstrWorkerHooksChild.sys.mjs",
+     "DarkstrWorkerHooksParent.sys.mjs",
+--- /dev/null
++++ b/browser/components/DarkstrPersonaSeedStore.sys.mjs
+@@ -0,0 +1,841 @@
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
++
++/**
++ * darkstr 0056 (Fable N6 follow-up): persisted per-site persona seeds.
++ *
++ * - File: <profile>/darkstr/persona-seeds.json (dir 0700, file 0600). Written
++ *   only by the parent process, atomically (tmp file, chmod, rename).
++ * - Format: { v: 1, l: <OSKeyStore label>, k: <K encrypted by OSKeyStore>,
++ *   e: [{ c, h, s, t }] }
++ *     c  context: userContextId as a string ("0" = no container). Private
++ *        browsing ("p") is never written.
++ *     h  HMAC-SHA256(K, eTLD+1), hex. Site names are never written.
++ *     s  u32 persona seed.
++ *     t  first-seen day (UTC days since the epoch).
++ *   K is a random 32-byte HMAC key, kept on disk only encrypted with an
++ *   OSKeyStore secret (macOS Keychain) under a random per-store label.
++ *   OSKeyStore unavailable -> session-only (nothing written, file untouched).
++ * - Session map: every (context, site) seed handed out this session, incl.
++ *   private browsing (memory only, dropped when the last private context
++ *   exits).
++ * - Keep rule (clear-on-quit gap): when cookies and site data are cleared on
++ *   shutdown (privacy.sanitize.sanitizeOnShutdown +
++ *   privacy.clearOnShutdown_v2.cookiesAndStorage, LibreWolf default) only
++ *   sites with a persist-data-on-shutdown ALLOW exception are written. A
++ *   cookie ACCESS_SESSION permission always wins (never written). Without
++ *   clear-on-shutdown every non-private site is written.
++ * - Clearing: DarkstrPersonaSeedCleaner (ClearDataService,
++ *   CLEAR_FINGERPRINTING_PROTECTION_STATE): site (incl. subdomain hosts, the
++ *   seed is per eTLD+1), principal, origin-attributes pattern (container
++ *   deletion), range (first-seen day), all (file + OSKeyStore secret
++ *   deleted -> next store gets a new key and label). In-memory copies in
++ *   NativePersona / DepthHooks are flushed through the listeners.
++ * - Off mode never calls in here (NativePersona only activates the store
++ *   while per-site rotation runs without darkstr.persona.seed). Cleaners may
++ *   remove from an existing file in any mode, they never create one.
++ */
++
++import { setTimeout, clearTimeout } from "resource://gre/modules/Timer.sys.mjs";
++
++const STORE_DIR = "darkstr";
++const STORE_FILE = "persona-seeds.json";
++const FORMAT_VERSION = 1;
++const LABEL_PREFIX = "darkstr-persona-seeds-";
++const SAVE_DELAY_MS = 500;
++const DAY_MS = 86400000;
++/** Test/ops switch: false = behave as if OSKeyStore were unavailable. */
++const KEYSTORE_PREF = "darkstr.persona.seedStore.osKeyStore";
++const SANITIZE_ON_SHUTDOWN_PREF = "privacy.sanitize.sanitizeOnShutdown";
++const CLEAR_COOKIES_ON_SHUTDOWN_PREF =
++  "privacy.clearOnShutdown_v2.cookiesAndStorage";
++
++function isParent() {
++  try {
++    return (
++      Services.appinfo.processType === Ci.nsIXULRuntime.PROCESS_TYPE_DEFAULT
++    );
++  } catch (_e) {
++    return false;
++  }
++}
++
++function randomBytes(n) {
++  return Cc["@mozilla.org/security/random-generator;1"]
++    .getService(Ci.nsIRandomGenerator)
++    .generateRandomBytes(n);
++}
++
++function randomU32() {
++  const b = randomBytes(4);
++  const v = ((b[0] << 24) | (b[1] << 16) | (b[2] << 8) | b[3]) >>> 0;
++  return v || 1;
++}
++
++function toHex(bytes) {
++  let s = "";
++  for (const x of bytes) {
++    s += (x & 0xff).toString(16).padStart(2, "0");
++  }
++  return s;
++}
++
++function sha256(bytes) {
++  const h = Cc["@mozilla.org/security/hash;1"].createInstance(Ci.nsICryptoHash);
++  h.init(Ci.nsICryptoHash.SHA256);
++  h.update(bytes, bytes.length);
++  const raw = h.finish(false);
++  const out = new Array(raw.length);
++  for (let i = 0; i < raw.length; i++) {
++    out[i] = raw.charCodeAt(i) & 0xff;
++  }
++  return out;
++}
++
++/** HMAC-SHA256 (RFC 2104), synchronous. key: byte array (32). */
++export function hmacSha256Hex(key, message) {
++  const B = 64;
++  let k = Array.from(key);
++  if (k.length > B) {
++    k = sha256(k);
++  }
++  while (k.length < B) {
++    k.push(0);
++  }
++  const msg = Array.from(new TextEncoder().encode(String(message)));
++  const inner = sha256(k.map(x => x ^ 0x36).concat(msg));
++  return toHex(sha256(k.map(x => x ^ 0x5c).concat(inner)));
++}
++
++export function dayOf(ms) {
++  return Math.floor(Number(ms) / DAY_MS);
++}
++
++/** "p" for private browsing, else the userContextId as a string. */
++export function contextKeyFromOA(oa) {
++  try {
++    if (oa && Number(oa.privateBrowsingId) > 0) {
++      return "p";
++    }
++    return String(Number(oa?.userContextId) >>> 0 || 0);
++  } catch (_e) {
++    return "0";
++  }
++}
++
++/** Contexts an origin-attributes pattern selects: null = all. */
++export function contextFilterFromPattern(pattern) {
++  let p = pattern;
++  if (typeof p === "string") {
++    try {
++      p = p ? JSON.parse(p) : {};
++    } catch (_e) {
++      p = {};
++    }
++  }
++  p = p || {};
++  const hasUcid = p.userContextId !== undefined && p.userContextId !== null;
++  const hasPb =
++    p.privateBrowsingId !== undefined && p.privateBrowsingId !== null;
++  return ctx => {
++    if (hasPb) {
++      const pb = Number(p.privateBrowsingId) > 0;
++      if (pb !== (ctx === "p")) {
++        return false;
++      }
++    }
++    if (hasUcid && ctx !== "p") {
++      return ctx === String(Number(p.userContextId) >>> 0);
++    }
++    if (hasUcid && ctx === "p") {
++      // Private contexts have userContextId 0.
++      return Number(p.userContextId) === 0;
++    }
++    return true;
++  };
++}
++
++function siteFromHost(host) {
++  const h = String(host || "")
++    .trim()
++    .toLowerCase()
++    .replace(/^\[|\]$/g, "");
++  if (!h) {
++    return null;
++  }
++  try {
++    return Services.eTLD.getBaseDomainFromHost(h);
++  } catch (_e) {
++    return h;
++  }
++}
++
++export var DarkstrPersonaSeedStore = {
++  /** idle | loading | ready | session-only */
++  _state: "idle",
++  /** True once NativePersona armed the store (clear-only loads stay passive). */
++  _activated: false,
++  _loadPromise: null,
++  /** Session map: "ctx|site" -> { seed, t, ctx, site } (memory only). */
++  _session: new Map(),
++  /** Disk entries: "ctx|h" -> { c, h, s, t }. */
++  _disk: new Map(),
++  _key: null,
++  _label: "",
++  _keyCipher: "",
++  /** True when the disk entries are unreadable and must not be rewritten. */
++  _readOnlyError: false,
++  _saveTimer: null,
++  _savePromise: null,
++  _dirty: false,
++  _listeners: new Set(),
++  _shutdownBlocker: null,
++  _observing: false,
++  /** Ops counters for diagnostics / tests (memory only). */
++  _stats: { reads: 0, writes: 0, keyGens: 0, keyDeletes: 0 },
++
++  get path() {
++    return PathUtils.join(PathUtils.profileDir, STORE_DIR, STORE_FILE);
++  },
++
++  get dirPath() {
++    return PathUtils.join(PathUtils.profileDir, STORE_DIR);
++  },
++
++  /** f(predicate|null): predicate(ctx, site) -> bool, null = everything. */
++  addFlushListener(fn) {
++    this._listeners.add(fn);
++  },
++
++  removeFlushListener(fn) {
++    this._listeners.delete(fn);
++  },
++
++  _notifyFlush(pred) {
++    for (const fn of this._listeners) {
++      try {
++        fn(pred);
++      } catch (e) {
++        console.error("darkstr 0056: seed flush listener failed", e);
++      }
++    }
++  },
++
++  _keyStoreAllowed() {
++    try {
++      return Services.prefs.getBoolPref(KEYSTORE_PREF, true);
++    } catch (_e) {
++      return true;
++    }
++  },
++
++  _osKeyStore() {
++    return Cc["@mozilla.org/security/oskeystore;1"].getService(
++      Ci.nsIOSKeyStore
++    );
++  },
++
++  /**
++   * Start using the store (NativePersona: rotation armed, no fixed seed).
++   * Loads the file once per session. Idempotent.
++   */
++  activate() {
++    if (!isParent()) {
++      return null;
++    }
++    this._observe();
++    if (!this._activated) {
++      this._activated = true;
++      if (this._state === "ready") {
++        // Loaded earlier by a clear: reconcile now that seeds are handed out.
++        this._reconcilePending();
++      }
++    }
++    if (this._state === "idle") {
++      this._state = "loading";
++      this._loadPromise = this._load().catch(e => {
++        console.error("darkstr 0056: persona seed store load failed", e);
++        this._state = "session-only";
++      });
++    }
++    return this._loadPromise;
++  },
++
++  whenReady() {
++    return this._loadPromise || Promise.resolve();
++  },
++
++  _observe() {
++    if (this._observing) {
++      return;
++    }
++    this._observing = true;
++    try {
++      Services.obs.addObserver(this, "last-pb-context-exited");
++    } catch (_e) {}
++    try {
++      const { AsyncShutdown } = ChromeUtils.importESModule(
++        "resource://gre/modules/AsyncShutdown.sys.mjs"
++      );
++      this._shutdownBlocker = () => this.flush();
++      AsyncShutdown.profileBeforeChange.addBlocker(
++        "darkstr 0056: persona seed store",
++        this._shutdownBlocker
++      );
++    } catch (_e) {}
++  },
++
++  observe(_subject, topic) {
++    if (topic === "last-pb-context-exited") {
++      this._dropSession(ctx => ctx === "p");
++    }
++  },
++
++  async _readFile() {
++    if (!(await IOUtils.exists(this.path))) {
++      return null;
++    }
++    this._stats.reads++;
++    return IOUtils.readJSON(this.path);
++  },
++
++  async _load() {
++    let data = null;
++    try {
++      data = await this._readFile();
++    } catch (e) {
++      // Corrupt / unreadable: never overwrite blindly (a later save re-keys
++      // only when the key is provably gone).
++      console.error("darkstr 0056: persona-seeds.json unreadable", e);
++      data = { v: -1 };
++    }
++    if (data && data.v === FORMAT_VERSION && data.l && data.k) {
++      if (!this._keyStoreAllowed()) {
++        this._state = "session-only";
++        return;
++      }
++      let available = false;
++      try {
++        available = await this._osKeyStore().asyncSecretAvailable(data.l);
++      } catch (_e) {
++        this._state = "session-only";
++        return;
++      }
++      if (available) {
++        try {
++          const key = await this._osKeyStore().asyncDecryptBytes(
++            data.l,
++            data.k
++          );
++          this._key = Array.from(key);
++          this._label = data.l;
++          this._keyCipher = data.k;
++          for (const e of Array.isArray(data.e) ? data.e : []) {
++            if (
++              e &&
++              typeof e.c === "string" &&
++              e.c !== "p" &&
++              /^[0-9a-f]{64}$/.test(String(e.h)) &&
++              Number.isFinite(Number(e.s))
++            ) {
++              this._disk.set(`${e.c}|${e.h}`, {
++                c: e.c,
++                h: String(e.h),
++                s: Number(e.s) >>> 0 || 1,
++                t: Number(e.t) | 0,
++              });
++            }
++          }
++        } catch (e) {
++          console.error("darkstr 0056: persona seed key decrypt failed", e);
++          this._state = "session-only";
++          return;
++        }
++      }
++      // Secret gone (e.g. Keychain item removed): entries are unlinkable;
++      // the next save writes a fresh store with a new key.
++    } else if (data && data.v !== undefined && data.v !== FORMAT_VERSION) {
++      this._readOnlyError = true;
++    }
++    this._state = "ready";
++    if (!this._activated) {
++      // Loaded for a clear (any mode): passive, no reconcile / keep-rule save.
++      return;
++    }
++    this._reconcilePending();
++    // Keep rule may have changed since the last session (exception removed,
++    // crash before shutdown clearing): rewrite if anything is dropped.
++    if (this._disk.size && this._applyKeepRuleToDisk()) {
++      this._scheduleSave();
++    }
++  },
++
++  /**
++   * Seeds handed out while loading: a stored seed for the same key wins
++   * (persona survives the restart); others are persisted if eligible.
++   */
++  _reconcilePending() {
++    const changed = [];
++    for (const [k, rec] of this._session) {
++      if (rec.ctx === "p" || !this._key) {
++        continue;
++      }
++      const d = this._disk.get(`${rec.ctx}|${this._hash(rec.site)}`);
++      if (d && d.s !== rec.seed) {
++        rec.seed = d.s;
++        rec.t = d.t;
++        changed.push(k);
++      }
++    }
++    if (changed.length) {
++      const set = new Set(changed);
++      this._notifyFlush((ctx, site) => set.has(`${ctx}|${site}`));
++    }
++    if ([...this._session.values()].some(r => r.ctx !== "p")) {
++      this._scheduleSave();
++    }
++  },
++
++  _hash(site) {
++    return this._key ? hmacSha256Hex(this._key, site) : "";
++  },
++
++  /** Permission sets for the keep rule (base domains). */
++  _keepSets() {
++    const keep = new Set();
++    const session = new Set();
++    try {
++      for (const p of Services.perms.getAllByTypes([
++        "persist-data-on-shutdown",
++      ])) {
++        if (p.capability === Ci.nsIPermissionManager.ALLOW_ACTION) {
++          const s = siteFromHost(p.principal?.host);
++          if (s) {
++            keep.add(s);
++          }
++        }
++      }
++    } catch (_e) {}
++    try {
++      for (const p of Services.perms.getAllByTypes(["cookie"])) {
++        if (p.capability === Ci.nsICookiePermission.ACCESS_SESSION) {
++          const s = siteFromHost(p.principal?.host);
++          if (s) {
++            session.add(s);
++          }
++        }
++      }
++    } catch (_e) {}
++    return { keep, session };
++  },
++
++  _clearsOnShutdown() {
++    try {
++      return (
++        Services.prefs.getBoolPref(SANITIZE_ON_SHUTDOWN_PREF, false) &&
++        Services.prefs.getBoolPref(CLEAR_COOKIES_ON_SHUTDOWN_PREF, false)
++      );
++    } catch (_e) {
++      return true;
++    }
++  },
++
++  /** Whether a seed for `site` may be written (never for private). */
++  keepsSite(ctx, site, sets = this._keepSets()) {
++    if (ctx === "p" || !site) {
++      return false;
++    }
++    if (sets.session.has(site)) {
++      return false;
++    }
++    return !this._clearsOnShutdown() || sets.keep.has(site);
++  },
++
++  /** Drop disk entries the keep rule no longer allows. Returns true if any. */
++  _applyKeepRuleToDisk(sets = this._keepSets()) {
++    if (!this._key) {
++      return false;
++    }
++    const clears = this._clearsOnShutdown();
++    const keepH = new Set([...sets.keep].map(s => this._hash(s)));
++    const sessH = new Set([...sets.session].map(s => this._hash(s)));
++    let dropped = false;
++    for (const [k, e] of this._disk) {
++      if (sessH.has(e.h) || (clears && !keepH.has(e.h))) {
++        this._disk.delete(k);
++        dropped = true;
++      }
++    }
++    return dropped;
++  },
++
++  /**
++   * Seed for (context, eTLD+1). Sync. A stored seed when the store is ready
++   * and has one; else a fresh random seed (persisted later if the keep rule
++   * allows). Private / session-only / loading: memory only.
++   */
++  seedFor(ctx, site) {
++    const c = String(ctx || "0");
++    const s = String(site || "");
++    const key = `${c}|${s}`;
++    const have = this._session.get(key);
++    if (have) {
++      return have.seed;
++    }
++    let rec = null;
++    if (c !== "p" && this._state === "ready" && this._key) {
++      const d = this._disk.get(`${c}|${this._hash(s)}`);
++      if (d) {
++        rec = { seed: d.s, t: d.t, ctx: c, site: s };
++      }
++    }
++    if (!rec) {
++      rec = { seed: randomU32(), t: dayOf(Date.now()), ctx: c, site: s };
++    }
++    this._session.set(key, rec);
++    if (c !== "p" && this._state === "ready") {
++      this._scheduleSave();
++    }
++    return rec.seed;
++  },
++
++  _scheduleSave() {
++    if (this._state !== "ready" || this._readOnlyError) {
++      return;
++    }
++    this._dirty = true;
++    if (this._saveTimer) {
++      return;
++    }
++    this._saveTimer = setTimeout(() => {
++      this._saveTimer = null;
++      this.flush().catch(e =>
++        console.error("darkstr 0056: persona seed store save failed", e)
++      );
++    }, SAVE_DELAY_MS);
++  },
++
++  async flush() {
++    if (this._saveTimer) {
++      clearTimeout(this._saveTimer);
++      this._saveTimer = null;
++    }
++    while (this._savePromise) {
++      await this._savePromise;
++    }
++    if (!this._dirty || this._state !== "ready") {
++      return;
++    }
++    this._dirty = false;
++    this._savePromise = this._save().finally(() => {
++      this._savePromise = null;
++    });
++    await this._savePromise;
++  },
++
++  /** Entries that should be on disk now. */
++  _collectForDisk(sets) {
++    // Session entries first (their plaintext site is known in memory).
++    for (const rec of this._session.values()) {
++      if (!this.keepsSite(rec.ctx, rec.site, sets)) {
++        continue;
++      }
++      const h = this._hash(rec.site);
++      const k = `${rec.ctx}|${h}`;
++      if (!this._disk.has(k)) {
++        this._disk.set(k, { c: rec.ctx, h, s: rec.seed >>> 0, t: rec.t | 0 });
++      }
++    }
++    this._applyKeepRuleToDisk(sets);
++    return [...this._disk.values()];
++  },
++
++  async _ensureKey() {
++    if (this._key) {
++      return true;
++    }
++    if (!this._keyStoreAllowed()) {
++      return false;
++    }
++    const label = LABEL_PREFIX + toHex(randomBytes(8));
++    const key = randomBytes(32);
++    const ks = this._osKeyStore();
++    await ks.asyncGenerateSecret(label);
++    this._stats.keyGens++;
++    const cipher = await ks.asyncEncryptBytes(label, key);
++    this._key = Array.from(key);
++    this._label = label;
++    this._keyCipher = cipher;
++    return true;
++  },
++
++  async _save() {
++    const sets = this._keepSets();
++    const wanted = [...this._session.values()].some(r =>
++      this.keepsSite(r.ctx, r.site, sets)
++    );
++    const exists = await IOUtils.exists(this.path);
++    if (!this._key) {
++      if (!wanted) {
++        // Nothing eligible and no store yet: create nothing.
++        return;
++      }
++      try {
++        if (!(await this._ensureKey())) {
++          this._state = "session-only";
++          return;
++        }
++      } catch (e) {
++        console.error("darkstr 0056: OSKeyStore unavailable, seeds are session-only", e);
++        this._state = "session-only";
++        return;
++      }
++    }
++    const entries = this._collectForDisk(sets);
++    if (!exists && !entries.length) {
++      return;
++    }
++    await this._writeAtomic({
++      v: FORMAT_VERSION,
++      l: this._label,
++      k: this._keyCipher,
++      e: entries,
++    });
++  },
++
++  async _writeAtomic(obj) {
++    if (!isParent()) {
++      throw new Error("darkstr 0056: persona seed store is parent-only");
++    }
++    await IOUtils.makeDirectory(this.dirPath, {
++      ignoreExisting: true,
++      createAncestors: false,
++      permissions: 0o700,
++    });
++    try {
++      await IOUtils.setPermissions(this.dirPath, 0o700);
++    } catch (_e) {}
++    const tmp = this.path + ".tmp";
++    const bytes = new TextEncoder().encode(JSON.stringify(obj));
++    await IOUtils.write(tmp, bytes, { mode: "overwrite", flush: true });
++    await IOUtils.setPermissions(tmp, 0o600);
++    await IOUtils.move(tmp, this.path, { noOverwrite: false });
++    this._stats.writes++;
++  },
++
++  // ---------------------------------------------------------------------
++  // Clearing (DarkstrPersonaSeedCleaner). Never creates a store.
++  // ---------------------------------------------------------------------
++
++  /** Load the key from an existing file without activating (off mode). */
++  async _ensureLoadedForClear() {
++    if (this._state === "loading") {
++      await this._loadPromise;
++    }
++    if (this._state === "ready" || this._state === "session-only") {
++      return;
++    }
++    if (!(await IOUtils.exists(this.path))) {
++      return;
++    }
++    // A clear in any mode must reach the disk entries.
++    this._state = "loading";
++    this._loadPromise = this._load().catch(() => {
++      this._state = "session-only";
++    });
++    await this._loadPromise;
++  },
++
++  _dropSession(pred) {
++    let any = false;
++    for (const [k, rec] of this._session) {
++      if (pred(rec.ctx, rec.site, rec)) {
++        this._session.delete(k);
++        any = true;
++      }
++    }
++    this._notifyFlush(pred);
++    return any;
++  },
++
++  async _rewriteAfterClear(diskChanged) {
++    if (!diskChanged) {
++      return;
++    }
++    if (this._state !== "ready" || !this._key || this._readOnlyError) {
++      return;
++    }
++    if (!(await IOUtils.exists(this.path))) {
++      return;
++    }
++    this._dirty = true;
++    await this.flush();
++  },
++
++  async clearSite(site, ctxFilter) {
++    const s = siteFromHost(site);
++    if (!s) {
++      return;
++    }
++    const accept = ctxFilter || (() => true);
++    this._dropSession((ctx, st) => st === s && accept(ctx));
++    await this._ensureLoadedForClear();
++    if (this._key) {
++      const h = this._hash(s);
++      let changed = false;
++      for (const [k, e] of this._disk) {
++        if (e.h === h && accept(e.c)) {
++          this._disk.delete(k);
++          changed = true;
++        }
++      }
++      await this._rewriteAfterClear(changed);
++    }
++  },
++
++  async clearContexts(ctxFilter) {
++    this._dropSession(ctx => ctxFilter(ctx));
++    await this._ensureLoadedForClear();
++    let changed = false;
++    for (const [k, e] of this._disk) {
++      if (ctxFilter(e.c)) {
++        this._disk.delete(k);
++        changed = true;
++      }
++    }
++    await this._rewriteAfterClear(changed);
++  },
++
++  /** from/to: PRTime (microseconds). Entries whose first-seen day overlaps. */
++  async clearRange(fromUs, toUs) {
++    const fromDay = dayOf(Number(fromUs) / 1000);
++    const toDay = dayOf(Number(toUs) / 1000);
++    const hit = t => t >= fromDay && t <= toDay;
++    this._dropSession((_c, _s, rec) => hit(rec.t));
++    await this._ensureLoadedForClear();
++    let changed = false;
++    for (const [k, e] of this._disk) {
++      if (hit(e.t)) {
++        this._disk.delete(k);
++        changed = true;
++      }
++    }
++    await this._rewriteAfterClear(changed);
++  },
++
++  /** Everything, with key rotation: file and OSKeyStore secret deleted. */
++  async clearAll() {
++    if (this._state === "loading") {
++      await this._loadPromise;
++    }
++    while (this._savePromise) {
++      await this._savePromise;
++    }
++    if (this._saveTimer) {
++      clearTimeout(this._saveTimer);
++      this._saveTimer = null;
++    }
++    this._dirty = false;
++    this._session.clear();
++    this._disk.clear();
++    this._notifyFlush(null);
++    let label = this._label;
++    if (!label) {
++      try {
++        const data = await this._readFile();
++        label = data?.l || "";
++      } catch (_e) {}
++    }
++    try {
++      await IOUtils.remove(this.path, { ignoreAbsent: true });
++      await IOUtils.remove(this.path + ".tmp", { ignoreAbsent: true });
++    } catch (e) {
++      console.error("darkstr 0056: persona-seeds.json remove failed", e);
++    }
++    if (label && this._keyStoreAllowed()) {
++      try {
++        await this._osKeyStore().asyncDeleteSecret(label);
++        this._stats.keyDeletes++;
++      } catch (_e) {}
++    }
++    this._key = null;
++    this._label = "";
++    this._keyCipher = "";
++    this._readOnlyError = false;
++    if (this._state === "session-only" || this._state === "ready") {
++      // Next eligible seed creates a new store (new key and label).
++      this._state = this._keyStoreAllowed() ? "ready" : "session-only";
++    }
++  },
++
++  /** Diagnostics for tests (no site names). */
++  debugState() {
++    return {
++      state: this._state,
++      session: this._session.size,
++      sessionPrivate: [...this._session.values()].filter(r => r.ctx === "p")
++        .length,
++      disk: this._disk.size,
++      hasKey: !!this._key,
++      label: this._label,
++      stats: { ...this._stats },
++    };
++  },
++
++  /** Tests only: forget all in-memory state (does not touch disk). */
++  _resetForTests() {
++    this._state = "idle";
++    this._activated = false;
++    this._loadPromise = null;
++    this._session.clear();
++    this._disk.clear();
++    this._key = null;
++    this._label = "";
++    this._keyCipher = "";
++    this._readOnlyError = false;
++    this._dirty = false;
++  },
++};
++
++/**
++ * ClearDataService cleaner (CLEAR_FINGERPRINTING_PROTECTION_STATE).
++ */
++export var DarkstrPersonaSeedCleaner = {
++  async deleteAll() {
++    await DarkstrPersonaSeedStore.clearAll();
++  },
++
++  async deleteByPrincipal(aPrincipal) {
++    const host = aPrincipal?.host;
++    if (!host) {
++      return;
++    }
++    const ctx = contextKeyFromOA(aPrincipal.originAttributes);
++    await DarkstrPersonaSeedStore.clearSite(host, c => c === ctx);
++  },
++
++  async deleteBySite(aSchemelessSite, aOriginAttributesPattern) {
++    await DarkstrPersonaSeedStore.clearSite(
++      aSchemelessSite,
++      contextFilterFromPattern(aOriginAttributesPattern)
++    );
++  },
++
++  async deleteByHost(aHost, aOriginAttributesPattern) {
++    await DarkstrPersonaSeedStore.clearSite(
++      aHost,
++      contextFilterFromPattern(aOriginAttributesPattern)
++    );
++  },
++
++  async deleteByRange(aFrom, aTo) {
++    await DarkstrPersonaSeedStore.clearRange(aFrom, aTo);
++  },
++
++  async deleteByOriginAttributes(aOriginAttributesString) {
++    await DarkstrPersonaSeedStore.clearContexts(
++      contextFilterFromPattern(aOriginAttributesString)
++    );
++  },
++};

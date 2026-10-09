@@ -29,7 +29,7 @@ const CHILD_FILES = existsSync(join(root, "patches/0051-files/DarkstrCookieFirew
   ? join(root, "patches/0051-files")
   : FILES;
 const FW_FILE =
-  ["0055-files", "0053r2-files", "0053-files", "0052-files"]
+  ["0056-files", "0055-files", "0053r2-files", "0053-files", "0052-files"]
     .map((d) => join(root, "patches", d, "DarkstrCookieFirewall.sys.mjs"))
     .find((f) => existsSync(f)) || join(FILES, "DarkstrCookieFirewall.sys.mjs");
 const FW_URL = "moz-src:///browser/components/DarkstrCookieFirewall.sys.mjs";

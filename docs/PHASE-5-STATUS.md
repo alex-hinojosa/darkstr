@@ -504,6 +504,105 @@ All five 0043 Worker/SharedWorker WebGPU XOR gates passed on Proof tip `cc692641
 - Evidence: `~/AgentDocs/proof/darkstr-pr74-0043-xor-20260928-084400/`
 - Apply log: `~/AgentDocs/proof/darkstr-pr74-0043-xor-20260928-084400/darkstr-apply-0043-20260928-084400.log`
 
+## In review — 0056 persisted per-site persona seeds (Fable N6 follow-up)
+
+| | |
+|---|---|
+| Pin | **0056**: per-site persona seeds survive restarts (they were per session), with Firefox's clearing semantics |
+| Branch | `builder/0056-persona-seed-store` from `builder/0055-persona-ff156` @ `7ca58691` (stacked; needs 0052 + 0053 + 0053r2 + 0055 r2) |
+| Patch | [`patches/0056-darkstr-persona-seed-store.patch`](../patches/0056-darkstr-persona-seed-store.patch) + `patches/0056-files/` (new `DarkstrPersonaSeedStore`; NativePersona, CookieFirewall, DepthHooks, WorkerHooks(+Child), `DarkstrNavigatorHooks.cpp`, toolkit `ClearDataService`, `browser/components/moz.build`; `SHA256SUMS`, `BASE_SHA256SUMS`) |
+| Apply | `scripts/apply-0056-persona-seed-store-mini.sh` (C++ dom/base + chrome JS + toolkit JS; moz.build adds the module) |
+| Tests | `tests/persona-seed-store-0056.test.mjs` (store, keep rule, cleaners, atomic write, OSKeyStore failure; mocked Gecko); the 0048–0052 tests load the 0056 copies |
+| DMG | `~/AgentDocs/builds/darkstr-0056-72fa1796.dmg` (+ `.sha256`), sha256 `72fa17964b2e1f7f83bbaf2bd810a4599ee3ddb997ac4d0d7020415471a92b9c`; 0052 + 0053 + 0053r2 + 0055 r2 + 0056. Omni files match `patches/0056-files` (and 0053r2 ModeXor, 0055 Ffi) |
+| Evidence | `~/AgentDocs/proof/darkstr-0056-r2-20261009-090046/` (self-test `selftest/live-final`, negative control `selftest/live-negctl-0055`, `dmg-verify.log`, `stale-link-check.txt`) |
+
+### Design
+
+- **Store.** `<profile>/darkstr/persona-seeds.json` (dir 0700, file 0600). Only the
+  parent process writes it: tmp file, chmod 0600, then rename (never written in
+  place), debounced 500 ms after a new seed, and flushed at `profileBeforeChange`.
+  Format `{v, l, k, e: [{c, h, s, t}]}`:
+  - `c`: context (`userContextId`; `"0"` = no container);
+  - `h`: HMAC-SHA256(K, eTLD+1);
+  - `s`: u32 seed;
+  - `t`: first-seen day (UTC).
+
+  K is a random 32-byte key. On disk it exists only encrypted by an OSKeyStore
+  (macOS Keychain) secret under a random per-store label (`l`, `k`). **No site
+  name is ever written.**
+- **Key store unavailable** (or `darkstr.persona.seedStore.osKeyStore=false`):
+  session-only, nothing written, an existing file is left untouched. A missing
+  secret makes the old entries unlinkable; the next save starts a new store.
+- **Contexts.** One persona per (container, site). Private browsing gets its own,
+  memory-only persona, dropped at `last-pb-context-exited`. Decisions carry
+  `ctx`; the live-site, popup and windowless-worker rules match on (site, ctx).
+  Shared and service workers get `userContextId` / `privateBrowsingId` from
+  `DarkstrNavigatorHooks.cpp`.
+- **Proof test seed.** `darkstr.persona.seed` bypasses the store: the deterministic
+  pre-0056 mix (default context unchanged; other contexts mix `ctx` in). The
+  store module is not even loaded. A locked snapshot / `rotatePerSite=false`
+  works as before.
+- **Off mode** never loads the store. It is activated only while per-site
+  rotation runs without a fixed seed.
+- **Clear-on-quit gap.** When cookies and site data are cleared on shutdown
+  (`privacy.sanitize.sanitizeOnShutdown` + `clearOnShutdown_v2.cookiesAndStorage`,
+  the LibreWolf default), only sites with a **persist-data-on-shutdown** ALLOW
+  exception are written. Same rule as the Sanitizer, at site level. A cookie
+  ACCESS_SESSION permission always wins. The rule is re-applied at load, which
+  covers exceptions removed since and crashes before shutdown clearing. Without
+  clear-on-shutdown every non-private site is kept.
+- **DarkstrPersonaSeedCleaner** is registered in `ClearDataService` next to
+  `FingerprintingProtectionStateCleaner` (flag
+  `CLEAR_FINGERPRINTING_PROTECTION_STATE`, part of Forget-about-this-site, Clear
+  recent history "cookies and site data", shutdown sanitize, and container
+  removal via CLEAR_ALL):
+  - **site / host / principal:** the eTLD+1 (so a subdomain host clears its
+    site), scoped by the origin-attributes pattern;
+  - **range:** entries whose first-seen day falls inside the range (day
+    granularity, rounded towards clearing);
+  - **origin attributes:** container deletion;
+  - **all:** file and OSKeyStore secret deleted, so the next store gets a new
+    key and label (key rotation).
+
+  It flushes the in-memory copies (NativePersona seed / snapshot / worker-site
+  caches, DepthHooks `lastSeeds`). Open documents keep their persona until they
+  navigate (0051 per-document rule). A clear in off mode can remove entries from
+  an existing file but never creates one, and it rewrites only when something
+  matched.
+
+### Live self-test (Mini, headless, sandbox-exec loopback only, own probe port 8356)
+
+All 9 scenarios PASS on the 0056 DMG app (`selftest/live-final`):
+
+- `keep_restart`: LibreWolf clear-on-shutdown on; A (persist-data-on-shutdown exception) keeps seed and page
+  persona across a normal quit, B resets; file has only A, 0600 / dir 0700, entries `{c,h,s,t}`.
+- `clear_one`: `deleteDataFromSite(A)` resets only A; `deleteDataFromHost(www.B)` resets only B; holds after restart.
+- `contexts`: same site in a normal tab, container 1 and a private window -> three seeds; file has contexts
+  `0` and `1` only; normal and container survive restart, private does not.
+- `kill9`: after the debounced write, SIGKILL then restart: A kept, B reset, file intact (0600, no tmp left).
+- `off_mode`: no `darkstr/` dir, store module never loaded; an existing store is byte- and mtime-identical.
+- `fixed_seed`: `darkstr.persona.seed` gives the deterministic pre-0056 mix; store not loaded, nothing written.
+- `clear_all_range`: last-hour range clear drops today's entries; clear-all removes the file and the Keychain
+  secret; the next store uses a new label.
+- `container_delete`: `ContextualIdentityService.remove` drops that container's entries only.
+- `ui_paths`: Forget About This Site resets only A; principal clear resets only B; Clear Recent History
+  (cookies and site data, last hour) drops all of today's entries.
+
+Every scenario greps darkstr files and prefs.js (excluding the harness's own user.js prefs) for the test
+hostnames: none. Negative control (0055 DMG app, no store, same driver): keep_restart, clear_one, contexts and
+kill9 all FAIL on the behaviour checks (seeds per session, clears are no-ops).
+
+### Residual
+
+- A document loading in the first milliseconds after startup, before the store
+  has decrypted its key, gets a temporary seed. Once loaded, the stored seed wins
+  for that site (caches flushed), so only that one document can differ.
+- Range clears work at first-seen-day granularity. A site first seen before the
+  range keeps its seed even if it was visited inside the range (seeds are not
+  per-visit).
+- The Keychain item is per profile (random label). Deleting the profile folder
+  leaves it in the login keychain until a clear-all.
+
 ## In review — 0055 personas claim the engine's Firefox version (Fable N6 + O9; O12 r2)
 
 | | |
