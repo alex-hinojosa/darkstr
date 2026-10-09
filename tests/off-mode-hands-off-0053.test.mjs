@@ -19,7 +19,7 @@ import { dirname, join } from "node:path";
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 // 0053r2 (Proof: ETP-interaction flag) ships ModeXor from patches/0053r2-files.
 // 0057r2 (baseline FPP under Pollution) ships the newest ModeXor from patches/0057-files.
-const F53 = ["0057-files", "0053r2-files", "0053-files"].map((d) => join(root, "patches", d)).find((d) => existsSync(join(d, "DarkstrModeXor.sys.mjs")));
+const F53 = ["0058-files", "0057-files", "0053r2-files", "0053-files"].map((d) => join(root, "patches", d)).find((d) => existsSync(join(d, "DarkstrModeXor.sys.mjs")));
 
 // ------------------------------------------------- Gecko-like pref store ---
 // Default branch + user branch. Like libpref, setting a user value equal to
