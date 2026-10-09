@@ -1,0 +1,564 @@
+--- a/browser/components/DarkstrDepthHooks.sys.mjs
++++ b/browser/components/DarkstrDepthHooks.sys.mjs
+@@ -42,6 +42,15 @@
+  * coherent with depth gpu persona (no Chrome adapter cosplay).
+  *
+  * Workers = Phase 3 pin 3 — NOT in this module.
++ *
++ * 0057 (Fable B2): depth farbling is seeded per site from the persisted 0056
++ * seed store. It arms when Pollution, hooks and per-site rotation on the store
++ * are all on (no snapshot / darkstr.persona.seed needed); each (container,
++ * site) gets its own canvas / audio / WebGL / fonts / WebGPU noise, stable
++ * across reloads and restarts and different across sites and users.
++ * darkstr.persona.seed / a snapshot remain the deterministic Proof path only.
++ * Content pulls seeds synchronously at DOMWindowCreated (sharedData armed
++ * hint), so page scripts never read a native value first. Off mode: idle.
+  */
+ 
+ const MODE_PREF = "darkstr.mode";
+@@ -53,6 +62,12 @@
+ const LAST_SEEDS_PREF = "darkstr.depth.lastSeeds";
+ const LAST_ERROR_PREF = "darkstr.depth.lastError";
+ const LAST_INSTALL_PREF = "darkstr.depth.lastInstall";
++/** 0057: rotation pref (NativePersona) — depth arms on per-site store seeds. */
++const ROTATE_PER_SITE_PREF = "darkstr.persona.rotatePerSite";
++/** 0057: content asks for seeds synchronously at DOMWindowCreated. */
++const MSG_SEEDS_SYNC = "DarkstrDepthHooks:GetSeedsSync";
++/** 0057: sharedData hint so idle profiles never make the sync call. */
++const SHARED_ARMED_KEY = "darkstr:depthArmed";
+ 
+ /**
+  * 0052 (Fable B1 / O7): diagnostics stay in memory. They reach prefs.js only
+@@ -225,9 +240,25 @@
+     }
+     this._inited = true;
+     this._observer = this._observe.bind(this);
+-    for (const p of [MODE_PREF, NATIVE_PREF, HOOKS_PREF, SNAPSHOT_PREF, SEED_PREF]) {
++    for (const p of [MODE_PREF, NATIVE_PREF, HOOKS_PREF, SNAPSHOT_PREF, SEED_PREF, ROTATE_PER_SITE_PREF]) {
+       Services.prefs.addObserver(p, this._observer);
+     }
++    // 0057: synchronous seed pull (DOMWindowCreated) so page scripts never see
++    // a native readout before the hooks are in (same pattern as the 0051
++    // NativePersona install).
++    this._syncListener = {
++      receiveMessage: message => {
++        try {
++          return this._onSyncSeeds(message);
++        } catch (e) {
++          console.error("darkstr 0057: depth seed sync IPC failed", e);
++          return { retry: true };
++        }
++      },
++    };
++    try {
++      Services.ppmm.addMessageListener(MSG_SEEDS_SYNC, this._syncListener);
++    } catch (_e) {}
+     this._registerActor();
+     this.refreshPlan();
+   },
+@@ -236,11 +267,15 @@
+     if (!this._inited) {
+       return;
+     }
+-    for (const p of [MODE_PREF, NATIVE_PREF, HOOKS_PREF, SNAPSHOT_PREF, SEED_PREF]) {
++    for (const p of [MODE_PREF, NATIVE_PREF, HOOKS_PREF, SNAPSHOT_PREF, SEED_PREF, ROTATE_PER_SITE_PREF]) {
+       try {
+         Services.prefs.removeObserver(p, this._observer);
+       } catch (_e) {}
+     }
++    try {
++      Services.ppmm.removeMessageListener(MSG_SEEDS_SYNC, this._syncListener);
++    } catch (_e) {}
++    this._syncListener = null;
+     if (this._actorRegistered) {
+       try {
+         ChromeUtils.unregisterWindowActor("DarkstrDepthHooks");
+@@ -326,13 +361,24 @@
+ 
+     const pollutionActive = mode === "pollution" && !nativeCompatible;
+     const seeds = pollutionActive ? this._readDepthSeeds() : null;
+-    const armed = !!(pollutionActive && nativeHooks && seeds);
++    // 0057 (Fable B2): without a snapshot / Proof test seed, depth arms on the
++    // persisted per-site seeds (0056 store) — every site, every user its own
++    // noise. darkstr.persona.seed is the deterministic Proof path only. Off
++    // mode never gets here (pollutionActive false: NativePersona untouched).
++    const perSite = !!(
++      pollutionActive &&
++      nativeHooks &&
++      !seeds &&
++      this._perSiteStoreActive()
++    );
++    const armed = !!(pollutionActive && nativeHooks && (seeds || perSite));
+ 
+     this._plan = {
+       pollutionActive,
+       nativeHooks,
+       armed,
+-      seeds: armed ? seeds : null,
++      perSite,
++      seeds: armed && seeds ? seeds : null,
+     };
+     this._seeds = this._plan.seeds;
+     this._setArmed(armed, this._seeds);
+@@ -341,8 +387,49 @@
+ 
+   getPlan() {
+     return this._plan || this.refreshPlan();
++  },
++
++  _nativePersona() {
++    return ChromeUtils.importESModule(
++      "moz-src:///browser/components/DarkstrNativePersona.sys.mjs"
++    ).DarkstrNativePersona;
++  },
++
++  /** 0057: NativePersona per-site rotation runs on the 0056 store. */
++  _perSiteStoreActive() {
++    try {
++      const NP = this._nativePersona();
++      return !!NP._storeRotationActive?.(NP.getPlan());
++    } catch (_e) {
++      return false;
++    }
+   },
+ 
++  /** 0057: sync seed pull from DarkstrDepthHooksChild (DOMWindowCreated). */
++  _onSyncSeeds(message) {
++    const id = message?.data?.innerWindowId;
++    let wgp = null;
++    try {
++      wgp = id ? WindowGlobalParent.getByInnerWindowId(id) : null;
++    } catch (_e) {}
++    if (!wgp) {
++      return { retry: true };
++    }
++    try {
++      const senderPid = message.target?.osPid;
++      if (
++        typeof senderPid === "number" &&
++        typeof wgp.osPid === "number" &&
++        senderPid > 0 &&
++        wgp.osPid > 0 &&
++        senderPid !== wgp.osPid
++      ) {
++        return { seeds: null, error: "pid-mismatch" };
++      }
++    } catch (_e) {}
++    return { seeds: this.depthSeedsForBrowsingContext(wgp.browsingContext) };
++  },
++
+   /** Persist content-install diagnostics. Never writes privacy.*. */
+   recordInstallStatus(detail, browsingContext = null) {
+     const payload = {
+@@ -379,7 +466,7 @@
+   /** Depth seeds for JSWindowActor child (null when idle / first-doc). */
+   depthSeedsForBrowsingContext(bc) {
+     const plan = this.getPlan();
+-    if (!plan.armed || !plan.seeds) {
++    if (!plan.armed || (!plan.seeds && !plan.perSite)) {
+       return null;
+     }
+     // SubsequentNav arm: reuse NativePersona first-doc gate when available.
+@@ -427,18 +514,22 @@
+           // "last writer wins" prefs, so a frame whose own site could not be
+           // resolved took another site's depth seeds. Now it gets none.
+           let seed = 0;
+-          if (etld && DarkstrNativePersona._seedForEtld) {
++          const ctx = DarkstrNativePersona._ctxOfBC
++            ? DarkstrNativePersona._ctxOfBC(bc)
++            : "0";
++          if (etld && plan.perSite) {
++            // 0057: the stored per-site seed only (no session-mix fallback).
+             try {
+-              seed =
+-                DarkstrNativePersona._seedForEtld(
+-                  etld,
+-                  DarkstrNativePersona._ctxOfBC
+-                    ? DarkstrNativePersona._ctxOfBC(bc)
+-                    : "0"
+-                ) >>> 0;
++              seed = DarkstrNativePersona._storeSeedForEtld(etld, ctx) >>> 0;
+             } catch (_eSeed) {
+               seed = 0;
+             }
++          } else if (etld && DarkstrNativePersona._seedForEtld) {
++            try {
++              seed = DarkstrNativePersona._seedForEtld(etld, ctx) >>> 0;
++            } catch (_eSeed) {
++              seed = 0;
++            }
+           }
+           if (!seed) {
+             return null;
+@@ -486,6 +577,10 @@
+       // 0052: NativePersona unavailable → no per-tab phase or site decision.
+       // The global darkstr.persona.docShellPhase mirror is diagnostics only
+       // now (and was another tab's last load anyway), so fail closed.
++      return null;
++    }
++    if (!plan.seeds) {
++      // 0057: per-site arming has no global fallback (fail closed).
+       return null;
+     }
+     const fontSeedOut =
+@@ -699,6 +794,13 @@
+     try {
+       diagPrefs.setBoolPref(ARMED_PREF, this._armed);
+     } catch (_e) {}
++    try {
++      const shared = Services.ppmm.sharedData;
++      if (shared.get(SHARED_ARMED_KEY) !== this._armed) {
++        shared.set(SHARED_ARMED_KEY, this._armed);
++        shared.flush();
++      }
++    } catch (_e) {}
+     if (this._armed && seeds) {
+       this._writeLastSeeds(seeds);
+     } else {
+--- a/browser/components/DarkstrDepthHooksChild.sys.mjs
++++ b/browser/components/DarkstrDepthHooksChild.sys.mjs
+@@ -77,19 +77,75 @@
+   return h & 1 ? magnitude : -magnitude;
+ }
+ 
+-function applyCanvasNoise(px, seed) {
++/**
++ * 0057: canvas noise for a readout of rectangle (sx, sy, sw, sh) of a cw x ch
++ * surface. Keyed by the pixel's ABSOLUTE position on the surface (top-down
++ * rows), so every readout path agrees on every pixel: full vs sub-rectangle
++ * getImageData, toDataURL / toBlob / convertToBlob (full clone), WebGL
++ * readPixels (flipY: GL rows are bottom-up), page vs worker. Only opaque,
++ * in-bounds pixels are touched: transparent/semi-transparent pixels would not
++ * survive the premultiplied putImageData round trip of the encode paths (and a
++ * blank canvas stays blank, like stock). Full-surface reads keep the pre-0057
++ * index (i) for opaque pixels.
++ */
++function applyCanvasNoiseRect(px, seed, sx, sy, sw, sh, cw, ch, flipY) {
+   const data = Cu.waiveXrays(px);
+-  for (let i = 0; i < data.length; i += 4) {
+-    data[i] = Math.max(0, Math.min(255, data[i] + pixelNoise(seed, i, data[i])));
+-    data[i + 1] = Math.max(
+-      0,
+-      Math.min(255, data[i + 1] + pixelNoise(seed, i + 1, data[i + 1]))
+-    );
+-    data[i + 2] = Math.max(
+-      0,
+-      Math.min(255, data[i + 2] + pixelNoise(seed, i + 2, data[i + 2]))
+-    );
++  sx = Math.trunc(Number(sx) || 0);
++  sy = Math.trunc(Number(sy) || 0);
++  sw = Math.trunc(Number(sw) || 0);
++  sh = Math.trunc(Number(sh) || 0);
++  cw = Math.trunc(Number(cw) || 0);
++  ch = Math.trunc(Number(ch) || 0);
++  if (sw < 0) {
++    sx += sw;
++    sw = -sw;
++  }
++  if (sh < 0) {
++    sy += sh;
++    sh = -sh;
++  }
++  if (!sw || !sh || !cw || !ch || data.length < sw * sh * 4) {
++    return;
++  }
++  for (let r = 0; r < sh; r++) {
++    const y = sy + r;
++    if (y < 0 || y >= ch) {
++      continue;
++    }
++    const ay = flipY ? ch - 1 - y : y;
++    for (let c = 0; c < sw; c++) {
++      const x = sx + c;
++      if (x < 0 || x >= cw) {
++        continue;
++      }
++      const i = (r * sw + c) * 4;
++      if (data[i + 3] !== 255) {
++        continue;
++      }
++      const a = (ay * cw + x) * 4;
++      data[i] = Math.max(0, Math.min(255, data[i] + pixelNoise(seed, a, data[i])));
++      data[i + 1] = Math.max(
++        0,
++        Math.min(255, data[i + 1] + pixelNoise(seed, a + 1, data[i + 1]))
++      );
++      data[i + 2] = Math.max(
++        0,
++        Math.min(255, data[i + 2] + pixelNoise(seed, a + 2, data[i + 2]))
++      );
++    }
+   }
++}
++
++/** Whole-surface readout (w x h from 0,0). */
++function applyCanvasNoise(px, seed, w, h) {
++  applyCanvasNoiseRect(px, seed, 0, 0, w, h, w, h, false);
++}
++
++/** getImageData(sx, sy, sw, sh[, settings]) on a context of surface `surf`. */
++function noiseImageDataRead(id, seed, args, surf) {
++  const w = Number(surf?.width) || 0;
++  const h = Number(surf?.height) || 0;
++  applyCanvasNoiseRect(Cu.waiveXrays(id).data, seed, args[0], args[1], args[2], args[3], w, h, false);
+ }
+ 
+ function methodIsInstalled(replacement) {
+@@ -322,7 +378,7 @@
+       const cctx = c.getContext("2d");
+       cctx.drawImage(src, 0, 0);
+       const id = Reflect.apply(origGetImageData, cctx, [0, 0, c.width, c.height]);
+-      applyCanvasNoise(Cu.waiveXrays(id).data, canvasSeed);
++      applyCanvasNoise(Cu.waiveXrays(id).data, canvasSeed, c.width, c.height);
+       cctx.putImageData(id, 0, 0);
+       return c;
+     }
+@@ -367,7 +423,11 @@
+       "getImageData",
+       function (...args) {
+         const id = Reflect.apply(origGetImageData, this, args);
+-        applyCanvasNoise(Cu.waiveXrays(id).data, canvasSeed);
++        try {
++          noiseImageDataRead(id, canvasSeed, args, this.canvas);
++        } catch (error) {
++          onRuntimeError("canvas.getImageData", error);
++        }
+         return id;
+       },
+       replacements
+@@ -547,10 +607,27 @@
+             ]);
+             if (
+               pixels &&
++              typeof pixels === "object" &&
++              arguments.length <= 7 &&
+               format === 0x1908 /* RGBA */ &&
+               type === 0x1401 /* UNSIGNED_BYTE */
+             ) {
+-              applyCanvasNoise(pixels, canvasSeed);
++              // 0057: GL rows are bottom-up; key noise by the canvas pixel.
++              try {
++                applyCanvasNoiseRect(
++                  pixels,
++                  canvasSeed,
++                  x,
++                  y,
++                  w,
++                  h,
++                  this.drawingBufferWidth,
++                  this.drawingBufferHeight,
++                  true
++                );
++              } catch (error) {
++                onRuntimeError("webgl.readPixels", error);
++              }
+             }
+             return result;
+           },
+@@ -728,7 +805,11 @@
+           "getImageData",
+           function (...args) {
+             const id = Reflect.apply(origOcGetImageData, this, args);
+-            applyCanvasNoise(Cu.waiveXrays(id).data, canvasSeed);
++            try {
++              noiseImageDataRead(id, canvasSeed, args, this.canvas);
++            } catch (error) {
++              onRuntimeError("offscreencanvas.getImageData", error);
++            }
+             return id;
+           },
+           replacements
+@@ -753,7 +834,12 @@
+                     this.width,
+                     this.height,
+                   ]);
+-                  applyCanvasNoise(Cu.waiveXrays(id).data, canvasSeed);
++                  applyCanvasNoise(
++                    Cu.waiveXrays(id).data,
++                    canvasSeed,
++                    this.width,
++                    this.height
++                  );
+                   const tmp = new pageWindow.OffscreenCanvas(
+                     this.width,
+                     this.height
+@@ -1992,6 +2078,16 @@
+ var noisedBuffers = new WeakMap();
+ // Brave BALANCED-style fudge: [0.999, 1.0). Zero * fudge === 0 (silence-safe).
+ var fudge = 0.999 + (((seed >>> 0) / 4294967295) / 1000);
++// 0057: the analyser's float frequency data is in dB. A signal scaled by fudge
++// reads 20*log10(fudge) dB lower in every bin (silence -Infinity stays), so
++// frequency data stays consistent with the farbled time-domain data and with
++// OfflineAudioContext buffers (multiplying dB values was not).
++var fudgeDb = 20 * Math.log10(fudge);
++function farbleFloatDb(data) {
++  for (var i = 0; i < data.length; i++) {
++    data[i] = data[i] + fudgeDb;
++  }
++}
+ function contentKey(data) {
+   var n = data.length | 0;
+   if (!n) { return "0"; }
+@@ -2113,6 +2209,8 @@
+       if (array && array.length) {
+         if (kind === "float") {
+           farbleFloat(array);
++        } else if (kind === "floatDb") {
++          farbleFloatDb(array);
+         } else if (kind === "byteTime") {
+           farbleByteTimeDomain(array);
+         } else {
+@@ -2130,7 +2228,7 @@
+     analyserHooks.push({ name: name, wrapper: wrapped, original: orig });
+   }
+   wrapAnalyser("getFloatTimeDomainData", "float");
+-  wrapAnalyser("getFloatFrequencyData", "float");
++  wrapAnalyser("getFloatFrequencyData", "floatDb");
+   wrapAnalyser("getByteTimeDomainData", "byteTime");
+   wrapAnalyser("getByteFrequencyData", "byteFreq");
+ }
+@@ -2255,16 +2353,43 @@
+     }
+   }
+ 
+-  async pullAndInstall(eventType) {
+-    let seeds;
++  /**
++   * 0057: seeds synchronously at DOMWindowCreated (before any page script),
++   * only while the parent says depth is armed (sharedData hint). Returns
++   * undefined when the parent cannot answer yet (async fallback).
++   */
++  _seedsSync() {
+     try {
+-      seeds = await this.sendQuery("DarkstrDepthHooks:GetSeeds");
+-    } catch (error) {
+-      console.error("darkstr depth seed IPC failed", error);
+-      this._report(false, eventType, "seed-query-failed", error);
+-      return;
++      if (Services.cpmm.sharedData.get("darkstr:depthArmed") !== true) {
++        return undefined;
++      }
++      const results = Services.cpmm.sendSyncMessage(
++        "DarkstrDepthHooks:GetSeedsSync",
++        { innerWindowId: this.manager.innerWindowId }
++      );
++      const r = results?.[0];
++      if (!r || r.retry) {
++        return undefined;
++      }
++      return r.seeds || null;
++    } catch (_e) {
++      return undefined;
+     }
++  }
+ 
++  async pullAndInstall(eventType) {
++    let seeds =
++      eventType === "DOMWindowCreated" ? this._seedsSync() : undefined;
++    if (seeds === undefined) {
++      try {
++        seeds = await this.sendQuery("DarkstrDepthHooks:GetSeeds");
++      } catch (error) {
++        console.error("darkstr depth seed IPC failed", error);
++        this._report(false, eventType, "seed-query-failed", error);
++        return;
++      }
++    }
++
+     const rawWindow = this.contentWindow;
+     if (!rawWindow) {
+       this._report(false, eventType, "no-content-window", "contentWindow unavailable");
+--- a/browser/components/DarkstrNativePersona.sys.mjs
++++ b/browser/components/DarkstrNativePersona.sys.mjs
+@@ -857,8 +857,40 @@
+     );
+     this._etldSeedMap.set(key, seed);
+     return seed;
++  },
++
++  /**
++   * 0057 (Fable B2): the persisted per-site seed from the 0056 store for
++   * (persona context, eTLD+1); 0 when a fixed test seed is set or the store
++   * is unavailable. Depth farbling (DarkstrDepthHooks) arms only on this.
++   */
++  _storeSeedForEtld(etld, ctx) {
++    if (!etld || this._fixedSeedSet()) {
++      return 0;
++    }
++    const store = this._activateSeedStore();
++    if (!store) {
++      return 0;
++    }
++    try {
++      return store.seedFor(String(ctx || "0"), etld) >>> 0;
++    } catch (_e) {
++      return 0;
++    }
+   },
+ 
++  /**
++   * 0057: per-site rotation runs on the 0056 store (Pollution + hooks,
++   * rotatePerSite, no snapshot lock, no fixed test seed).
++   */
++  _storeRotationActive(plan) {
++    try {
++      return this._rotationActive(plan || this.getPlan()) && !this._fixedSeedSet();
++    } catch (_e) {
++      return false;
++    }
++  },
++
+   _writeEffectiveDiag(etld, seed) {
+     try {
+       if (etld) {
+--- a/browser/components/DarkstrWorkerHooks.sys.mjs
++++ b/browser/components/DarkstrWorkerHooks.sys.mjs
+@@ -123,6 +123,11 @@
+   return {
+     canvasSeed,
+     audioSeed,
++    // 0057: worker OffscreenCanvas measureText uses the document's fontSeed.
++    fontSeed:
++      typeof seeds.fontSeed === "number"
++        ? seeds.fontSeed >>> 0
++        : (canvasSeed ^ Math.imul(audioSeed, 0x9e3779b9)) >>> 0,
+     webgpuSeed: readWebGpuSeed(seeds, seeds.speechSeed ?? canvasSeed, audioSeed),
+     gpu: normalizeGpu(seeds.gpu) || { vendor: "Apple", renderer: "Apple M1" },
+   };
+--- a/browser/components/DarkstrWorkerHooksChild.sys.mjs
++++ b/browser/components/DarkstrWorkerHooksChild.sys.mjs
+@@ -37,15 +37,29 @@
+ ;(function(){
+   var __s=${seed};
+   function __pn(s,i,v){var h=s^(i*2654435761);h=(h^(v*2246822519))>>>0;h=Math.imul(h^(h>>>16),0x45d9f3b);h=Math.imul(h^(h>>>16),0x45d9f3b);h=(h^(h>>>16))>>>0;var m=(h>>>1)&3;return(h&1)?m:-m;}
+-  function __an(px,s){for(var i=0;i<px.length;i+=4){px[i]=Math.max(0,Math.min(255,px[i]+__pn(s,i,px[i])));px[i+1]=Math.max(0,Math.min(255,px[i+1]+__pn(s,i+1,px[i+1])));px[i+2]=Math.max(0,Math.min(255,px[i+2]+__pn(s,i+2,px[i+2])));}}
++  // 0057: same noise as DepthHooksChild applyCanvasNoiseRect — keyed by the
++  // absolute surface pixel (sub-rect reads agree with full reads; GL rows
++  // flipped), opaque in-bounds pixels only, so a worker OffscreenCanvas reads
++  // exactly what the page reads for the same pixels.
++  function __ar(px,s,sx,sy,sw,sh,cw,ch,fy){sx=Math.trunc(+sx||0);sy=Math.trunc(+sy||0);sw=Math.trunc(+sw||0);sh=Math.trunc(+sh||0);cw=Math.trunc(+cw||0);ch=Math.trunc(+ch||0);if(sw<0){sx+=sw;sw=-sw;}if(sh<0){sy+=sh;sh=-sh;}if(!sw||!sh||!cw||!ch||px.length<sw*sh*4)return;for(var r=0;r<sh;r++){var y=sy+r;if(y<0||y>=ch)continue;var ay=fy?ch-1-y:y;for(var c=0;c<sw;c++){var x=sx+c;if(x<0||x>=cw)continue;var i=(r*sw+c)*4;if(px[i+3]!==255)continue;var a=(ay*cw+x)*4;px[i]=Math.max(0,Math.min(255,px[i]+__pn(s,a,px[i])));px[i+1]=Math.max(0,Math.min(255,px[i+1]+__pn(s,a+1,px[i+1])));px[i+2]=Math.max(0,Math.min(255,px[i+2]+__pn(s,a+2,px[i+2])));}}}
+   if(typeof OffscreenCanvas!=='undefined'){
+     var _oCtB=OffscreenCanvas.prototype.convertToBlob;
+     var _oGID=(typeof OffscreenCanvasRenderingContext2D!=='undefined')?OffscreenCanvasRenderingContext2D.prototype.getImageData:null;
+-    if(_oGID){OffscreenCanvasRenderingContext2D.prototype.getImageData=function(){var id=_oGID.apply(this,arguments);__an(id.data,__s);return id;};}
+-    OffscreenCanvas.prototype.convertToBlob=function(){try{if(this.width>0&&this.height>0){var c=this.getContext('2d');if(c){var id=_oGID?_oGID.call(c,0,0,this.width,this.height):c.getImageData(0,0,this.width,this.height);__an(id.data,__s);var t=new OffscreenCanvas(this.width,this.height);t.getContext('2d').putImageData(id,0,0);return _oCtB.apply(t,arguments);}}}catch(e){}return _oCtB.apply(this,arguments);};
++    if(_oGID){OffscreenCanvasRenderingContext2D.prototype.getImageData=function(sx,sy,sw,sh){var id=_oGID.apply(this,arguments);try{__ar(id.data,__s,sx,sy,sw,sh,this.canvas.width,this.canvas.height,false);}catch(e){}return id;};}
++    OffscreenCanvas.prototype.convertToBlob=function(){try{if(this.width>0&&this.height>0){var c=this.getContext('2d');if(c){var id=_oGID?_oGID.call(c,0,0,this.width,this.height):c.getImageData(0,0,this.width,this.height);__ar(id.data,__s,0,0,this.width,this.height,this.width,this.height,false);var t=new OffscreenCanvas(this.width,this.height);t.getContext('2d').putImageData(id,0,0);return _oCtB.apply(t,arguments);}}}catch(e){}return _oCtB.apply(this,arguments);};
+   }
+-  if(typeof WebGLRenderingContext!=='undefined'){var _rp=WebGLRenderingContext.prototype.readPixels;WebGLRenderingContext.prototype.readPixels=function(x,y,w,h,f,t,p){_rp.call(this,x,y,w,h,f,t,p);if(p&&f===0x1908&&t===0x1401)__an(p,__s);};}
+-  if(typeof WebGL2RenderingContext!=='undefined'){var _rp2=WebGL2RenderingContext.prototype.readPixels;WebGL2RenderingContext.prototype.readPixels=function(x,y,w,h,f,t,p){_rp2.call(this,x,y,w,h,f,t,p);if(p&&f===0x1908&&t===0x1401)__an(p,__s);};}
++  if(typeof WebGLRenderingContext!=='undefined'){var _rp=WebGLRenderingContext.prototype.readPixels;WebGLRenderingContext.prototype.readPixels=function(x,y,w,h,f,t,p){var ret=_rp.apply(this,arguments);if(p&&typeof p==='object'&&arguments.length<=7&&f===0x1908&&t===0x1401){try{__ar(p,__s,x,y,w,h,this.drawingBufferWidth,this.drawingBufferHeight,true);}catch(e){}}return ret;};}
++  if(typeof WebGL2RenderingContext!=='undefined'){var _rp2=WebGL2RenderingContext.prototype.readPixels;WebGL2RenderingContext.prototype.readPixels=function(x,y,w,h,f,t,p){var ret=_rp2.apply(this,arguments);if(p&&typeof p==='object'&&arguments.length<=7&&f===0x1908&&t===0x1401){try{__ar(p,__s,x,y,w,h,this.drawingBufferWidth,this.drawingBufferHeight,true);}catch(e){}}return ret;};}
++  // 0057: fonts parity with the window (DepthHooksChild 0036): OffscreenCanvas
++  // measureText width x the same fontSeed fudge, so page and worker agree.
++  var __fs=${typeof depth.fontSeed === "number" ? (depth.fontSeed >>> 0) : -1};
++  if(__fs>=0&&typeof OffscreenCanvasRenderingContext2D!=='undefined'&&typeof OffscreenCanvasRenderingContext2D.prototype.measureText==='function'){
++    var __ff=0.999+((__fs/4294967295)/1000);
++    var __fw=function(w){return(typeof w!=='number'||!isFinite(w)||w===0)?w:w*__ff;};
++    var _oMT=OffscreenCanvasRenderingContext2D.prototype.measureText;
++    var __props=["actualBoundingBoxLeft","actualBoundingBoxRight","actualBoundingBoxAscent","actualBoundingBoxDescent","fontBoundingBoxAscent","fontBoundingBoxDescent","emHeightAscent","emHeightDescent","hangingBaseline","alphabeticBaseline","ideographicBaseline"];
++    Object.defineProperty(OffscreenCanvasRenderingContext2D.prototype,"measureText",{configurable:true,enumerable:true,writable:true,value:function(text){var m=_oMT.apply(this,arguments);if(!m)return m;var w=m.width,fw=__fw(w);if(fw===w)return m;var out={width:fw};for(var i=0;i<__props.length;i++){var k=__props[i];try{var v=m[k];if(typeof v==='number'){out[k]=(k==="actualBoundingBoxLeft"||k==="actualBoundingBoxRight")?__fw(v):v;}}catch(e){}}return out;}});
++  }
+   var __gv=${JSON.stringify(vendor)},__gr=${JSON.stringify(renderer)};
+   if(typeof WebGLRenderingContext!=='undefined'){var _gp=WebGLRenderingContext.prototype.getParameter;WebGLRenderingContext.prototype.getParameter=function(p){if(p===0x9245)return __gv;if(p===0x9246)return __gr;return _gp.call(this,p);};}
+   if(typeof WebGL2RenderingContext!=='undefined'){var _gp2=WebGL2RenderingContext.prototype.getParameter;WebGL2RenderingContext.prototype.getParameter=function(p){if(p===0x9245)return __gv;if(p===0x9246)return __gr;return _gp2.call(this,p);};}
