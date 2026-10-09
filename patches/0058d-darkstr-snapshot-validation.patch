@@ -1,0 +1,363 @@
+--- a/browser/components/DarkstrNativePersona.sys.mjs
++++ b/browser/components/DarkstrNativePersona.sys.mjs
+@@ -104,6 +104,9 @@
+ const PERSONA_LAST_ERROR_PREF = "darkstr.persona.lastError";
+ /** 0051 diag: last top-level document decision {site, armed, ua, al}. */
+ const LAST_DECISION_PREF = "darkstr.persona.lastDecision";
++/** 0058d diag: why the pasted snapshot was refused, and how often. */
++const SNAPSHOT_REFUSAL_PREF = "darkstr.persona.lastSnapshotRefusal";
++const SNAPSHOT_REFUSALS_PREF = "darkstr.persona.snapshotRefusals";
+ 
+ /**
+  * 0052 (Fable B1 / O7): diagnostics stay in memory. They reach prefs.js only
+@@ -288,7 +291,74 @@
+ /**
+  * 0058: OS of a snapshot, from its UA OS token first (what HTTP and
+  * navigator.userAgent already claim), else from its platform. null = unknown.
++ */
++/**
++ * 0058d (Fable): a pasted darkstr.persona.snapshot locks the persona only when
++ * it is a usable navigator identity. Before 0058d a snapshot without a
++ * userAgent (e.g. platform only) still locked rotation, then resolved to
++ * nothing, so under Pollution the page was fully native with no warning.
++ * Now an invalid snapshot is refused: a console warning (reason only, never
++ * the snapshot text) and the seeded per-site persona, never native.
++ * @param {string} raw pref text
++ * @returns {{ok: true, parsed: object} | {ok: false, reason: string}}
+  */
++export function validateSnapshot(raw) {
++  const text = String(raw ?? "").trim();
++  if (!text) {
++    return { ok: false, reason: "empty" };
++  }
++  let p;
++  try {
++    p = JSON.parse(text);
++  } catch (_e) {
++    return { ok: false, reason: "not JSON" };
++  }
++  if (!p || typeof p !== "object" || Array.isArray(p)) {
++    return { ok: false, reason: "not a JSON object" };
++  }
++  if (typeof p.userAgent !== "string" || !p.userAgent.trim()) {
++    return { ok: false, reason: "no userAgent" };
++  }
++  if (!/^Mozilla\/5\.0 \([^)]+\)/.test(p.userAgent)) {
++    return { ok: false, reason: "userAgent is not a browser UA" };
++  }
++  if (p.platform !== undefined && p.platform !== null && typeof p.platform !== "string") {
++    return { ok: false, reason: "platform is not a string" };
++  }
++  if (
++    p.hardwareConcurrency !== undefined &&
++    p.hardwareConcurrency !== null &&
++    !(Number.isInteger(p.hardwareConcurrency) && p.hardwareConcurrency >= 1 && p.hardwareConcurrency <= 256)
++  ) {
++    return { ok: false, reason: "hardwareConcurrency is not an integer 1..256" };
++  }
++  if (
++    p.deviceMemory !== undefined &&
++    p.deviceMemory !== null &&
++    !(typeof p.deviceMemory === "number" && Number.isFinite(p.deviceMemory) && p.deviceMemory > 0 && p.deviceMemory <= 1024)
++  ) {
++    return { ok: false, reason: "deviceMemory is not a positive number" };
++  }
++  if (
++    p.languages !== undefined &&
++    p.languages !== null &&
++    !(Array.isArray(p.languages) && p.languages.length && p.languages.every(l => typeof l === "string" && l.trim()))
++  ) {
++    return { ok: false, reason: "languages is not a list of language tags" };
++  }
++  if (p.timezone !== undefined && p.timezone !== null) {
++    if (typeof p.timezone !== "string" || !p.timezone.trim()) {
++      return { ok: false, reason: "timezone is not a string" };
++    }
++    try {
++      new Intl.DateTimeFormat("en-US", { timeZone: p.timezone });
++    } catch (_e) {
++      return { ok: false, reason: "unknown timezone" };
++    }
++  }
++  return { ok: true, parsed: p };
++}
++
+ export function snapshotOs(snap) {
+   return osOfToken(uaOsToken(snap?.userAgent)) || osOfPlatform(snap?.platform);
+ }
+@@ -697,12 +767,13 @@
+    * Locked when snapshot pref non-empty OR rotatePerSite=false.
+    */
+   _rotationLocked() {
+-    try {
+-      const raw = Services.prefs.getStringPref(SNAPSHOT_PREF, "");
+-      if (raw && String(raw).trim()) {
+-        return true;
+-      }
+-    } catch (_e) {}
++    // 0058d: only a valid snapshot locks. An invalid one is refused: with a
++    // fixed test seed the seed persona applies (locked); otherwise rotation
++    // runs (seeded per-site persona), even with rotatePerSite=false.
++    const check = this._snapshotCheck();
++    if (check) {
++      return check.ok ? true : this._fixedSeedSet();
++    }
+     try {
+       if (!Services.prefs.getBoolPref(ROTATE_PER_SITE_PREF, true)) {
+         return true;
+@@ -718,6 +789,11 @@
+    * Homogeneous / hooks off → idle (caller still gates applyNative).
+    */
+   _rotationWanted() {
++    // 0058d: a refused snapshot falls back to the per-site persona, never native.
++    const check = this._snapshotCheck();
++    if (check && !check.ok && !this._fixedSeedSet()) {
++      return true;
++    }
+     try {
+       return Services.prefs.getBoolPref(ROTATE_PER_SITE_PREF, true);
+     } catch (_e) {
+@@ -725,6 +801,42 @@
+     }
+   },
+ 
++  /**
++   * 0058d: validation of the pasted snapshot pref, cached per pref text.
++   * null = no snapshot pasted. A refusal warns once per distinct text and
++   * counts in getDiagnostics(); the text itself is never logged or stored.
++   */
++  _snapshotCheck() {
++    let raw = "";
++    try {
++      raw = String(Services.prefs.getStringPref(SNAPSHOT_PREF, "") || "").trim();
++    } catch (_e) {
++      raw = "";
++    }
++    if (!raw) {
++      return null;
++    }
++    if (this._snapshotCheckCache?.raw === raw) {
++      return this._snapshotCheckCache.result;
++    }
++    const result = validateSnapshot(raw);
++    this._snapshotCheckCache = { raw, result };
++    if (!result.ok) {
++      this._snapshotRefusals = (this._snapshotRefusals || 0) + 1;
++      try {
++        diagPrefs.setStringPref(SNAPSHOT_REFUSAL_PREF, result.reason);
++        diagPrefs.setIntPref(SNAPSHOT_REFUSALS_PREF, this._snapshotRefusals);
++      } catch (_e) {}
++      try {
++        console.warn(
++          `darkstr 0058d: darkstr.persona.snapshot refused (${result.reason}); ` +
++            "using the seeded per-site persona instead."
++        );
++      } catch (_e) {}
++    }
++    return result;
++  },
++
+   _rotationActive(plan) {
+     const p = plan || this._plan;
+     if (!p?.pollutionActive || !p?.nativeHooks) {
+@@ -1393,10 +1505,13 @@
+ 
+   _readSnapshot() {
+     try {
+-      const raw = Services.prefs.getStringPref(SNAPSHOT_PREF, "");
+-      if (raw) {
+-        const parsed = JSON.parse(raw);
+-        if (parsed && typeof parsed.userAgent === "string") {
++      // 0058d: only a snapshot that passes validateSnapshot() is used; a
++      // refused one falls through to the seed path (or, without a seed, the
++      // plan runs per-site rotation, see _rotationLocked / _rotationWanted).
++      const check = this._snapshotCheck();
++      if (check?.ok) {
++        const parsed = check.parsed;
++        {
+           const userAgent = withEngineFirefoxVersion(parsed.userAgent);
+           // 0058: platform / appVersion / oscpu follow the pasted UA's OS
+           // (a Win32 paste no longer gets the host's "5.0 (Macintosh)").
+--- a/browser/components/DarkstrDepthHooks.sys.mjs
++++ b/browser/components/DarkstrDepthHooks.sys.mjs
+@@ -214,6 +214,31 @@
+  * 0058c: depth seed of a pasted snapshot that carries none (FNV-1a 32 of its
+  * trimmed pref text; never 0).
+  */
++/**
++ * 0058d (Fable): mix a seedless snapshot's text seed with the site's own 0056
++ * store seed (eTLD+1 + persona context), so a locked snapshot keeps one
++ * navigator identity (and one GPU) everywhere while its depth noise differs
++ * per site and stays stable per site. Before 0058d every site got the same
++ * snapshot-derived noise: cross-site linkable.
++ */
++export function mixSiteDepthSeed(snapSeed, siteSeed) {
++  let h = (Math.imul((snapSeed >>> 0) ^ 0x9e3779b9, 0x85ebca6b) ^ (siteSeed >>> 0)) >>> 0;
++  h = Math.imul(h ^ (h >>> 16), 0x7feb352d) >>> 0;
++  h = Math.imul(h ^ (h >>> 15), 0x846ca68b) >>> 0;
++  h = (h ^ (h >>> 16)) >>> 0;
++  return h || 1;
++}
++
++/** 0058d: site key when the 0056 store has no seed (FNV-1a of ctx|site). */
++export function siteKeySeed(etld, ctx) {
++  const t = `${String(ctx || "0")}|${String(etld)}`;
++  let h = 0x811c9dc5;
++  for (let i = 0; i < t.length; i++) {
++    h = Math.imul(h ^ t.charCodeAt(i), 0x01000193) >>> 0;
++  }
++  return h >>> 0 || 1;
++}
++
+ export function snapshotDepthSeed(raw) {
+   const text = String(raw || "").trim();
+   let h = 0x811c9dc5;
+@@ -600,6 +625,10 @@
+     }
+     // 0058c: the decision's snapshot, for an OS-coherent GPU on every path.
+     let gpuSnap = null;
++    // 0058d: site + context of this document, for the seedless-snapshot mix.
++    let mixSite = null;
++    let mixCtx = "0";
++    let NP = null;
+     // SubsequentNav arm: reuse NativePersona first-doc gate when available.
+     // When 0030 rotatePerSite is active, ALWAYS derive depth seeds (incl.
+     // webgpuSeed) from eTLD-effective persona seed — same SoT as sticky
+@@ -629,6 +658,21 @@
+           return null;
+         }
+         gpuSnap = snap;
++        NP = DarkstrNativePersona;
++        try {
++          mixSite = decision
++            ? decision.site || null
++            : DarkstrNativePersona._etldPlus1FromBrowsingContext
++              ? DarkstrNativePersona._etldPlus1FromBrowsingContext(bc)
++              : null;
++          mixCtx = decision?.ctx
++            ? decision.ctx
++            : DarkstrNativePersona._ctxOfBC
++              ? DarkstrNativePersona._ctxOfBC(bc)
++              : "0";
++        } catch (_eMix) {
++          mixSite = null;
++        }
+ 
+         let rotating = false;
+         try {
+@@ -738,6 +782,42 @@
+     if (!plan.seeds) {
+       // 0057: per-site arming has no global fallback (fail closed).
+       return null;
++    }
++    if (plan.seeds.snapshotTextSeed) {
++      // 0058d: seedless snapshot -> per-site noise, snapshot-wide GPU.
++      let siteSeed = 0;
++      if (mixSite && NP?._storeSeedForEtld) {
++        try {
++          siteSeed = NP._storeSeedForEtld(mixSite, mixCtx) >>> 0;
++        } catch (_eSite) {
++          siteSeed = 0;
++        }
++      }
++      if (!siteSeed) {
++        // No store (or unresolvable site): still per site, never shared.
++        siteSeed = siteKeySeed(mixSite || "\u0000no-site", mixCtx);
++      }
++      const d = this._generateDepthFromSeed(
++        mixSiteDepthSeed(plan.seeds.snapshotTextSeed, siteSeed),
++        (gpuSnap && snapshotOsForGpu(gpuSnap)) || plan.seeds.snapshotOs || undefined
++      );
++      if (d) {
++        const out = {
++          canvasSeed: d.canvasSeed >>> 0,
++          audioSeed: d.audioSeed >>> 0,
++          fontSeed: d.fontSeed >>> 0,
++          speechSeed: d.speechSeed >>> 0,
++          webgpuSeed: d.webgpuSeed >>> 0,
++          // Identity stays snapshot-wide: the GPU of the unmixed seeds.
++          gpu: personaGpu(
++            gpuSnap,
++            { vendor: plan.seeds.gpu.vendor, renderer: plan.seeds.gpu.renderer },
++            plan.seeds.canvasSeed
++          ),
++        };
++        this._writeLastSeeds(out);
++        return out;
++      }
+     }
+     const fontSeedOut =
+       (plan.seeds.fontSeed >>> 0) ||
+@@ -779,6 +859,19 @@
+     } catch (_e) {
+       parsed = null;
+     }
++    // 0058d: a snapshot NativePersona refuses is not a snapshot here either
++    // (the per-site rotation path decides depth instead).
++    if (raw) {
++      try {
++        const { validateSnapshot } = ChromeUtils.importESModule(
++          "moz-src:///browser/components/DarkstrNativePersona.sys.mjs"
++        );
++        if (typeof validateSnapshot === "function" && !validateSnapshot(raw).ok) {
++          raw = "";
++          parsed = null;
++        }
++      } catch (_eVal) {}
++    }
+     const snapOs = parsed ? snapshotOsForGpu(parsed) || undefined : undefined;
+     if (parsed) {
+       const canvasSeed = readU32Field(parsed, "canvasSeed", "canvas_seed");
+@@ -816,8 +909,13 @@
+     // drew and reported WebGL with the host's real GPU (an Apple GPU under a
+     // Windows / Linux snapshot). Derive the depth seeds deterministically from
+     // the snapshot text instead: same snapshot, same digests.
+-    const d = this._generateDepthFromSeed(snapshotDepthSeed(raw), snapOs);
++    const textSeed = snapshotDepthSeed(raw);
++    const d = this._generateDepthFromSeed(textSeed, snapOs);
+     d.gpu = personaGpu(parsed, d.gpu, d.canvasSeed);
++    // 0058d: depthSeedsForBrowsingContext mixes this per site and context.
++    // Internal fields; the per-document output object never carries them.
++    d.snapshotTextSeed = textSeed;
++    d.snapshotOs = snapOs;
+     return d;
+   },
+ 
+--- a/browser/components/DarkstrModeXor.sys.mjs
++++ b/browser/components/DarkstrModeXor.sys.mjs
+@@ -59,6 +59,8 @@
+ const HOOKS_PREF = "darkstr.nativePersonaHooks";
+ /** 0054: diagnostics (in memory unless darkstr.debug.diagPrefs). */
+ const LAST_REFUSAL_PREF = "darkstr.xor.lastRefusal";
++/** 0058d: how many times this session refused Pollution without hooks. */
++const REFUSAL_COUNT_PREF = "darkstr.xor.refusalCount";
+ const RFP_PREF = "privacy.resistFingerprinting";
+ const FPP_PREF = "privacy.fingerprintingProtection";
+ /** 0057r2: Firefox baseline FPP (default on; canvas randomization among its targets). */
+@@ -251,6 +253,9 @@
+   "darkstr.webgl.ensureApplied",
+   "darkstr.webgl.lastStatus",
+   "darkstr.xor.lastRefusal", // 0054
++  "darkstr.xor.refusalCount", // 0058d
++  "darkstr.persona.lastSnapshotRefusal", // 0058d
++  "darkstr.persona.snapshotRefusals", // 0058d
+   "darkstr.ffi.lastError",
+   "darkstr.ffi.loadSource",
+ ]);
+@@ -283,6 +288,8 @@
+ 
+ export var DarkstrModeXor = {
+   /** 0052: in-memory diagnostics (what used to be darkstr.*.last* prefs). */
++  // 0058d: carries darkstr.xor.lastRefusal + darkstr.xor.refusalCount once a
++  // refusal happened (memory only; prefs.js only with darkstr.debug.diagPrefs).
+   getDiagnostics() {
+     return diagPrefs.snapshot();
+   },
+@@ -509,6 +516,7 @@
+     } catch (_e) {}
+     try {
+       diagPrefs.setStringPref(LAST_REFUSAL_PREF, "pollution-without-hooks");
++      diagPrefs.setIntPref(REFUSAL_COUNT_PREF, this._refusals);
+     } catch (_e) {}
+     try {
+       console.warn(
