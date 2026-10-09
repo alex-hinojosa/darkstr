@@ -32,6 +32,18 @@
  * name, length, attributes and [native code] toString; `this` picks the
  * sandboxed record, any other receiver is forwarded to the original native
  * member. Prototypes are restored once no document of that window is hooked.
+ *
+ * 0048r2:
+ *   - The cache holds one map per (bucket, host): a document reads the union
+ *     of its buckets (Gecko TCP/CHIPS: first party u+p, cross-site p, A-B-A
+ *     pf) and writes into the bucket the parent's rule picks (cross-site
+ *     contexts only with Partitioned).
+ *   - Deltas arrive batched via sendQuery and are acked after they are
+ *     applied; the parent holds the HTTP response until then (F1).
+ *   - Native gate (F3): this module answers the C++ "darkstr-cookie-gate"
+ *     observer for each inner window: "passthrough" only for documents whose
+ *     parent policy is passthrough; anything else (sandbox, unknown, policy
+ *     unavailable) keeps the real cookie store closed.
  */
 
 const lazy = {};
@@ -51,8 +63,55 @@ const installedByDocument = new WeakMap();
 // Documents whose policy has already been fetched (any decision), so the
 // DOMWindowCreated + DOMDocElementInserted pair costs one sync IPC, not two.
 const policyCheckedDocuments = new WeakSet();
-/** cacheKey ("oa|top-site#host") → Map(cookieKey → record). Process-wide. */
+/** cacheKey ("<bucket>#host") → Map(cookieKey → record). Process-wide. */
 const processCache = new Map();
+
+// ---- F3 native gate --------------------------------------------------------
+const GATE_TOPIC = "darkstr-cookie-gate";
+/** innerWindowId → parent decision ("sandbox" | "passthrough"). */
+const gateDecisions = new Map();
+
+export function recordGateDecision(innerWindowId, decision) {
+  if (!innerWindowId) {
+    return;
+  }
+  if (decision === "sandbox" || decision === "passthrough") {
+    gateDecisions.set(Number(innerWindowId), decision);
+  } else {
+    gateDecisions.delete(Number(innerWindowId));
+  }
+}
+
+/** Decision the C++ gate gets for an inner window (fail closed). */
+export function gateDecisionFor(innerWindowId) {
+  return gateDecisions.get(Number(innerWindowId)) === "passthrough"
+    ? "passthrough"
+    : "block";
+}
+
+const gateObserver = {
+  observe(subject, topic) {
+    if (topic !== GATE_TOPIC) {
+      return;
+    }
+    try {
+      const bag = subject.QueryInterface(Ci.nsIWritablePropertyBag2);
+      let id = 0;
+      try {
+        id = bag.getPropertyAsUint64("innerWindowID");
+      } catch (_e) {}
+      bag.setPropertyAsAString("decision", gateDecisionFor(id));
+    } catch (_e) {}
+  },
+};
+try {
+  Services.obs.addObserver(gateObserver, GATE_TOPIC);
+} catch (_e) {}
+
+/** Test hook. */
+export function _gateDecisionsForTest() {
+  return gateDecisions;
+}
 
 function errorText(error) {
   try {
@@ -135,19 +194,19 @@ function cacheFor(cacheKey) {
   return map;
 }
 
-/** Replace the process cache entry with an authoritative parent snapshot. */
-function loadSnapshot(cacheKey, records) {
+/** Replace process cache entries with an authoritative parent snapshot. */
+function loadSnapshot(buckets) {
   const Core = lazy.DarkstrCookieCore;
-  const map = new Map();
-  for (const rec of records || []) {
-    map.set(Core.cookieKey(rec), { ...rec });
+  for (const [cacheKey, records] of Object.entries(buckets || {})) {
+    const map = new Map();
+    for (const rec of records || []) {
+      map.set(Core.cookieKey(rec), { ...rec });
+    }
+    processCache.set(cacheKey, map);
   }
-  processCache.set(cacheKey, map);
-  return map;
 }
 
-/** Apply a parent delta (HTTP Set-Cookie, other documents, other processes). */
-export function applyDelta(data) {
+function applyOneDelta(data) {
   const Core = lazy.DarkstrCookieCore;
   const map = processCache.get(data?.cacheKey);
   if (!map) {
@@ -162,10 +221,27 @@ export function applyDelta(data) {
   return true;
 }
 
+/** Apply a parent delta (HTTP Set-Cookie, other documents, other processes). */
+export function applyDelta(data) {
+  if (Array.isArray(data?.batch)) {
+    let any = false;
+    for (const d of data.batch) {
+      any = applyOneDelta(d) || any;
+    }
+    return any;
+  }
+  return applyOneDelta(data);
+}
+
+function mapsFor(ctx) {
+  return (ctx.cacheKeys || [ctx.cacheKey]).map((k) => processCache.get(k));
+}
+
 function envFor(ctx) {
   return {
     laxByDefault: !!ctx.laxByDefault,
     noneRequiresSecure: ctx.noneRequiresSecure !== false,
+    optInPartitioning: ctx.optInPartitioning !== false,
     isPublicSuffix,
   };
 }
@@ -182,8 +258,9 @@ function docView(ctx) {
 /** Synchronous document.cookie read from the process cache. */
 export function readCookieString(ctx) {
   const Core = lazy.DarkstrCookieCore;
-  const map = processCache.get(ctx.cacheKey);
-  return Core.serializeCookies(Core.matchForScript(map, docView(ctx), envFor(ctx)));
+  return Core.serializeCookies(
+    Core.matchForScript(Core.unionMaps(mapsFor(ctx)), docView(ctx), envFor(ctx))
+  );
 }
 
 /**
@@ -211,18 +288,30 @@ export function writeCookieString(ctx, raw, send) {
   if (!built.ok) {
     return false;
   }
+  const bucketKey = Core.writeBucketFor(
+    ctx.jarKey,
+    ctx.kind || Core.KIND_1P,
+    built.record.partitioned,
+    ctx.optInPartitioning !== false
+  );
+  if (!bucketKey) {
+    // Stock: cross-site context without Partitioned is rejected (check 4).
+    return false;
+  }
   if (ctx.mode === "synthetic" && !built.deletion) {
     built.record.value = Core.syntheticValue(
       ctx.seed >>> 0,
-      ctx.topBase,
+      String(ctx.topBase || "") + Core.bucketTag(bucketKey),
       baseOfHost(built.record.host),
       built.record.name
     );
   }
-  const map = cacheFor(ctx.cacheKey);
+  const map = cacheFor(`${bucketKey}#${ctx.docHost}`);
   let maxCreation = 0;
-  for (const r of map.values()) {
-    maxCreation = Math.max(maxCreation, r.creation || 0);
+  for (const m of mapsFor(ctx)) {
+    for (const r of m?.values() || []) {
+      maxCreation = Math.max(maxCreation, r.creation || 0);
+    }
   }
   const res = Core.applyRecord(map, built, {
     fromHttp: false,
@@ -262,6 +351,9 @@ export function cookieStoreRaw(nameOrOpts, value, isDelete) {
   const ss = String(opts.sameSite || "strict").toLowerCase();
   parts.push(`SameSite=${ss === "lax" || ss === "none" ? ss : "strict"}`);
   parts.push("Secure");
+  if (opts.partitioned) {
+    parts.push("Partitioned");
+  }
   return { name, raw: parts.join("; ") };
 }
 
@@ -395,8 +487,11 @@ const STORE_LENGTHS = { get: 0, getAll: 0, set: 1, delete: 1 };
 function storeImpl(record, pageWindow) {
   const items = (name) => {
     const Core = lazy.DarkstrCookieCore;
-    const map = processCache.get(record.ctx.cacheKey);
-    const recs = Core.matchForScript(map, docView(record.ctx), envFor(record.ctx));
+    const recs = Core.matchForScript(
+      Core.unionMaps(mapsFor(record.ctx)),
+      docView(record.ctx),
+      envFor(record.ctx)
+    );
     return recs
       .filter((r) => !name || r.name === name)
       .map((r) => ({ name: r.name, value: r.value }));
@@ -468,6 +563,8 @@ function sameCtx(a, b) {
     a &&
     b &&
     a.cacheKey === b.cacheKey &&
+    String(a.cacheKeys || "") === String(b.cacheKeys || "") &&
+    a.kind === b.kind &&
     a.mode === b.mode &&
     a.seed === b.seed &&
     a.crossSite === b.crossSite &&
@@ -596,27 +693,36 @@ export class DarkstrCookieFirewallChild extends JSWindowActorChild {
     if (!document || !window) {
       return;
     }
+    let innerWindowId = 0;
+    try {
+      innerWindowId = this.manager.innerWindowId;
+    } catch (_e) {}
     if (!isHttpContentPrincipal(document.nodePrincipal)) {
       if (installedByDocument.has(unwaive(document))) {
         uninstallCookieHooks(document);
       }
+      recordGateDecision(innerWindowId, null);
       return;
     }
     const policy = this._policySync();
     if (!policy || policy.decision === "retry") {
+      // Unknown policy: the native gate stays closed for this window.
+      recordGateDecision(innerWindowId, null);
       this._report(false, eventType, "policy-unavailable");
       return;
     }
     policyCheckedDocuments.add(document);
+    recordGateDecision(innerWindowId, policy.decision);
     if (policy.decision !== "sandbox") {
       const status = uninstallCookieHooks(document);
       this._report(true, eventType, status);
       return;
     }
     try {
-      loadSnapshot(policy.cacheKey, policy.records);
+      loadSnapshot(policy.buckets || { [policy.cacheKey]: policy.records });
       const ctx = { ...policy };
       delete ctx.records;
+      delete ctx.buckets;
       const status = installCookieHooks(
         document,
         window,
@@ -657,11 +763,18 @@ export class DarkstrCookieFirewallChild extends JSWindowActorChild {
     }
   }
 
+  didDestroy() {
+    try {
+      recordGateDecision(this.manager?.innerWindowId, null);
+    } catch (_e) {}
+  }
+
   receiveMessage(message) {
     switch (message.name) {
       case MSG_DELTA:
         applyDelta(message.data);
-        break;
+        // Ack (sendQuery): the parent releases the HTTP response now (F1).
+        return true;
       case MSG_REINSTALL:
         this._install("reinstall");
         break;

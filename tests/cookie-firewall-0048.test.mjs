@@ -8,6 +8,12 @@
  *
  * The child actor under test is the shipped one: patches/0051-files when
  * present (0051 N4: prototype-level, native-shaped hooks), else 0048-files.
+ *
+ * 0048r2 (Proof FAILED f3f1e748): F1 response ordering (suspend until the
+ * content cache acked), F2 A-B-A / cross-site no-cors fetch (Gecko TCP +
+ * foreign-ancestor bit), F3 native gate (pref on the default branch, child
+ * gate answers, C++ patch shape, firewall never calls the native store) and
+ * check 4 (unpartitioned third-party cookies rejected like stock).
  */
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -24,6 +30,7 @@ const FW_URL = "moz-src:///browser/components/DarkstrCookieFirewall.sys.mjs";
 
 // ---------------------------------------------------------------- stubs ---
 const prefs = new Map();
+const defaultPrefs = new Map();
 function resetPrefs(extra = {}) {
   prefs.clear();
   for (const [k, v] of Object.entries({
@@ -36,6 +43,8 @@ function resetPrefs(extra = {}) {
     "darkstr.persona.seed": 42,
     "network.cookie.sameSite.laxByDefault": false,
     "network.cookie.sameSite.noneRequiresSecure": true,
+    // LibreWolf default (librewolf.cfg): stock rejects unpartitioned 3P cookies.
+    "network.cookie.cookieBehavior.optInPartitioning": true,
     ...extra,
   })) {
     prefs.set(k, v);
@@ -59,6 +68,7 @@ function eTLDBase(host) {
   return two;
 }
 const sent = [];
+const observers = {};
 globalThis.Services = {
   prefs: {
     getBoolPref: getP,
@@ -69,6 +79,12 @@ globalThis.Services = {
     setIntPref: (k, v) => prefs.set(k, v),
     addObserver() {},
     removeObserver() {},
+    prefHasUserValue: (k) => prefs.has(k),
+    clearUserPref: (k) => prefs.delete(k),
+    getDefaultBranch: () => ({
+      setBoolPref: (k, v) => defaultPrefs.set(k, v),
+      getBoolPref: (k, d) => (defaultPrefs.has(k) ? defaultPrefs.get(k) : d),
+    }),
   },
   eTLD: {
     getBaseDomainFromHost: eTLDBase,
@@ -78,13 +94,19 @@ globalThis.Services = {
       return MULTI.has(two) ? two : labels[labels.length - 1];
     },
   },
-  obs: { addObserver() {}, removeObserver() {} },
+  obs: {
+    addObserver(o, topic) {
+      (observers[topic] ||= []).push(o);
+    },
+    removeObserver() {},
+  },
   ppmm: { addMessageListener() {}, removeMessageListener() {} },
   wm: { getEnumerator: () => [] },
   cpmm: { sendSyncMessage: () => [] },
 };
 globalThis.Ci = {
   nsIHttpChannel: {},
+  nsIWritablePropertyBag2: {},
   nsIContentPolicy: { TYPE_DOCUMENT: 6, TYPE_SUBDOCUMENT: 7, TYPE_FETCH: 20 },
   nsIRequest: { LOAD_ANONYMOUS: 1 << 14 },
 };
@@ -161,6 +183,16 @@ class FakeParentActor {
       this.onMessage({ name, data });
     }
   }
+  sendQuery(name, data) {
+    this.msgs.push({ name, data, query: true });
+    if (this.onQuery) {
+      return this.onQuery({ name, data });
+    }
+    if (this.onMessage) {
+      return Promise.resolve(this.onMessage({ name, data }));
+    }
+    return Promise.resolve(null);
+  }
 }
 /** Browsing context tree: tab(url) → frame(parentBC, url). */
 function tab(url, oa) {
@@ -190,7 +222,7 @@ function load(bc, url, oa) {
   wgById.set(wg.innerWindowId, wg);
   return wg;
 }
-function channel(url, { bc = null, type = 20, method = "GET", anonymous = false, setCookie = null, triggering = null, oa } = {}) {
+function channel(url, { bc = null, type = 20, method = "GET", anonymous = false, setCookie = null, triggering = null, oa, loading, partitionKey = "" } = {}) {
   const reqHeaders = new Map();
   const resHeaders = new Map();
   if (setCookie) {
@@ -203,10 +235,18 @@ function channel(url, { bc = null, type = 20, method = "GET", anonymous = false,
     loadInfo: {
       externalContentPolicyType: type,
       browsingContext: bc,
-      triggeringPrincipal: triggering,
-      loadingPrincipal: bc?.currentWindowGlobal?.documentPrincipal || null,
+      triggeringPrincipal: triggering || (type === 6 ? null : bc?.currentWindowGlobal?.documentPrincipal || null),
+      loadingPrincipal: loading !== undefined ? loading : bc?.currentWindowGlobal?.documentPrincipal || null,
       originAttributes: { userContextId: 0, privateBrowsingId: 0, ...(oa || {}) },
-      cookieJarSettings: { partitionKey: "" },
+      cookieJarSettings: { partitionKey },
+    },
+    suspendCount: 0,
+    suspend() {
+      this.suspendCount++;
+    },
+    resume() {
+      this.suspendCount--;
+      this.onResume?.();
     },
     QueryInterface() {
       return this;
@@ -267,18 +307,24 @@ test("default prefs: firewall idle, no header or script mutation", () => {
 for (const mode of ["isolate", "synthetic"]) {
   test(`[${mode}] B1: cross-site iframe sees its own cookies, not the top site's`, () => {
     fresh({ "darkstr.cookieFirewall.mode": mode });
-    const top = tab("http://a.test/");
-    fetchVia("http://a.test/", { bc: top, type: 6, setCookie: "top_sid=TOP; Path=/" });
-    const ifr = frame(top, "http://b.test/frame");
-    // iframe gets its own (third-party, partitioned) cookie via HTTP.
-    fetchVia("http://b.test/set", { bc: ifr, setCookie: "b_sid=B; Path=/" });
+    const top = tab("https://a.test/");
+    fetchVia("https://a.test/", { bc: top, type: 6, setCookie: "top_sid=TOP; Path=/" });
+    const ifr = frame(top, "https://b.test/frame");
+    // iframe gets its own (third-party, CHIPS-partitioned) cookie via HTTP;
+    // an unpartitioned one is rejected like stock (check 4).
+    fetchVia("https://b.test/set", {
+      bc: ifr,
+      setCookie: ["b_sid=B; Path=/; Secure; SameSite=None; Partitioned", "b_plain=X; Path=/"],
+    });
     const childView = docCookie(ifr);
     assert.doesNotMatch(childView, /top_sid/, "top-site cookie must not leak into cross-site iframe");
+    assert.doesNotMatch(childView, /b_plain/, "unpartitioned third-party cookie rejected (stock)");
     assert.match(childView, /^b_sid=/);
-    const http = fetchVia("http://b.test/echo", { bc: ifr }).cookie;
+    const http = fetchVia("https://b.test/echo", { bc: ifr }).cookie;
     assert.equal(http, childView, "iframe document.cookie == iframe HTTP Cookie (no split-brain)");
     assert.match(docCookie(top), /^top_sid=/);
     assert.doesNotMatch(docCookie(top), /b_sid/);
+    assert.equal(FW.documentContext(ifr.currentWindowGlobal).kind, "3p");
     if (mode === "synthetic") {
       assert.doesNotMatch(childView, /=B$/, "synthetic rewrites value");
     } else {
@@ -332,19 +378,22 @@ for (const mode of ["isolate", "synthetic"]) {
 
   test(`[${mode}] third-party cookies are partitioned by top-level site`, () => {
     fresh({ "darkstr.cookieFirewall.mode": mode });
-    const a = tab("http://a.test/");
-    const trackerInA = frame(a, "http://tracker.test/f");
-    fetchVia("http://tracker.test/set", { bc: trackerInA, setCookie: "uid=TRACK" });
-    assert.match(fetchVia("http://tracker.test/px", { bc: trackerInA }).cookie, /^uid=/);
-    const c = tab("http://c.test/");
-    const trackerInC = frame(c, "http://tracker.test/f");
-    assert.equal(fetchVia("http://tracker.test/px", { bc: trackerInC }).cookie, "", "no cross-site tracking");
+    const UID = "uid=TRACK; Secure; SameSite=None; Partitioned";
+    const a = tab("https://a.test/");
+    const trackerInA = frame(a, "https://tracker.test/f");
+    fetchVia("https://tracker.test/set", { bc: trackerInA, setCookie: UID });
+    assert.match(fetchVia("https://tracker.test/px", { bc: trackerInA }).cookie, /^uid=/);
+    // A third-party request from the first-party page shares the partition.
+    assert.match(fetchVia("https://tracker.test/px", { bc: a }).cookie, /^uid=/);
+    const c = tab("https://c.test/");
+    const trackerInC = frame(c, "https://tracker.test/f");
+    assert.equal(fetchVia("https://tracker.test/px", { bc: trackerInC }).cookie, "", "no cross-site tracking");
     assert.equal(docCookie(trackerInC), "");
     // The tracker as a first party is a different partition again.
-    const t1 = tab("http://tracker.test/");
-    assert.equal(fetchVia("http://tracker.test/", { bc: t1, type: 6 }).cookie, "");
+    const t1 = tab("https://tracker.test/");
+    assert.equal(fetchVia("https://tracker.test/", { bc: t1, type: 6 }).cookie, "");
     if (mode === "synthetic") {
-      fetchVia("http://tracker.test/set", { bc: trackerInC, setCookie: "uid=TRACK" });
+      fetchVia("https://tracker.test/set", { bc: trackerInC, setCookie: UID });
       const va = docCookie(trackerInA);
       const vc = docCookie(trackerInC);
       assert.notEqual(va, vc, "synthetic tokens differ per partition");
@@ -373,29 +422,56 @@ for (const mode of ["isolate", "synthetic"]) {
   });
 }
 
-test("SameSite: Strict/Lax withheld from cross-site subresources, Lax on top-level GET", () => {
+test("SameSite: enforced against initiator + context chain; Lax only on top-level GET", () => {
   fresh();
-  const a = tab("http://a.test/");
-  fetchVia("http://a.test/", {
+  const a = tab("https://a.test/");
+  fetchVia("https://a.test/", {
     bc: a,
     type: 6,
     setCookie: ["st=1; SameSite=Strict", "lx=1; SameSite=Lax", "no=1"],
   });
-  const c = tab("http://c.test/");
-  const embedded = fetchVia("http://a.test/img", { bc: c }).cookie;
+  const own = fetchVia("https://a.test/api", { bc: a }).cookie;
+  for (const n of ["st=1", "lx=1", "no=1"]) {
+    assert.ok(own.includes(n), `first-party request carries ${n}`);
+  }
+  const c = tab("https://c.test/");
+  const embedded = fetchVia("https://a.test/img", { bc: c }).cookie;
   assert.equal(embedded, "", "different partition entirely");
-  // Same partition, cross-site context: a.test iframe → c.test frame → a.test request
-  const cf = frame(a, "http://c.test/f");
-  const req = fetchVia("http://a.test/api", { bc: cf }).cookie;
-  assert.doesNotMatch(req, /st=|lx=/);
-  assert.match(req, /no=1/);
-  const nav = fetchVia("http://a.test/", {
+  // Same top, cross-site context (A-B-A request): no top-level-site cookies at
+  // all, not even SameSite=None ones (Gecko TCP; Proof F2).
+  const cf = frame(a, "https://c.test/f");
+  assert.equal(fetchVia("https://a.test/api", { bc: cf }).cookie, "");
+  // First-party document, cross-site initiator (e.g. injected by c.test):
+  // SameSite cookies withheld, None sent.
+  const injected = fetchVia("https://a.test/api", {
+    bc: a,
+    triggering: principal("https://c.test/"),
+  }).cookie;
+  assert.doesNotMatch(injected, /st=|lx=/);
+  assert.match(injected, /no=1/);
+  // Partitioned cookies inside the cross-site frame obey SameSite too.
+  fetchVia("https://c.test/set", {
+    bc: cf,
+    setCookie: ["pn=1; SameSite=None; Secure; Partitioned", "pl=1; SameSite=Lax; Secure; Partitioned"],
+  });
+  const inFrame = fetchVia("https://c.test/x", { bc: cf }).cookie;
+  assert.match(inFrame, /pn=1/);
+  assert.doesNotMatch(inFrame, /pl=1/, "Lax cookie not set from a cross-site context");
+  const nav = fetchVia("https://a.test/", {
     bc: a,
     type: 6,
-    triggering: principal("http://c.test/"),
+    triggering: principal("https://c.test/"),
   }).cookie;
   assert.match(nav, /lx=1/);
   assert.doesNotMatch(nav, /st=1/);
+  const post = fetchVia("https://a.test/", {
+    bc: a,
+    type: 6,
+    method: "POST",
+    triggering: principal("https://c.test/"),
+  }).cookie;
+  assert.doesNotMatch(post, /lx=1|st=1/, "cross-site POST navigation: no Lax");
+  assert.match(post, /no=1/);
 });
 
 test("Domain attribute: subdomain sharing, public suffix rejected", () => {
@@ -664,4 +740,354 @@ test("module header claim (line 29) is backed: strip + hook-every-document + res
   assert.match(src, /before SetCookieHeaders/);
   assert.match(src, /ServiceWorkerGlobalScope\.cookieStore/);
   assert.doesNotMatch(src, /matches: \["\*:\/\/\*\/\*"\]/, "actor must also cover about:blank/srcdoc");
+});
+
+// ======================================================= 0048r2 (Proof) ===
+const tick = (ms = 0) => new Promise((r) => setTimeout(r, ms));
+async function waitFor(pred, ms = 5000) {
+  const dl = Date.now() + ms;
+  while (!pred()) {
+    if (Date.now() > dl) {
+      throw new Error("waitFor timeout");
+    }
+    await tick(5);
+  }
+}
+const GATE = "darkstr.cookieFirewall.contentGate";
+/** Child document wired to the parent like a real content process. */
+function liveDoc(bc, url, { lagMs = 0 } = {}) {
+  const doc = fakeDoc(url);
+  const win = fakeWindow();
+  const actor = childActorFor(bc.currentWindowGlobal, doc, win);
+  actor.handleEvent({ type: "DOMWindowCreated" });
+  const pa = bc.currentWindowGlobal.actor;
+  pa.onMessage = (m) => actor.receiveMessage(m);
+  // Deltas race the HTTP response: delivered `lagMs` later, like an IPC
+  // message on a different channel than the response.
+  pa.onQuery = (m) =>
+    new Promise((res) => setTimeout(() => res(actor.receiveMessage(m)), lagMs));
+  return { doc, win, actor, wg: bc.currentWindowGlobal };
+}
+
+// ---- F1 -------------------------------------------------------------------
+for (const mode of ["isolate", "synthetic"]) {
+  test(`[${mode}] F1: fetch Set-Cookie is in document.cookie before the response is released`, async () => {
+    fresh({ "darkstr.cookieFirewall.mode": mode });
+    wireSync();
+    const t = tab("http://127.0.0.1/");
+    const { doc } = liveDoc(t, "http://127.0.0.1/", { lagMs: 40 });
+    const ch = channel("http://127.0.0.1/set", {
+      bc: t,
+      setCookie: ["f1_unset=U; Path=/", "f1_lax=L; SameSite=Lax; Path=/", "f1_strict=S; SameSite=Strict; Path=/"],
+    });
+    let atResume = null;
+    ch.onResume = () => {
+      atResume = doc.cookie;
+    };
+    FW._onHttp(ch, "http-on-modify-request");
+    FW._onHttp(ch, "http-on-examine-response");
+    assert.equal(ch.suspendCount, 1, "response held while the delta is in flight");
+    assert.doesNotMatch(doc.cookie, /f1_/, "delta not applied yet (the race Proof hit)");
+    await waitFor(() => atResume !== null);
+    assert.equal(ch.suspendCount, 0, "resumed exactly once");
+    for (const n of ["f1_unset=", "f1_lax=", "f1_strict="]) {
+      assert.ok(atResume.includes(n), `${n} visible when the response is released`);
+    }
+    assert.equal(FW._ackStats.timeouts, 0);
+  });
+}
+
+test("F1: requester whose actor missed the live set is still acked (install race)", async () => {
+  fresh();
+  wireSync();
+  const t = tab("http://a.test/");
+  const { doc, wg } = liveDoc(t, "http://a.test/", { lagMs: 10 });
+  FW._liveActors.delete(wg.actor);
+  delete wg.actor._darkstrCtx;
+  const ch = channel("http://a.test/set", { bc: t, setCookie: "late=1; Path=/" });
+  let atResume = null;
+  ch.onResume = () => (atResume = doc.cookie);
+  FW._onHttp(ch, "http-on-examine-response");
+  assert.equal(ch.suspendCount, 1);
+  await waitFor(() => atResume !== null);
+  assert.match(atResume, /late=1/);
+});
+
+test("F1: a content process that never acks cannot stall the response (timeout)", async () => {
+  fresh();
+  wireSync();
+  const t = tab("http://a.test/");
+  const { wg } = liveDoc(t, "http://a.test/");
+  wg.actor.onQuery = () => new Promise(() => {});
+  const ch = channel("http://a.test/set", { bc: t, setCookie: "x=1" });
+  const t0 = Date.now();
+  FW._onHttp(ch, "http-on-examine-response");
+  await waitFor(() => ch.suspendCount === 0, 4000);
+  const dt = Date.now() - t0;
+  assert.ok(dt >= 1900 && dt < 3500, `released by the ${dt} ms timeout`);
+  assert.equal(FW._ackStats.timeouts, 1);
+});
+
+test("F1: no hold when nothing changed, when idle, or for anonymous requests", () => {
+  fresh();
+  const t = tab("http://a.test/");
+  const r1 = fetchVia("http://a.test/set", { bc: t, setCookie: "bad; Domain=example.com" });
+  assert.equal(r1.ch.suspendCount, 0);
+  const r2 = fetchVia("http://a.test/set", { bc: t, anonymous: true, setCookie: "x=1" });
+  assert.equal(r2.ch.suspendCount, 0);
+  fresh({ "darkstr.cookieFirewall.enabled": false });
+  const r3 = fetchVia("http://a.test/set", { bc: tab("http://a.test/"), setCookie: "x=1" });
+  assert.equal(r3.ch.suspendCount, 0);
+  assert.equal(r3.ch.resHeaders.get("Set-Cookie"), "x=1");
+});
+
+// ---- F2 -------------------------------------------------------------------
+for (const mode of ["isolate", "synthetic"]) {
+  for (const middle of ["http://127.0.0.1/frame", "http://[::1]/frame"]) {
+    test(`[${mode}] F2: A-B-A via ${middle} — no top cookies in the cross-site frame, its no-cors fetch, or the nested frame`, () => {
+      fresh({ "darkstr.cookieFirewall.mode": mode });
+      const top = tab("http://localhost/");
+      fetchVia("http://localhost/", { bc: top, type: 6 });
+      fetchVia("http://localhost/set", {
+        bc: top,
+        setCookie: [
+          "qa_top_http=ORIG_TOP_HTTP; Path=/",
+          "qa_top_ho=ORIG_TOP_HO; HttpOnly; Path=/",
+          "qa_top_none=ORIG_NONE; SameSite=None; Secure; Path=/",
+          "qa_top_lax=L; SameSite=Lax; Path=/",
+        ],
+      });
+      FW.setDocumentCookie(top.currentWindowGlobal, "qa_marker=ORIG_TOP_JS; path=/; SameSite=Lax");
+      assert.match(docCookie(top), /qa_top_http=.*qa_top_none=|qa_top_none=.*qa_top_http=/);
+      const b = frame(top, middle);
+      assert.equal(FW.documentContext(b.currentWindowGlobal).kind, "3p");
+      // (a) credentialed no-cors fetch from the cross-site frame to the top site
+      const aba = fetchVia("http://localhost/echo", { bc: b }).cookie;
+      assert.equal(aba, "", "no top-level-site cookies (incl. HttpOnly) from a cross-site context");
+      // (b) nested same-site frame: navigation request, document, its fetch
+      const nav = fetchVia("http://localhost/frame", { bc: b, type: 7 }).cookie;
+      assert.equal(nav, "", "nested frame navigation carries no top cookies");
+      const nested = frame(b, "http://localhost/frame");
+      const nctx = FW.documentContext(nested.currentWindowGlobal);
+      assert.equal(nctx.kind, "3pf", "foreign-ancestor bit");
+      assert.deepEqual(nctx.readKeys, [nctx.jarKey + "|pf"]);
+      assert.equal(docCookie(nested), "");
+      assert.equal(fetchVia("http://localhost/echo", { bc: nested }).cookie, "");
+      // Cross-site frame writes without Partitioned are rejected; nothing
+      // reaches the top site's jar from inside the A-B-A chain.
+      FW.setDocumentCookie(b.currentWindowGlobal, "qa_child3p=CHILD; path=/");
+      FW.setDocumentCookie(nested.currentWindowGlobal, "qa_nest=N; path=/");
+      assert.equal(docCookie(b), "");
+      assert.equal(docCookie(nested), "");
+      assert.doesNotMatch(docCookie(top), /qa_child3p|qa_nest/);
+      // A Partitioned cookie from the A-B-A frame lives in the pf partition only.
+      FW.setDocumentCookie(nested.currentWindowGlobal, "qa_pf=PF; path=/; Secure; SameSite=None; Partitioned");
+      assert.match(docCookie(nested), /^qa_pf=/);
+      assert.doesNotMatch(docCookie(top), /qa_pf/);
+      assert.equal(fetchVia("http://localhost/echo", { bc: b }).cookie, "");
+      // Top site still has its own cookies.
+      const topHttp = fetchVia("http://localhost/echo", { bc: top }).cookie;
+      assert.match(topHttp, /qa_top_ho=/);
+      assert.match(topHttp, /qa_marker=/);
+    });
+  }
+}
+
+test("F2: child process view of the A-B-A frame is empty (snapshot + hooks)", () => {
+  fresh();
+  wireSync();
+  const top = tab("http://localhost/");
+  fetchVia("http://localhost/set", { bc: top, setCookie: ["t1=1; Path=/", "t2=2; SameSite=None; Secure; Path=/"] });
+  const b = frame(top, "http://127.0.0.1/frame");
+  const nested = frame(b, "http://localhost/frame");
+  const n = liveDoc(nested, "http://localhost/frame");
+  assert.equal(n.doc.cookie, "");
+  n.doc.cookie = "w=1; path=/";
+  assert.equal(n.doc.cookie, "", "unpartitioned write rejected in the child too");
+  const t = liveDoc(top, "http://localhost/");
+  assert.match(t.doc.cookie, /t1=1/);
+});
+
+// ---- check 4 --------------------------------------------------------------
+test("check 4: unpartitioned third-party cookies rejected (stock optInPartitioning); Partitioned needs Secure", () => {
+  fresh();
+  const a = tab("https://a.test/");
+  const bf = frame(a, "https://b.test/f");
+  fetchVia("https://b.test/set", {
+    bc: bf,
+    setCookie: ["qa_3p=TP; Path=/", "qa_3p_ins=X; Partitioned; Path=/", "qa_3p_ok=OK; Secure; SameSite=None; Partitioned; Path=/"],
+  });
+  FW.setDocumentCookie(bf.currentWindowGlobal, "qa_3p_doc=TPDOC; path=/");
+  FW.setDocumentCookie(bf.currentWindowGlobal, "qa_3p_docp=P; path=/; Secure; SameSite=None; Partitioned");
+  const v = docCookie(bf);
+  assert.doesNotMatch(v, /qa_3p=|qa_3p_doc=|qa_3p_ins=/);
+  assert.match(v, /qa_3p_ok=OK/);
+  assert.match(v, /qa_3p_docp=P/);
+  // Third-party request from the first-party page: same rule.
+  fetchVia("https://b.test/set2", { bc: a, setCookie: ["r_plain=1", "r_part=1; Secure; SameSite=None; Partitioned"] });
+  const fromTop = fetchVia("https://b.test/x", { bc: a }).cookie;
+  assert.doesNotMatch(fromTop, /r_plain/);
+  assert.match(fromTop, /r_part=1/);
+  // b.test as first party sees none of its partitioned cookies under a.test.
+  const b1p = tab("https://b.test/");
+  assert.equal(docCookie(b1p), "");
+  // First party may set CHIPS cookies (p bucket) and reads them with its own.
+  FW.setDocumentCookie(a.currentWindowGlobal, "fp=1; path=/");
+  FW.setDocumentCookie(a.currentWindowGlobal, "fpc=1; path=/; Secure; Partitioned");
+  assert.match(docCookie(a), /fp=1/);
+  assert.match(docCookie(a), /fpc=1/);
+});
+
+test("check 4: with optInPartitioning=false the legacy dFPI behaviour returns (partitioned, accepted)", () => {
+  fresh({ "network.cookie.cookieBehavior.optInPartitioning": false });
+  const a = tab("https://a.test/");
+  const bf = frame(a, "https://b.test/f");
+  fetchVia("https://b.test/set", { bc: bf, setCookie: "legacy=1; SameSite=None; Secure; Path=/" });
+  assert.match(docCookie(bf), /legacy=1/);
+  assert.equal(docCookie(tab("https://b.test/")), "");
+});
+
+test("check 4: cookieStore.set({partitioned}) in a cross-site frame", async () => {
+  fresh();
+  wireSync();
+  const a = tab("https://a.test/");
+  const bf = frame(a, "https://b.test/f");
+  const { doc, win } = liveDoc(bf, "https://b.test/f");
+  await win.cookieStore.set("plain", "1");
+  assert.equal(doc.cookie, "", "unpartitioned CookieStore write rejected");
+  await win.cookieStore.set({ name: "chips", value: "2", sameSite: "none", partitioned: true });
+  assert.match(doc.cookie, /chips=2/);
+});
+
+// ---- F3 -------------------------------------------------------------------
+test("F3: native gate pref follows arm state on the default branch only", () => {
+  fresh({ "darkstr.mode": "homogeneous" });
+  assert.equal(defaultPrefs.get(GATE), false, "inert by default");
+  assert.equal(prefs.has(GATE), false, "never a user value");
+  prefs.set("darkstr.mode", "pollution");
+  FW.refreshPlan();
+  assert.equal(defaultPrefs.get(GATE), true, "armed → gate on");
+  assert.equal(prefs.has(GATE), false);
+  prefs.set("darkstr.cookieFirewall.enabled", false);
+  FW.refreshPlan();
+  assert.equal(defaultPrefs.get(GATE), false, "disarmed → gate off");
+  prefs.set("darkstr.cookieFirewall.enabled", true);
+  prefs.set(GATE, true); // stray user value
+  FW.refreshPlan();
+  assert.equal(prefs.has(GATE), false, "stray user value cleared");
+  FW.uninit();
+  assert.equal(defaultPrefs.get(GATE), false, "shutdown → gate off");
+});
+
+function askGate(innerWindowID) {
+  const bag = {
+    props: { innerWindowID },
+    QueryInterface() {
+      return this;
+    },
+    getPropertyAsUint64(k) {
+      if (!(k in this.props)) {
+        throw new Error("NS_ERROR_NOT_AVAILABLE");
+      }
+      return this.props[k];
+    },
+    setPropertyAsAString(k, v) {
+      this.props[k] = v;
+    },
+  };
+  for (const o of observers["darkstr-cookie-gate"] || []) {
+    o.observe(bag, "darkstr-cookie-gate", null);
+  }
+  return bag.props.decision;
+}
+
+test("F3: child answers the C++ gate — sandbox/unknown/policy-unavailable block, allowlist passes", () => {
+  fresh({ "darkstr.cookieFirewall.allowlist": "allowed.test" });
+  wireSync();
+  assert.equal((observers["darkstr-cookie-gate"] || []).length, 1, "observer registered at module load");
+  const s = tab("http://localhost/");
+  const sd = liveDoc(s, "http://localhost/");
+  assert.equal(askGate(s.currentWindowGlobal.innerWindowId), "block", "sandboxed document → real store closed");
+  const f = frame(s, "http://127.0.0.1/f");
+  liveDoc(f, "http://127.0.0.1/f");
+  assert.equal(askGate(f.currentWindowGlobal.innerWindowId), "block", "cross-site iframe realm closed");
+  const p = tab("http://allowed.test/");
+  liveDoc(p, "http://allowed.test/");
+  assert.equal(askGate(p.currentWindowGlobal.innerWindowId), "passthrough", "allowlisted top → stock");
+  assert.equal(askGate(987654), "block", "unknown inner window fails closed");
+  // policy unavailable (parent had no WindowGlobalParent yet) → closed
+  const r = tab("http://localhost/r");
+  wgById.delete(r.currentWindowGlobal.innerWindowId);
+  liveDoc(r, "http://localhost/r");
+  assert.equal(askGate(r.currentWindowGlobal.innerWindowId), "block");
+  // about:blank frame inheriting the sandboxed principal: hooked + closed
+  const blank = frame(s, "http://localhost/");
+  blank.currentWindowGlobal.documentURI = uri("about:blank");
+  liveDoc(blank, "http://localhost/");
+  assert.equal(askGate(blank.currentWindowGlobal.innerWindowId), "block");
+  // actor teardown forgets the window
+  sd.actor.didDestroy();
+  assert.equal(childMod._gateDecisionsForTest().has(s.currentWindowGlobal.innerWindowId), false);
+  // disarm → reinstall answers passthrough
+  prefs.set("darkstr.cookieFirewall.enabled", false);
+  const d = tab("http://localhost/d");
+  liveDoc(d, "http://localhost/d");
+  assert.equal(askGate(d.currentWindowGlobal.innerWindowId), "passthrough");
+});
+
+test("F3: firewall hooks never call the native cookie accessors / CookieStore (real store stays empty)", async () => {
+  fresh();
+  wireSync();
+  const native = { get: 0, set: 0, cs: 0 };
+  const proto = {};
+  Object.defineProperty(proto, "cookie", {
+    configurable: true,
+    get() {
+      native.get++;
+      return "";
+    },
+    set(_v) {
+      native.set++;
+    },
+  });
+  const t = tab("https://localhost/");
+  const doc = Object.create(proto);
+  doc.nodePrincipal = principal("https://localhost/");
+  // Native members live on the prototypes, like the real DOM.
+  const storeProto = {};
+  for (const m of ["get", "getAll", "set", "delete"]) {
+    Object.defineProperty(storeProto, m, {
+      configurable: true,
+      enumerable: true,
+      writable: true,
+      value() {
+        native.cs++;
+        return Promise.resolve(null);
+      },
+    });
+  }
+  const win = { Promise, cookieStore: Object.create(storeProto) };
+  childActorFor(t.currentWindowGlobal, doc, win).handleEvent({ type: "DOMWindowCreated" });
+  doc.cookie = "qa_native=x; path=/";
+  void doc.cookie;
+  await win.cookieStore.set("qa_native_cs", "y");
+  await win.cookieStore.getAll();
+  await win.cookieStore.delete("qa_native_cs");
+  assert.deepEqual(native, { get: 0, set: 0, cs: 0 });
+  assert.match(doc.cookie, /qa_native=x/, "sandbox holds the write instead");
+});
+
+test("F3: C++ gate patch covers document, CookieStore, workers and change events; default false", () => {
+  const patch = readFileSync(join(root, "patches/0048r2-cookie-firewall-native-gate.patch"), "utf8");
+  assert.match(patch, /name: darkstr\.cookieFirewall\.contentGate\n\+  type: RelaxedAtomicBool\n\+  value: false/);
+  assert.match(patch, /\+    "darkstr",/, "pref group registered");
+  assert.match(patch, /DarkstrContentGateBlocks\(aDocument, cookiePrincipal\)/, "document branch");
+  assert.match(patch, /if \(StaticPrefs::darkstr_cookieFirewall_contentGate\(\)\) \{\n\+      return SecurityChecksResult::eDoNotContinue;/, "worker branch");
+  const section = (f) => patch.split(/^diff --git /m).find((x) => x.startsWith(`a/${f} `)) || "";
+  assert.match(section("dom/cookiestore/CookieStoreNotifier.cpp"), /DarkstrContentGateBlocks/, "change events");
+  assert.match(section("netwerk/cookie/CookieCommons.cpp"), /CheckGlobalAndRetrieveCookiePrincipals/);
+  assert.match(patch, /"darkstr-cookie-gate"/);
+  assert.match(patch, /EqualsLiteral\("passthrough"\)/, "only passthrough opens the store");
+  const fw = readFileSync(join(FILES, "DarkstrCookieFirewall.sys.mjs"), "utf8");
+  assert.match(fw, /getDefaultBranch\(""\)\.setBoolPref\(CONTENT_GATE_PREF/);
 });

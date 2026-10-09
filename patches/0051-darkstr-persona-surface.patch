@@ -1,11 +1,10 @@
 diff -ruN a51/browser/components/DarkstrCookieFirewallChild.sys.mjs b51/browser/components/DarkstrCookieFirewallChild.sys.mjs
---- a51/browser/components/DarkstrCookieFirewallChild.sys.mjs	2026-10-08 17:54:14.350204862 -0500
-+++ b51/browser/components/DarkstrCookieFirewallChild.sys.mjs	2026-10-08 17:54:14.350204862 -0500
-@@ -24,6 +24,14 @@
-  *
+--- a51/browser/components/DarkstrCookieFirewallChild.sys.mjs
++++ b51/browser/components/DarkstrCookieFirewallChild.sys.mjs
+@@ -25,6 +25,14 @@
   * Idle / passthrough / allowlist / non-http(s) principal → uninstall (real
   * jar behavior), no IPC.
-+ *
+  *
 + * 0051 (Rowan N4): hooks live where the native members live — the `cookie`
 + * accessor on Document.prototype (found through the document's prototype
 + * chain) and get/getAll/set/delete on CookieStore.prototype — never as own
@@ -13,10 +12,11 @@ diff -ruN a51/browser/components/DarkstrCookieFirewallChild.sys.mjs b51/browser/
 + * name, length, attributes and [native code] toString; `this` picks the
 + * sandboxed record, any other receiver is forwarded to the original native
 + * member. Prototypes are restored once no document of that window is hooked.
-  */
- 
- const lazy = {};
-@@ -54,6 +62,17 @@
++ *
+  * 0048r2:
+  *   - The cache holds one map per (bucket, host): a document reads the union
+  *     of its buckets (Gecko TCP/CHIPS: first party u+p, cross-site p, A-B-A
+@@ -113,6 +121,17 @@ function errorText(error) {
    }
  }
  
@@ -34,7 +34,7 @@ diff -ruN a51/browser/components/DarkstrCookieFirewallChild.sys.mjs b51/browser/
  function waive(obj) {
    try {
      const w = Cu.waiveXrays(obj);
-@@ -78,16 +97,6 @@
+@@ -137,16 +156,6 @@ function isHttpContentPrincipal(principa
    }
  }
  
@@ -51,7 +51,7 @@ diff -ruN a51/browser/components/DarkstrCookieFirewallChild.sys.mjs b51/browser/
  function baseOfHost(host) {
    const Core = lazy.DarkstrCookieCore;
    const h = Core.normalizeHost(host);
-@@ -256,25 +265,204 @@
+@@ -348,25 +357,207 @@ export function cookieStoreRaw(nameOrOpt
    return { name, raw: parts.join("; ") };
  }
  
@@ -191,8 +191,11 @@ diff -ruN a51/browser/components/DarkstrCookieFirewallChild.sys.mjs b51/browser/
 +function storeImpl(record, pageWindow) {
 +  const items = (name) => {
 +    const Core = lazy.DarkstrCookieCore;
-+    const map = processCache.get(record.ctx.cacheKey);
-+    const recs = Core.matchForScript(map, docView(record.ctx), envFor(record.ctx));
++    const recs = Core.matchForScript(
++      Core.unionMaps(mapsFor(record.ctx)),
++      docView(record.ctx),
++      envFor(record.ctx)
++    );
 +    return recs
 +      .filter((r) => !name || r.name === name)
 +      .map((r) => ({ name: r.name, value: r.value }));
@@ -262,7 +265,7 @@ diff -ruN a51/browser/components/DarkstrCookieFirewallChild.sys.mjs b51/browser/
  function sameCtx(a, b) {
    return (
      a &&
-@@ -292,7 +480,7 @@
+@@ -386,7 +577,7 @@ function sameCtx(a, b) {
   * document; `send(raw)` forwards a write to the parent.
   */
  export function installCookieHooks(document, window, ctx, send, onRuntimeError) {
@@ -271,7 +274,7 @@ diff -ruN a51/browser/components/DarkstrCookieFirewallChild.sys.mjs b51/browser/
    if (prior && sameCtx(prior.ctx, ctx)) {
      return "already-installed";
    }
-@@ -302,41 +490,37 @@
+@@ -396,41 +587,37 @@ export function installCookieHooks(docum
  
    const pageWindow = waive(window);
    const doc = waive(document);
@@ -340,15 +343,18 @@ diff -ruN a51/browser/components/DarkstrCookieFirewallChild.sys.mjs b51/browser/
      onRuntimeError("document.cookie.define", error);
      throw error;
    }
-@@ -344,75 +528,30 @@
+@@ -438,78 +625,30 @@ export function installCookieHooks(docum
    try {
      const store = pageWindow.cookieStore;
      if (store && typeof store.get === "function") {
 -      record.cookieStore = store;
 -      const items = (name) => {
 -        const Core = lazy.DarkstrCookieCore;
--        const map = processCache.get(record.ctx.cacheKey);
--        const recs = Core.matchForScript(map, docView(record.ctx), envFor(record.ctx));
+-        const recs = Core.matchForScript(
+-          Core.unionMaps(mapsFor(record.ctx)),
+-          docView(record.ctx),
+-          envFor(record.ctx)
+-        );
 -        return recs
 -          .filter((r) => !name || r.name === name)
 -          .map((r) => ({ name: r.name, value: r.value }));
@@ -429,15 +435,15 @@ diff -ruN a51/browser/components/DarkstrCookieFirewallChild.sys.mjs b51/browser/
  }
  
  /** Test hook: process cache. */
-@@ -458,7 +597,7 @@
-       return;
-     }
+@@ -559,7 +698,7 @@ export class DarkstrCookieFirewallChild
+       innerWindowId = this.manager.innerWindowId;
+     } catch (_e) {}
      if (!isHttpContentPrincipal(document.nodePrincipal)) {
 -      if (installedByDocument.has(document)) {
 +      if (installedByDocument.has(unwaive(document))) {
          uninstallCookieHooks(document);
        }
-       return;
+       recordGateDecision(innerWindowId, null);
 diff -ruN a51/browser/components/DarkstrNativePersona.sys.mjs b51/browser/components/DarkstrNativePersona.sys.mjs
 --- a51/browser/components/DarkstrNativePersona.sys.mjs	2026-10-08 17:54:14.342204841 -0500
 +++ b51/browser/components/DarkstrNativePersona.sys.mjs	2026-10-08 17:54:14.342204841 -0500
