@@ -13,6 +13,9 @@
 #  - 0057r2: ModeXor also turns privacy.baselineFingerprintingProtection off under Pollution (saved +
 #    restored exactly like RFP/FPP; off mode hands-off), so darkstr's farbling is the only canvas noise.
 #  - WorkerHooksChild prelude: same rect noise + readPixels flip + OffscreenCanvas measureText fudge.
+#  - 0057r3: OffscreenCanvas convertToBlob exports a noisy clone drawn from the canvas (WebGL too; page +
+#    worker); WebGPU native features / limits / device (Intel persona hides Apple-only formats), persona
+#    AdapterInfo, WebGPU canvases unfarbled (canvas export == buffer readback).
 # Needs 0052 + 0053 + 0053r2 + 0055r2 + 0056r3 applied. Chrome JS only (no C++).
 # usage: scripts/apply-0057-depth-per-site-mini.sh   (needs DARKSTR_GECKO_ROOT)
 # Atlas: never mv under /Volumes/Mesh.

@@ -513,8 +513,8 @@ All five 0043 Worker/SharedWorker WebGPU XOR gates passed on Proof tip `cc692641
 | Patch | [`patches/0057-darkstr-depth-per-site.patch`](../patches/0057-darkstr-depth-per-site.patch) + `patches/0057-files/` (DepthHooks, DepthHooksChild, DepthHooksParent, NativePersona, WorkerHooks, WorkerHooksChild, **ModeXor** (0057r2, base 0053r2); `SHA256SUMS`, `BASE_SHA256SUMS`: NativePersona base = 0056r3) |
 | Apply | `scripts/apply-0057-depth-per-site-mini.sh` (chrome JS only) |
 | Tests | `tests/depth-per-site-0057.test.mjs` |
-| DMG | **0057r2:** `~/AgentDocs/builds/darkstr-0057r2-f0595dd2.dmg` (+ `.sha256`), sha256 `f0595dd28963056bcf8fda0341792cfec5520332f9432f4e652bdf6f340f114a` (baseline FPP off under Pollution). Before: `~/AgentDocs/builds/darkstr-0057-35247c01.dmg`, sha256 `35247c01797681cec6534fc5e219e77186e5131c60f8c90146247bad668c07a0` (r5 = 0057 on 0056r3); omni matches `patches/0057-files`, 0056 store / CookieFirewall / ClearDataService, 0053r2 ModeXor, 0055 Ffi. Superseded: `darkstr-0057-75174927` (r1), `darkstr-0057-c2f8cece` (r4 on 0056r2) |
-| Evidence | **0057r2:** `~/AgentDocs/proof/darkstr-0057r2-20261009-102504/` (`selftest/live-final`, `live-off-granted`, negative controls `live-negctl-0057r5` + `live-negctl-xor-0057r5`, `ROUNDTRIP-ADDENDUM.json`, `dmg-verify.log`); r5: `~/AgentDocs/proof/darkstr-0057-r5-20261009-101325/` (`selftest/live-final`, negative control `live-negctl-0056r3`, 0056 suite on this app `run-0056-on-0057r5.log`, `live-rfp-baseline`, `rfpcheck/`); r1–r4: `~/AgentDocs/proof/darkstr-0057-20261009-092626/` |
+| DMG | **0057r3:** `~/AgentDocs/builds/darkstr-0057r3-91fd245c.dmg` (+ `.sha256`), sha256 `91fd245cf5c9d498b822d9c6a987190d13ba98301651a01d84cd0d4d5b121422`; omni matches all 7 `patches/0057-files`. **0057r2:** `~/AgentDocs/builds/darkstr-0057r2-f0595dd2.dmg` (+ `.sha256`), sha256 `f0595dd28963056bcf8fda0341792cfec5520332f9432f4e652bdf6f340f114a` (baseline FPP off under Pollution). Before: `~/AgentDocs/builds/darkstr-0057-35247c01.dmg`, sha256 `35247c01797681cec6534fc5e219e77186e5131c60f8c90146247bad668c07a0` (r5 = 0057 on 0056r3); omni matches `patches/0057-files`, 0056 store / CookieFirewall / ClearDataService, 0053r2 ModeXor, 0055 Ffi. Superseded: `darkstr-0057-75174927` (r1), `darkstr-0057-c2f8cece` (r4 on 0056r2) |
+| Evidence | **0057r3:** `~/AgentDocs/proof/darkstr-0057r3-20261009-111700/` (`selftest/live-r3`, negative control `live-negctl-0057r2`, `grade-*.txt`, `dmgverify.txt`). **0057r2:** `~/AgentDocs/proof/darkstr-0057r2-20261009-102504/` (`selftest/live-final`, `live-off-granted`, negative controls `live-negctl-0057r5` + `live-negctl-xor-0057r5`, `ROUNDTRIP-ADDENDUM.json`, `dmg-verify.log`); r5: `~/AgentDocs/proof/darkstr-0057-r5-20261009-101325/` (`selftest/live-final`, negative control `live-negctl-0056r3`, 0056 suite on this app `run-0056-on-0057r5.log`, `live-rfp-baseline`, `rfpcheck/`); r1–r4: `~/AgentDocs/proof/darkstr-0057-20261009-092626/` |
 
 ### Design
 
@@ -555,6 +555,49 @@ Live results (no `canvas` permission anywhere):
 - **`off_mode`:** baseline keeps its stock value with no user value, nothing is saved, and DepthHooks are idle. Without the permission, Firefox's own baseline canvas noise is present (stock, hands-off). With the permission (`live-off-granted`), the canvas is native.
 
 **Pre-existing (0053r2, same on r5):** right after leaving Pollution, `browser.contentblocking.category` stays `custom`. It returns to `strict` at the next start, when `ContentBlockingPrefs.init` re-matches it. Proposed fix (not done): re-run `matchCBCategory()` in ModeXor's idle restore pass, before re-restoring the ETP flag.
+
+### 0057r3: OffscreenCanvas WebGL exports, WebGPU (Proof 0057r2 FAIL)
+
+**1. OffscreenCanvas `convertToBlob` (page and worker prelude).**
+- The wrapper now exports a noisy clone drawn from the canvas itself: a temporary 2D OffscreenCanvas, then `drawImage(this)`, native `getImageData`, the same absolute-pixel noise, and `putImageData`. This is the same as `noisyClone` for `HTMLCanvasElement`.
+- WebGL and bitmaprenderer OffscreenCanvases now export what `readPixels` / `getImageData` report. r2 exported the real WebGL pixels, about 3020 px apart.
+- No 2D context is forced onto a canvas that had none. r2 called `getContext("2d")` on the source.
+
+**2. WebGPU: native objects, persona AdapterInfo.** One body (`WEBGPU_BODY`) is used byte-identically by the page and the worker prelude, and a test enforces this.
+- **Features:**
+  - `adapter.features` is the real `GPUSupportedFeatures`; `[...adapter.features]` works.
+  - The seed-ranked feature drop from 0038 is gone.
+  - An Intel persona (the one non-Apple persona on macOS) hides only the Apple-silicon-only formats (`texture-compression-astc`, `-astc-sliced-3d`, `-etc2`). It does this through a Proxy over the real object: `instanceof`, the prototype and `toStringTag` stay native; the setlike members read a real `Set` (Set iterators; `keys === values === @@iterator`).
+  - `requestDevice` rejects a hidden feature, and nothing is ever added.
+  - Device features are the native granted set. An Apple persona gets the native object untouched.
+- **Limits:** the real adapter and device limits are passed through. The seeded ×[0.99, 1) fudge, which produced impossible values like 16334, is gone.
+  - Every macOS persona is a Metal GPU behind the same wgpu limit tiers, so the host's limits are a coherent value for any of them.
+  - On a non-Mac host the renderer list is OS-filtered too.
+- **AdapterInfo:** unchanged; the per-site persona is coherent with WebGL UNMASKED.
+- **Readback: WebGPU canvases stay unfarbled.** A canvas that gets a `webgpu` context is recorded by a `getContext` wrapper, installed only when `navigator.gpu` exists. Its `toDataURL` / `toBlob` / `convertToBlob` return native output, so the canvas exports, `copyTextureToBuffer` readback and compute results all agree. Why not farble:
+  - consistent farbling of buffer readback is not feasible without corrupting compute results;
+  - farbling only canvas-texture copies is still exposed by rendering the same scene into an ordinary texture and reading that back.
+- **Caveat, inherent while WebGPU is enabled:** `drawImage(webgpuCanvas)` into a 2D canvas followed by `getImageData` is farbled by the 2D layer, like any image source. Likewise, `copyExternalImageToTexture` can read any image unfarbled. So 2D farbling vs WebGPU raw pixels can be told apart whenever WebGPU is exposed. LibreWolf ships `dom.webgpu.enabled=false`.
+
+**Live (headless, own server on 127.0.0.1:8459, hosts ar3.test / br3.test, sandbox-exec loopback only, fresh profile per app):**
+- Proof's ARMED prefs plus `dom.webgpu.enabled`; visits A1, A2, B1, then Native-Compatible NC-A1. Each visit probes:
+  - the page's 2D / WebGL / OffscreenCanvas 2D + WebGL;
+  - dedicated, shared and service workers (OffscreenCanvas 2D + WebGL);
+  - PNG / JPEG / WebP exports and `toBlob` JPEG.
+- **r3: 243/243.**
+  - Every lossless export equals its own read (0 px): page, dedicated, shared and service workers, 2D and WebGL.
+  - JPEG / WebP follow the farbled read (WebP quality 1 is lossless: 0.00 vs 1.52 to the known scene).
+  - Worker reads == page reads, and worker UA / hardwareConcurrency == page, including shared and service workers.
+  - A1 == A2 and A ≠ B; NC-A1 is fully native.
+- **0057r2 negative control: 195/243.** All 48 FAILs are the OffscreenCanvas WebGL export:
+  - native pixels, 757/768 px vs readPixels, in the page and all three worker kinds;
+  - a 2D context forced onto context-less canvases.
+- **Info:** a site's already-running service worker keeps the persona it started with when a later document of that site uses Native-Compatible, since NC is a per-document escape.
+- **WebGPU headless:** `navigator.gpu` is present, but `requestAdapter()` returns null, so WebGPU is untestable headless. The probe page and the JS unit tests (fake GPU: features iterable, real limits, Intel hiding, requestDevice) cover it offline. **For Proof's headed run:**
+  - `[...adapter.features]` (Apple persona == stock list; Intel persona == stock minus astc/etc2);
+  - limits == stock;
+  - WebGPU canvas `toDataURL` == `copyTextureToBuffer` readback;
+  - compute readback exact.
 
 ### Residual / for Proof
 
