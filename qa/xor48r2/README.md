@@ -27,8 +27,8 @@ Imported from Proof's PASS run of PR #79 (`~/AgentDocs/proof/darkstr-0048r2-xor-
 - `grade48f1.py` reports per-origin iteration counts and `lan.iterationsOnRealLanOrigin`. A real-LAN run only PASSes if that is > 0.
 
 ## Proof r3 fixes (PR #83 review)
-- **F2: a missing census FAILs.** `hook_state(own, census, pick, census_run)`: once the run recorded a census (`has_census`), a step whose `__census` is missing or `{err}` is `'unknown'`, never hooked or unhooked, so checks 5/6/N1_extended/frames_extended FAIL on it. Legacy raw without any census keeps the old semantics. The default config check no longer has `else True`: it requires a census, and none of its documents may be sandboxed (`no_firewall_sandbox`).
-- **F1: armed F1 PASS needs the hook gate.** `grade48f1.grade_f1()`: in armed configs every iteration's hook state must be in {own, proto} **and** carry a census (`hookGate`). An all-`native` census or a dropped census FAILs. Unarmed configs still require {native, none}.
+- **F2: a missing census FAILs.** `hook_state(own, census, pick, census_run)`: once the run recorded a census (`has_census`), a step whose `__census` is missing or `{err}` is `'unknown'`, never hooked or unhooked, so checks 5/6/N1_extended/frames_extended FAIL on it. **Follow-up (d):** a run with no census anywhere is labelled `'unknown'` too (it was `'none'`, which counted as unhooked); it fails either way, the label now says why. `'none'` is retired (`UNHOOKED = ('native',)`). The default config check no longer has `else True`: it requires a census, and none of its documents may be sandboxed (`no_firewall_sandbox`).
+- **F1: armed F1 PASS needs the hook gate.** `grade48f1.grade_f1()`: in armed configs every iteration's hook state must be in {own, proto} **and** carry a census (`hookGate`). An all-`native` census or a dropped census FAILs. Unarmed configs require {native} (a missing census is `unknown` and fails).
 - Negative self-tests: `ProofF2MissingCensus`, `ProofF1HookGate` in `selftest_xor48r2.py`, plus static asserts in `tests/qa-xor48r2-harness.test.mjs`.
 
 ### Negative control (r3, Mini, 2026-10-09 03:34–03:50 CDT)

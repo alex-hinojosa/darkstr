@@ -47,7 +47,10 @@ test("graders use the shape-agnostic hook detector, not the own-accessor string"
   const calls = (g.match(/hook_state\(/g) || []).length;
   assert.ok(calls >= 7);
   assert.equal((g.match(/, CR\)/g) || []).length, calls, "every hook_state call passes census_run=CR");
-  assert.match(read("grade48r2_hooks.py"), /if not isinstance\(census, list\): return 'unknown' if census_run else 'none'/);
+  assert.match(read("grade48r2_hooks.py"), /if not isinstance\(census, list\): return 'unknown'$/m);
+  // #83 follow-up (d): a run with no census anywhere is 'unknown', never 'none'
+  assert.doesNotMatch(read("grade48r2_hooks.py"), /return 'unknown' if census_run else 'none'/);
+  assert.match(read("grade48r2_hooks.py"), /^UNHOOKED = \('native',\)/m);
   // Proof #83 F1: armed F1 PASS gated on census + hooked states.
   const f1g = read("grade48f1.py");
   assert.match(f1g, /hooks_ok = \(census_all and set\(states\) <= set\(HOOKED\)\) if armed else set\(states\) <= set\(UNHOOKED\)/);
