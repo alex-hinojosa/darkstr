@@ -249,3 +249,169 @@ test("0057r2: ModeXor owns baseline FPP only under Pollution (saved/restored wit
   assert.match(MXs, /addObserver\(BASELINE_FPP_PREF/);
   assert.match(MXs, /removeObserver\(BASELINE_FPP_PREF/);
 });
+
+// ------------------------------------------------------------- 0057r3 ---
+const WHCsrc = src("DarkstrWorkerHooksChild.sys.mjs");
+const bodyOf = (s) => { const a = s.indexOf("const WEBGPU_BODY = `") + "const WEBGPU_BODY = `".length; return s.slice(a, s.indexOf("`;", a)); };
+
+// Minimal WebGPU fake: real setlike GPUSupportedFeatures, limits object, adapter, device.
+function fakeGpu(featureNames) {
+  class GPUSupportedFeatures {
+    #s; constructor(n) { this.#s = new Set(n); }
+    has(n) { return this.#s.has(n); } get size() { return this.#s.size; }
+    values() { return this.#s.values(); } entries() { return this.#s.entries(); }
+    forEach(cb, t) { this.#s.forEach((v) => cb.call(t, v, v, this)); }
+  }
+  GPUSupportedFeatures.prototype.keys = GPUSupportedFeatures.prototype.values;
+  GPUSupportedFeatures.prototype[Symbol.iterator] = GPUSupportedFeatures.prototype.values;
+  const limits = { maxTextureDimension2D: 16384, maxBufferSize: 4294967296, maxComputeWorkgroupStorageSize: 32768, maxBindGroups: 4 };
+  class GPUDevice { constructor(f) { this.features = new GPUSupportedFeatures(f); this.limits = { ...limits }; this.adapterInfo = { vendor: "", architecture: "" }; } }
+  class GPUAdapter {
+    constructor() { this.features = new GPUSupportedFeatures(featureNames); this.limits = limits; this.info = { vendor: "", architecture: "", isFallbackAdapter: false }; }
+    requestDevice(d) { for (const f of d?.requiredFeatures || []) if (!this.features.has(f)) return Promise.reject(new TypeError("native missing " + f)); return Promise.resolve(new GPUDevice(d?.requiredFeatures || [])); }
+  }
+  class GPU { requestAdapter() { return Promise.resolve(new GPUAdapter()); } }
+  return { GPU, GPUSupportedFeatures, navigator: { gpu: new GPU() }, limits };
+}
+const HOST_FEATS = ["core-features-and-limits", "depth-clip-control", "texture-compression-bc", "texture-compression-astc", "texture-compression-etc2", "timestamp-query", "float32-filterable"];
+function runBody(vendor, renderer, feats = HOST_FEATS) {
+  const g = fakeGpu(feats);
+  const hooks = new Function("navigator", "GPU", "seed", "gpuVendor", "gpuRenderer", bodyOf(DHC))(g.navigator, g.GPU, 5, vendor, renderer);
+  return { g, hooks };
+}
+
+test("0057r3 WebGPU body is byte-identical in the page and worker modules, compiles, no backticks", () => {
+  assert.ok(bodyOf(DHC).length > 2000);
+  assert.equal(bodyOf(DHC), bodyOf(WHCsrc));
+  assert.match(DHC, /new pageWindow\.Function\(\s*"seed",\s*"gpuVendor",\s*"gpuRenderer",\s*WEBGPU_BODY\s*\)/);
+  new Function(WHC.buildWebGpuOverrides({ webgpuSeed: 5, gpu: { vendor: "Apple", renderer: "Apple M1" } }));
+  // 0057r2 surfaces are gone: no seed-ranked feature drop, no limit fudge.
+  assert.doesNotMatch(bodyOf(DHC), /fudgeLimit|rank:|FUDGE_LIMIT_KEYS|__darkstr/);
+});
+
+test("0057r3 WebGPU Apple persona: adapter features + limits are the native objects; [...features] works", async () => {
+  const { g } = runBody("Apple", "Apple M2");
+  const a = await g.navigator.gpu.requestAdapter();
+  assert.ok(a.features instanceof g.GPUSupportedFeatures);
+  assert.deepEqual([...a.features], HOST_FEATS);
+  assert.equal(a.features.size, HOST_FEATS.length);
+  assert.equal(a.limits, g.limits);
+  assert.equal(a.limits.maxTextureDimension2D, 16384);
+  assert.equal(a.info.vendor, "apple");
+  assert.equal(a.info.description, "Apple M2");
+  const d = await a.requestDevice({ requiredFeatures: ["texture-compression-astc"] });
+  assert.deepEqual([...d.features], ["texture-compression-astc"]);
+  assert.equal(d.limits.maxBufferSize, 4294967296);
+  assert.equal(d.adapterInfo.vendor, "apple");
+  assert.equal(a.features, a.features, "stable identity");
+  assert.equal(a.requestDevice, a.requestDevice, "stable identity");
+});
+
+test("0057r3 WebGPU Intel persona: Apple-silicon-only formats hidden, real setlike shape, requestDevice agrees", async () => {
+  const { g } = runBody("Intel Inc.", "Intel(R) Iris(R) Plus Graphics");
+  const a = await g.navigator.gpu.requestAdapter();
+  const f = a.features;
+  const want = HOST_FEATS.filter((n) => !/astc|etc2/.test(n));
+  assert.deepEqual([...f], want);
+  assert.deepEqual([...f.keys()], want);
+  assert.deepEqual([...f.entries()].map((e) => e[0]), want);
+  const viaForEach = []; f.forEach((v, k) => { assert.equal(v, k); viaForEach.push(v); });
+  assert.deepEqual(viaForEach, want);
+  assert.equal(f.size, want.length);
+  assert.equal(f.has("texture-compression-astc"), false);
+  assert.equal(f.has("texture-compression-bc"), true);
+  assert.ok(f instanceof g.GPUSupportedFeatures);
+  assert.equal(f.keys, f.values); assert.equal(f[Symbol.iterator], f.values);
+  assert.equal(f.has.name, "has"); assert.equal(f.values.name, "values");
+  assert.equal(Object.prototype.toString.call(f.values()), "[object Set Iterator]");
+  assert.equal(a.limits, g.limits, "limits are the real ones");
+  assert.equal(a.info.vendor, "intel");
+  await assert.rejects(a.requestDevice({ requiredFeatures: ["texture-compression-astc"] }), TypeError);
+  const d = await a.requestDevice({ requiredFeatures: ["texture-compression-bc"] });
+  assert.deepEqual([...d.features], ["texture-compression-bc"]);
+  // a host without the Apple-only formats: nothing to hide, native object
+  const { g: g2 } = runBody("Intel Inc.", "Intel(R) Iris(R) Plus Graphics", ["texture-compression-bc"]);
+  const a2 = await g2.navigator.gpu.requestAdapter();
+  assert.ok(a2.features instanceof g2.GPUSupportedFeatures);
+  assert.deepEqual([...a2.features], ["texture-compression-bc"]);
+});
+
+test("0057r3 WebGPU body is idle without navigator.gpu (LibreWolf default)", () => {
+  const hooks = new Function("navigator", "GPU", "seed", "gpuVendor", "gpuRenderer", bodyOf(DHC))({}, undefined, 5, "Apple", "Apple M1");
+  assert.equal(hooks.requestAdapter, null);
+});
+
+// Pixel-level fake OffscreenCanvas for the worker prelude: 2d / webgl / webgpu.
+function fakeCanvasEnv() {
+  const env = { created2d: 0 };
+  class OffscreenCanvas {
+    constructor(w, h) { this.width = w; this.height = h; this.px = new Uint8ClampedArray(w * h * 4); this.kind = null; }
+    getContext(kind) {
+      if (this.kind && this.kind !== kind) return null;
+      this.kind = kind;
+      if (kind === "2d") { env.created2d++; return this.ctx ??= new OffscreenCanvasRenderingContext2D(this); }
+      if (kind === "webgl") return this.ctx ??= new WebGLRenderingContext(this);
+      if (kind === "webgpu") return this.ctx ??= { canvas: this };
+      return null;
+    }
+    convertToBlob() { return Promise.resolve({ px: this.px.slice() }); }
+  }
+  class OffscreenCanvasRenderingContext2D {
+    constructor(c) { this.canvas = c; }
+    drawImage(src, x, y) { this.canvas.px.set(src.px); }
+    getImageData(x, y, w, h) { const d = new Uint8ClampedArray(w * h * 4); for (let r = 0; r < h; r++) d.set(this.canvas.px.subarray(((y + r) * this.canvas.width + x) * 4, ((y + r) * this.canvas.width + x + w) * 4), r * w * 4); return { data: d, width: w, height: h }; }
+    putImageData(id) { this.canvas.px.set(id.data); }
+  }
+  class WebGLRenderingContext {
+    constructor(c) { this.canvas = c; this.drawingBufferWidth = c.width; this.drawingBufferHeight = c.height; }
+    getParameter() { return 0; }
+    readPixels(x, y, w, h, f, t, out) { const W = this.canvas.width, H = this.canvas.height; for (let r = 0; r < h; r++) out.set(this.canvas.px.subarray(((H - 1 - (y + r)) * W + x) * 4, ((H - 1 - (y + r)) * W + x + w) * 4), r * w * 4); }
+  }
+  Object.assign(env, { OffscreenCanvas, OffscreenCanvasRenderingContext2D, WebGLRenderingContext });
+  return env;
+}
+function runPrelude(env, navigator) {
+  const pre = WHC.buildDepthOverrides({ canvasSeed: 0x1234567, fontSeed: 3, gpu: { vendor: "Apple", renderer: "Apple M1" } });
+  new Function("OffscreenCanvas", "OffscreenCanvasRenderingContext2D", "WebGLRenderingContext", "navigator", pre)(env.OffscreenCanvas, env.OffscreenCanvasRenderingContext2D, env.WebGLRenderingContext, navigator);
+}
+
+test("0057r3 worker: WebGL OffscreenCanvas convertToBlob == farbled readPixels (no real-pixel export)", async () => {
+  const env = fakeCanvasEnv(); runPrelude(env, {});
+  const w = 13, h = 9;
+  const c = new env.OffscreenCanvas(w, h); const gl = c.getContext("webgl");
+  c.px.set(surface(w, h, 5));
+  const real = c.px.slice();
+  const rp = new Uint8Array(w * h * 4); gl.readPixels(0, 0, w, h, 0x1908, 0x1401, rp);
+  const top = new Uint8ClampedArray(w * h * 4);
+  for (let r = 0; r < h; r++) top.set(rp.subarray((h - 1 - r) * w * 4, (h - r) * w * 4), r * w * 4); // GL rows -> top-down
+  const blob = await c.convertToBlob();
+  assert.deepEqual(blob.px, top, "export == readPixels");
+  assert.notDeepEqual(blob.px, real, "export is farbled");
+  assert.deepEqual(c.px, real, "source untouched");
+  assert.equal(c.getContext("2d"), null, "no 2D context forced onto the WebGL canvas");
+});
+
+test("0057r3 worker: 2D OffscreenCanvas convertToBlob == farbled getImageData; WebGPU canvas exports stay native", async () => {
+  const env = fakeCanvasEnv(); runPrelude(env, { gpu: {} });
+  const w = 10, h = 6;
+  const c = new env.OffscreenCanvas(w, h); const ctx = c.getContext("2d"); c.px.set(surface(w, h, 8));
+  const gid = ctx.getImageData(0, 0, w, h).data;
+  assert.deepEqual((await c.convertToBlob()).px, gid);
+  const g = new env.OffscreenCanvas(w, h); assert.ok(g.getContext("webgpu")); g.px.set(surface(w, h, 9));
+  assert.deepEqual((await g.convertToBlob()).px, g.px, "webgpu canvas native");
+  // without navigator.gpu getContext is not wrapped at all
+  const env2 = fakeCanvasEnv(); const before = env2.OffscreenCanvas.prototype.getContext; runPrelude(env2, {});
+  assert.equal(env2.OffscreenCanvas.prototype.getContext, before);
+});
+
+test("0057r3 window: convertToBlob draws a clone (no 2D context on the source); WebGPU canvases native", () => {
+  const blk = DHC.slice(DHC.indexOf('"convertToBlob",\n          function'), DHC.indexOf("// 0057r3: record canvases that get a WebGPU context"));
+  assert.match(blk, /tmpCtx\.drawImage\(this, 0, 0\)/);
+  assert.match(blk, /Reflect\.apply\(nativeOcGetImageData, tmpCtx, \[0, 0, w, h\]\)/);
+  assert.doesNotMatch(blk, /this\.getContext\("2d"\)/);
+  assert.match(blk, /!isWebGpuCanvas\(this\)/);
+  const n = (DHC.match(/this\.width > 0 && this\.height > 0 && !isWebGpuCanvas\(this\)/g) || []).length;
+  assert.equal(n, 2, "toDataURL + toBlob skip WebGPU canvases");
+  assert.match(DHC, /if \(ctx && String\(args\[0\]\) === "webgpu"\) \{\n\s*webgpuCanvases\.add\(unwaived\(this\)\)/);
+  assert.match(DHC, /if \(pageWindow\.navigator\?\.gpu\) \{\n\s*const trackWebGpu/);
+});

@@ -241,6 +241,213 @@ function uninstallDepthHooks(rawWindow) {
   return "uninstalled";
 }
 
+/**
+ * 0057r3: WebGPU page/worker body (byte-identical in DarkstrWorkerHooksChild;
+ * tests/depth-per-site-0057 checks). Runs in the page / worker global with
+ * (seed, gpuVendor, gpuRenderer); returns the requestAdapter hook record.
+ */
+const WEBGPU_BODY = `"use strict";
+// 0057r3 (Proof 0057r2): WebGPU keeps its native objects. Limits and device
+// features are the real ones; adapter features are the real setlike (an Intel
+// persona hides only the Apple-silicon-only texture formats); AdapterInfo is the
+// persona's. Canvas exports of WebGPU canvases stay unfarbled (DepthHooksChild /
+// worker prelude), so canvas and buffer readback agree.
+var VENDOR = String(gpuVendor || "Apple");
+var RENDERER = String(gpuRenderer || "Apple M1");
+var hooks = { requestAdapter: null, origRequestAdapter: null, gpuProto: null };
+var gpuObj = null;
+try {
+  if (typeof navigator !== "undefined" && navigator && navigator.gpu) {
+    gpuObj = navigator.gpu;
+  }
+} catch (_e) {}
+if (!gpuObj) { return hooks; }
+// WebGL persona -> Firefox-plausible AdapterInfo. Never Chrome/ANGLE brands.
+function mapAdapterInfo() {
+  var v = VENDOR.toLowerCase();
+  var r = String(RENDERER || "");
+  if (/apple/i.test(v) || /apple/i.test(r)) {
+    return { vendor: "apple", architecture: "common-3", device: "", description: r || "Apple GPU" };
+  }
+  if (/intel/i.test(v) || /intel/i.test(r)) {
+    return { vendor: "intel", architecture: "gen-12lp", device: "", description: r || "Intel Graphics" };
+  }
+  if (/nvidia/i.test(v) || /nvidia/i.test(r)) {
+    return { vendor: "nvidia", architecture: "gpu", device: "", description: r || "NVIDIA GPU" };
+  }
+  if (/amd/i.test(v) || /radeon/i.test(r)) {
+    return { vendor: "amd", architecture: "gcn", device: "", description: r || "AMD GPU" };
+  }
+  return { vendor: "apple", architecture: "common-3", device: "", description: r || "Apple GPU" };
+}
+var PERSONA_INFO = mapAdapterInfo();
+// Metal texture formats only Apple-silicon GPUs have. A non-Apple persona hides
+// them so the feature set is one its renderer could report. Nothing is ever
+// added; every other feature and every limit is the host's own.
+var APPLE_SILICON_ONLY_FEATURES = {
+  "texture-compression-astc": 1,
+  "texture-compression-astc-sliced-3d": 1,
+  "texture-compression-etc2": 1
+};
+var HIDDEN_FEATURES = PERSONA_INFO.vendor === "apple" ? null : APPLE_SILICON_ONLY_FEATURES;
+var featureViews = new WeakMap();
+function named(fn, name) {
+  try { Object.defineProperty(fn, "name", { configurable: true, value: name }); } catch (_n) {}
+  return fn;
+}
+function wrapFeatures(nativeFeatures) {
+  if (!nativeFeatures || typeof nativeFeatures !== "object" || !HIDDEN_FEATURES) {
+    return nativeFeatures;
+  }
+  var known = featureViews.get(nativeFeatures);
+  if (known) { return known; }
+  var visible = new Set();
+  var hidden = false;
+  try {
+    nativeFeatures.forEach(function(name) {
+      name = String(name);
+      if (HIDDEN_FEATURES[name] === 1) { hidden = true; } else { visible.add(name); }
+    });
+  } catch (_e) {
+    return nativeFeatures;
+  }
+  if (!hidden) {
+    featureViews.set(nativeFeatures, nativeFeatures);
+    return nativeFeatures;
+  }
+  // Proxy over the real GPUSupportedFeatures: instanceof, toStringTag and
+  // prototype stay native; the setlike members read a real Set (Set iterators,
+  // native-looking bound functions; keys === values === @@iterator).
+  var values = named(visible.values.bind(visible), "values");
+  var own = {
+    has: named(visible.has.bind(visible), "has"),
+    values: values,
+    keys: values,
+    entries: named(visible.entries.bind(visible), "entries"),
+    forEach: named(visible.forEach.bind(visible), "forEach")
+  };
+  var view = new Proxy(nativeFeatures, {
+    get: function(target, prop) {
+      if (prop === Symbol.iterator) { return values; }
+      if (prop === "size") { return visible.size; }
+      if (typeof prop === "string" && Object.prototype.hasOwnProperty.call(own, prop)) {
+        return own[prop];
+      }
+      return Reflect.get(target, prop, target);
+    }
+  });
+  featureViews.set(nativeFeatures, view);
+  return view;
+}
+function wrapInfo(nativeInfo) {
+  // Plain object (a Proxy(GPUAdapterInfo) is Xray-transparent to Marionette).
+  var out = {
+    vendor: String(PERSONA_INFO.vendor || ""),
+    architecture: String(PERSONA_INFO.architecture || ""),
+    device: String(PERSONA_INFO.device || ""),
+    description: String(PERSONA_INFO.description || "")
+  };
+  try {
+    if (nativeInfo && typeof nativeInfo.isFallbackAdapter === "boolean") {
+      out.isFallbackAdapter = nativeInfo.isFallbackAdapter;
+    }
+    if (nativeInfo && typeof nativeInfo.subgroupMinSize === "number") {
+      out.subgroupMinSize = nativeInfo.subgroupMinSize;
+    }
+    if (nativeInfo && typeof nativeInfo.subgroupMaxSize === "number") {
+      out.subgroupMaxSize = nativeInfo.subgroupMaxSize;
+    }
+  } catch (_e) {}
+  return out;
+}
+function overlayDeviceInfo(device, info) {
+  // Device features / limits stay native (what was granted). Only adapterInfo
+  // follows the adapter's persona info.
+  try {
+    if (device && "adapterInfo" in device) {
+      Object.defineProperty(device, "adapterInfo", {
+        configurable: true, enumerable: true, get: function() { return info; }
+      });
+    }
+  } catch (_e) {}
+  return device;
+}
+var wrappedAdapters = new WeakMap();
+function wrapAdapter(adapter) {
+  if (!adapter) { return adapter; }
+  var known = wrappedAdapters.get(adapter);
+  if (known) { return known; }
+  var featCache = null;
+  var infoCache = null;
+  var requestDevice = null;
+  function getFeat() {
+    if (!featCache) { featCache = wrapFeatures(adapter.features); }
+    return featCache;
+  }
+  function getInfo() {
+    if (!infoCache) { infoCache = wrapInfo(adapter.info); }
+    return infoCache;
+  }
+  var proxy = new Proxy(adapter, {
+    get: function(target, prop) {
+      if (typeof prop === "symbol") { return Reflect.get(target, prop, target); }
+      if (prop === "features") { return getFeat(); }
+      if (prop === "info") { return getInfo(); }
+      if (prop === "requestDevice") {
+        if (!requestDevice) {
+          var origRD = target.requestDevice;
+          requestDevice = named(function() {
+            var desc = arguments[0];
+            var feats = getFeat();
+            if (feats !== target.features && desc && desc.requiredFeatures) {
+              var req;
+              try { req = Array.from(desc.requiredFeatures, String); } catch (_r) { req = []; }
+              for (var i = 0; i < req.length; i++) {
+                if (!feats.has(req[i])) {
+                  return Promise.reject(new TypeError(
+                    "GPUAdapter.requestDevice: feature '" + req[i] + "' is not supported by the adapter"
+                  ));
+                }
+              }
+            }
+            return Promise.resolve(origRD.apply(target, arguments)).then(function(dev) {
+              return overlayDeviceInfo(dev, getInfo());
+            });
+          }, "requestDevice");
+        }
+        return requestDevice;
+      }
+      var raw;
+      try { raw = target[prop]; } catch (_e) { return undefined; }
+      if (typeof raw === "function") { return raw.bind(target); }
+      return raw;
+    }
+  });
+  wrappedAdapters.set(adapter, proxy);
+  return proxy;
+}
+var gpuProto = Object.getPrototypeOf(gpuObj);
+if (!gpuProto && typeof GPU !== "undefined" && GPU.prototype) {
+  gpuProto = GPU.prototype;
+}
+if (gpuProto && typeof gpuProto.requestAdapter === "function") {
+  var origRA = gpuProto.requestAdapter;
+  var wrappedRA = named(function() {
+    return Promise.resolve(origRA.apply(this, arguments)).then(function(adapter) {
+      if (!adapter) { return null; }
+      return wrapAdapter(adapter);
+    });
+  }, "requestAdapter");
+  Object.defineProperty(gpuProto, "requestAdapter", {
+    configurable: true, enumerable: true, writable: true, value: wrappedRA
+  });
+  hooks.requestAdapter = wrappedRA;
+  hooks.origRequestAdapter = origRA;
+  hooks.gpuProto = gpuProto;
+}
+return hooks;
+`;
+
 function replaceMethod(pageWindow, proto, name, implementation, replacements) {
   let descriptor = Object.getOwnPropertyDescriptor(proto, name);
   // 0057: never wrap one of our own wrappers (no stacked noise, whatever the
@@ -434,6 +641,19 @@ function installDepthHooks(rawWindow, seeds, onRuntimeError) {
       throw new Error("Canvas 2D native methods unavailable");
     }
 
+    // 0057r3: canvases with a WebGPU context keep native exports. WebGPU
+    // buffer / compute readback of the same texture cannot be farbled without
+    // corrupting compute results, so farbling the canvas exports alone would
+    // make the two paths disagree (Proof 0057r2). Recorded by getContext below.
+    const webgpuCanvases = new WeakSet();
+    const isWebGpuCanvas = (c) => {
+      try {
+        return webgpuCanvases.has(unwaived(c));
+      } catch (_e) {
+        return false;
+      }
+    };
+
     function noisyClone(src) {
       const c = doc.createElement("canvas");
       c.width = src.width;
@@ -452,7 +672,7 @@ function installDepthHooks(rawWindow, seeds, onRuntimeError) {
       "toDataURL",
       function (...args) {
         try {
-          if (this.width > 0 && this.height > 0) {
+          if (this.width > 0 && this.height > 0 && !isWebGpuCanvas(this)) {
             return Reflect.apply(origToDataURL, noisyClone(this), args);
           }
         } catch (error) {
@@ -469,7 +689,7 @@ function installDepthHooks(rawWindow, seeds, onRuntimeError) {
       "toBlob",
       function (callback, ...args) {
         try {
-          if (this.width > 0 && this.height > 0) {
+          if (this.width > 0 && this.height > 0 && !isWebGpuCanvas(this)) {
             return Reflect.apply(origToBlob, noisyClone(this), [callback, ...args]);
           }
         } catch (error) {
@@ -845,29 +1065,22 @@ function installDepthHooks(rawWindow, seeds, onRuntimeError) {
     }
 
     // OffscreenCanvas window parity with HTMLCanvasElement depth (Phase 1 webgl.js).
-    // Soft-optional: missing constructors skip without failing install. 2D path
-    // only — WebGL-backed OffscreenCanvas exports still covered by readPixels.
+    // Soft-optional: missing constructors skip without failing install.
+    // 0057r3: convertToBlob exports a noisy clone drawn from the canvas itself
+    // (like noisyClone), so 2D, WebGL and bitmaprenderer OffscreenCanvases all
+    // export what getImageData / readPixels report (0057r2 had WebGL exporting
+    // real pixels, and created a 2D context on canvases that had none).
     if (pageWindow.OffscreenCanvas?.prototype) {
       const ocProto = pageWindow.OffscreenCanvas.prototype;
-      const origConvertToBlob = Object.getOwnPropertyDescriptor(
-        ocProto,
-        "convertToBlob"
-      )?.value;
-      let origOcGetImageData = null;
+      let nativeOcGetImageData = null;
       const Oc2d = pageWindow.OffscreenCanvasRenderingContext2D;
-      if (Oc2d?.prototype) {
-        origOcGetImageData = Object.getOwnPropertyDescriptor(
-          Oc2d.prototype,
-          "getImageData"
-        )?.value;
-      }
-      if (origOcGetImageData) {
-        replaceMethod(
+      if (Oc2d?.prototype && Object.getOwnPropertyDescriptor(Oc2d.prototype, "getImageData")) {
+        nativeOcGetImageData = replaceMethod(
           pageWindow,
           Oc2d.prototype,
           "getImageData",
           function (...args) {
-            const id = Reflect.apply(origOcGetImageData, this, args);
+            const id = Reflect.apply(nativeOcGetImageData, this, args);
             try {
               noiseImageDataRead(id, canvasSeed, args, this.canvas);
             } catch (error) {
@@ -878,48 +1091,63 @@ function installDepthHooks(rawWindow, seeds, onRuntimeError) {
           replacements
         );
       }
-      if (origConvertToBlob) {
-        replaceMethod(
+      if (nativeOcGetImageData && Object.getOwnPropertyDescriptor(ocProto, "convertToBlob")) {
+        let nativeConvertToBlob = null;
+        nativeConvertToBlob = replaceMethod(
           pageWindow,
           ocProto,
           "convertToBlob",
           function (...args) {
             try {
-              if (this.width > 0 && this.height > 0) {
-                const ocCtx = this.getContext("2d");
-                if (ocCtx) {
-                  const gid =
-                    origOcGetImageData ||
-                    ocCtx.getImageData.bind(ocCtx);
-                  const id = Reflect.apply(gid, ocCtx, [
-                    0,
-                    0,
-                    this.width,
-                    this.height,
-                  ]);
-                  applyCanvasNoise(
-                    Cu.waiveXrays(id).data,
-                    canvasSeed,
-                    this.width,
-                    this.height
-                  );
-                  const tmp = new pageWindow.OffscreenCanvas(
-                    this.width,
-                    this.height
-                  );
-                  const tmpCtx = tmp.getContext("2d");
-                  tmpCtx.putImageData(id, 0, 0);
-                  return Reflect.apply(origConvertToBlob, tmp, args);
-                }
+              const w = this.width;
+              const h = this.height;
+              if (w > 0 && h > 0 && !isWebGpuCanvas(this)) {
+                const tmp = new pageWindow.OffscreenCanvas(w, h);
+                const tmpCtx = tmp.getContext("2d");
+                tmpCtx.drawImage(this, 0, 0);
+                const id = Reflect.apply(nativeOcGetImageData, tmpCtx, [0, 0, w, h]);
+                applyCanvasNoise(Cu.waiveXrays(id).data, canvasSeed, w, h);
+                tmpCtx.putImageData(id, 0, 0);
+                return Reflect.apply(nativeConvertToBlob, tmp, args);
               }
             } catch (error) {
               onRuntimeError("offscreencanvas.convertToBlob", error);
             }
-            return Reflect.apply(origConvertToBlob, this, args);
+            return Reflect.apply(nativeConvertToBlob, this, args);
           },
           replacements
         );
       }
+    }
+
+    // 0057r3: record canvases that get a WebGPU context (only when WebGPU is
+    // exposed) so their exports stay native (see webgpuCanvases).
+    if (pageWindow.navigator?.gpu) {
+      const trackWebGpu = (proto, label) => {
+        if (!proto || !Object.getOwnPropertyDescriptor(proto, "getContext")) {
+          return;
+        }
+        let nativeGetContext = null;
+        nativeGetContext = replaceMethod(
+          pageWindow,
+          proto,
+          "getContext",
+          function (...args) {
+            const ctx = Reflect.apply(nativeGetContext, this, args);
+            try {
+              if (ctx && String(args[0]) === "webgpu") {
+                webgpuCanvases.add(unwaived(this));
+              }
+            } catch (error) {
+              onRuntimeError(label, error);
+            }
+            return ctx;
+          },
+          replacements
+        );
+      };
+      trackWebGpu(canvasProto, "canvas.getContext");
+      trackWebGpu(pageWindow.OffscreenCanvas?.prototype, "offscreencanvas.getContext");
     }
 
     // Soft residual (0036)+0039: fonts coherence / fingerprint farbling.
@@ -1658,425 +1886,15 @@ return hooks;`
       }
     }
 
-    // Soft residual (0038): WebGPU adapter/device/limits/features coherence.
-    // LibreWolf defaults dom.webgpu.enabled=false — when navigator.gpu is absent,
-    // skip entirely (idle; do not invent WebGPU API / Chrome adapters).
-    // When exposed: wrap requestAdapter → Proxy adapter with seed-tied features
-    // subset, soft limits fudge, and AdapterInfo coherent with depth gpu persona
-    // (Firefox/LibreWolf/Gecko-plausible only). requestDevice reuses adapter
-    // farbled features/limits/info (sharedFeatCache) — not native device set.
-    // Default-on with depth hooks. Homogeneous/hooks-off: idle.
+    // WebGPU (0038, 0057r3): real features / limits / device, persona
+    // AdapterInfo, Intel persona hides Apple-silicon-only formats (WEBGPU_BODY).
+    // LibreWolf defaults dom.webgpu.enabled=false: idle when navigator.gpu is absent.
     if (pageWindow.navigator?.gpu?.requestAdapter) {
       const installWebGpuInPage = new pageWindow.Function(
         "seed",
         "gpuVendor",
         "gpuRenderer",
-        `"use strict";
-var SEED = seed >>> 0;
-var VENDOR = String(gpuVendor || "Apple");
-var RENDERER = String(gpuRenderer || "Apple M1");
-function hashStr(s) {
-  var h = SEED;
-  var str = String(s || "");
-  for (var i = 0; i < str.length; i++) {
-    h = Math.imul(h ^ str.charCodeAt(i), 0x01000193) >>> 0;
-  }
-  return h >>> 0;
-}
-// Map depth WebGL gpu persona → Firefox-plausible WebGPU AdapterInfo.
-// Never invent Chrome/Google adapter brands.
-function mapAdapterInfo() {
-  // Soft residual (0038 Proof FAIL fix): plain non-empty vendor/architecture so
-  // Proof familyOf(info.vendor) matches WebGL UNMASKED family. description
-  // mirrors depth gpu renderer (Firefox-plausible; never Chrome/ANGLE brands).
-  var v = VENDOR.toLowerCase();
-  var r = String(RENDERER || "");
-  var desc = r;
-  if (/apple/i.test(v) || /apple/i.test(r)) {
-    return {
-      vendor: "apple",
-      architecture: "common-3",
-      device: "",
-      description: desc || "Apple GPU"
-    };
-  }
-  if (/intel/i.test(v) || /intel/i.test(r)) {
-    return {
-      vendor: "intel",
-      architecture: "gen-12lp",
-      device: "",
-      description: desc || "Intel Graphics"
-    };
-  }
-  if (/nvidia/i.test(v) || /nvidia/i.test(r)) {
-    return {
-      vendor: "nvidia",
-      architecture: "gpu",
-      device: "",
-      description: desc || "NVIDIA GPU"
-    };
-  }
-  if (/amd/i.test(v) || /radeon/i.test(r)) {
-    return {
-      vendor: "amd",
-      architecture: "gcn",
-      device: "",
-      description: desc || "AMD GPU"
-    };
-  }
-  // Host-OS unknown: Apple-family is the Mini SoT / Firefox-on-macOS default.
-  return {
-    vendor: "apple",
-    architecture: "common-3",
-    device: "",
-    description: desc || "Apple GPU"
-  };
-}
-var PERSONA_INFO = mapAdapterInfo();
-var ALWAYS_KEEP_FEATURES = {
-  "core-features-and-limits": 1
-};
-// Seed-ranked subset (0038 Proof FAIL fix): sort optional host features by
-// seed hash and drop a seed-tied count so different webgpuSeeds diverge.
-// Avoids &3 keep-mask collisions across eTLD (gate 3). Never invent names.
-function wrapFeatures(nativeFeatures) {
-  if (!nativeFeatures) { return nativeFeatures; }
-  var all = [];
-  try {
-    if (typeof nativeFeatures.forEach === "function") {
-      nativeFeatures.forEach(function(name) { all.push(String(name)); });
-    } else if (typeof nativeFeatures.values === "function") {
-      var it = nativeFeatures.values();
-      var step;
-      while (!(step = it.next()).done) { all.push(String(step.value)); }
-    }
-  } catch (_e) {
-    return nativeFeatures;
-  }
-  var always = [];
-  var optional = [];
-  for (var i = 0; i < all.length; i++) {
-    if (ALWAYS_KEEP_FEATURES[all[i]]) { always.push(all[i]); }
-    else { optional.push(all[i]); }
-  }
-  optional.sort(function(a, b) {
-    var ra = hashStr("rank:" + a);
-    var rb = hashStr("rank:" + b);
-    if (ra !== rb) { return ra < rb ? -1 : 1; }
-    if (a < b) { return -1; }
-    if (a > b) { return 1; }
-    return 0;
-  });
-  var drop = 0;
-  if (optional.length > 0) {
-    drop = 1 + (SEED % Math.min(3, optional.length));
-    if (drop > optional.length) { drop = optional.length; }
-    if (optional.length >= 2 && drop >= optional.length) {
-      drop = optional.length - 1;
-    }
-  }
-  var kept = always.concat(optional.slice(drop));
-  if (!kept.length && all.length) { kept.push(all[0]); }
-  var seen = Object.create(null);
-  var uniq = [];
-  for (var k = 0; k < kept.length; k++) {
-    if (!seen[kept[k]]) { seen[kept[k]] = 1; uniq.push(kept[k]); }
-  }
-  kept = uniq;
-  var set = Object.create(null);
-  for (var j = 0; j < kept.length; j++) { set[kept[j]] = 1; }
-  return {
-    has: function(name) { return !!set[String(name)]; },
-    values: function() {
-      var idx = 0;
-      return {
-        next: function() {
-          if (idx >= kept.length) { return { done: true, value: undefined }; }
-          return { done: false, value: kept[idx++] };
-        },
-        [Symbol.iterator]: function() { return this; }
-      };
-    },
-    keys: function() { return this.values(); },
-    entries: function() {
-      var idx = 0;
-      return {
-        next: function() {
-          if (idx >= kept.length) { return { done: true, value: undefined }; }
-          var kk = kept[idx++];
-          return { done: false, value: [kk, kk] };
-        },
-        [Symbol.iterator]: function() { return this; }
-      };
-    },
-    forEach: function(cb, thisArg) {
-      for (var j2 = 0; j2 < kept.length; j2++) {
-        cb.call(thisArg, kept[j2], kept[j2], this);
-      }
-    },
-    get size() { return kept.length; }
-  };
-}
-// Soft-fudge fingerprinty max* limits downward only; never touch alignments.
-var FUDGE_LIMIT_KEYS = {
-  maxTextureDimension1D: 1,
-  maxTextureDimension2D: 1,
-  maxTextureDimension3D: 1,
-  maxTextureArrayLayers: 1,
-  maxBindGroups: 1,
-  maxSampledTexturesPerShaderStage: 1,
-  maxSamplersPerShaderStage: 1,
-  maxStorageBuffersPerShaderStage: 1,
-  maxUniformBuffersPerShaderStage: 1,
-  maxUniformBufferBindingSize: 1,
-  maxStorageBufferBindingSize: 1,
-  maxBufferSize: 1,
-  maxVertexBuffers: 1,
-  maxVertexAttributes: 1,
-  maxColorAttachments: 1,
-  maxComputeWorkgroupStorageSize: 1,
-  maxComputeInvocationsPerWorkgroup: 1,
-  maxComputeWorkgroupsPerDimension: 1
-};
-function fudgeLimit(key, nativeVal) {
-  var n = Number(nativeVal);
-  if (!isFinite(n) || n <= 0) { return nativeVal; }
-  if (!FUDGE_LIMIT_KEYS[key]) { return nativeVal; }
-  // Multiplicative [0.99, 1.0) — silence-safe style; integer round-down.
-  var fudge = 0.99 + ((hashStr("lim:" + key) % 1000) / 100000);
-  var out = Math.floor(n * fudge);
-  if (out < 1) { out = 1; }
-  if (out > n) { out = n; }
-  return out;
-}
-function wrapLimits(nativeLimits) {
-  if (!nativeLimits) { return nativeLimits; }
-  // Soft residual (0038 Proof FAIL fix): return a PLAIN eager snapshot object —
-  // Proxy(GPUSupportedLimits) is Xray-transparent under Marionette probes, so
-  // farbled max* never surface. Plain object matches wrapFeatures success path.
-  var snapped = Object.create(null);
-  var snapKeys = Object.keys(FUDGE_LIMIT_KEYS).concat([
-    "minUniformBufferOffsetAlignment",
-    "minStorageBufferOffsetAlignment",
-    "maxBindGroupsPlusVertexBuffers",
-    "maxDynamicUniformBuffersPerPipelineLayout",
-    "maxDynamicStorageBuffersPerPipelineLayout",
-    "maxComputeWorkgroupSizeX",
-    "maxComputeWorkgroupSizeY",
-    "maxComputeWorkgroupSizeZ",
-    "maxInterStageShaderVariables",
-    "maxColorAttachmentBytesPerSample"
-  ]);
-  for (var si = 0; si < snapKeys.length; si++) {
-    var sk = snapKeys[si];
-    var sv;
-    try { sv = nativeLimits[sk]; } catch (_se) { continue; }
-    if (typeof sv === "number" || typeof sv === "bigint") {
-      snapped[sk] = fudgeLimit(sk, Number(sv));
-    }
-  }
-  return snapped;
-}
-function wrapInfo(nativeInfo) {
-  // Soft residual (0038 Proof FAIL fix): PLAIN object — Proxy(GPUAdapterInfo) is
-  // Xray-transparent under Proof Marionette probes (vendor/architecture read as
-  // empty native strings → familiesCoherent=false). Never invent Chrome brands.
-  var base = PERSONA_INFO;
-  var out = {
-    vendor: String(base.vendor || ""),
-    architecture: String(base.architecture || ""),
-    device: String(base.device || ""),
-    description: String(base.description || "")
-  };
-  try {
-    if (nativeInfo && typeof nativeInfo.isFallbackAdapter === "boolean") {
-      out.isFallbackAdapter = nativeInfo.isFallbackAdapter;
-    }
-  } catch (_e) {}
-  try {
-    if (nativeInfo && typeof nativeInfo.subgroupMinSize === "number") {
-      out.subgroupMinSize = nativeInfo.subgroupMinSize;
-    }
-    if (nativeInfo && typeof nativeInfo.subgroupMaxSize === "number") {
-      out.subgroupMaxSize = nativeInfo.subgroupMaxSize;
-    }
-  } catch (_e2) {}
-  return out;
-}
-// 0038 Proof FAIL fix: wrapDevice MUST reuse adapter farbled features/limits/info
-// plainAdapterInfo + a2dDefineProperty (0038 re-XOR)
-// (sharedFeatCache) — native default requestDevice() exposes a reduced set (n=1).
-// Soft residual (0038 re-XOR): Proxy(GPUDevice) is Xray-transparent under
-// Marionette — defineProperty overlay first so features/limits/adapterInfo are
-// own plain values; Proxy fallback still returns plain shared caches.
-function wrapDevice(device, sharedFeatures, sharedLimits, sharedInfo) {
-  if (!device) { return device; }
-  var featCache = sharedFeatures || null;
-  var limCache = sharedLimits || null;
-  var infoCache = sharedInfo || null;
-  function ensureFeat() {
-    if (!featCache) { featCache = wrapFeatures(device.features); }
-    return featCache;
-  }
-  function ensureLim() {
-    if (!limCache) { limCache = wrapLimits(device.limits); }
-    return limCache;
-  }
-  function ensureInfo() {
-    if (!infoCache) { infoCache = wrapInfo(device.adapterInfo); }
-    return infoCache;
-  }
-  var overlaid = false;
-  try {
-    var f = ensureFeat();
-    var l = ensureLim();
-    var i = ensureInfo();
-    Object.defineProperty(device, "features", {
-      configurable: true, enumerable: true, get: function() { return f; }
-    });
-    Object.defineProperty(device, "limits", {
-      configurable: true, enumerable: true, get: function() { return l; }
-    });
-    Object.defineProperty(device, "adapterInfo", {
-      configurable: true, enumerable: true, get: function() { return i; }
-    });
-    overlaid = true;
-  } catch (_defErr) {
-    overlaid = false;
-  }
-  if (overlaid) { return device; }
-  return new Proxy(device, {
-    get: function(target, prop, receiver) {
-      if (typeof prop === "symbol") {
-        return Reflect.get(target, prop, target);
-      }
-      var key = String(prop);
-      if (key === "features") { return ensureFeat(); }
-      if (key === "limits") { return ensureLim(); }
-      if (key === "adapterInfo") { return ensureInfo(); }
-      var raw;
-      try { raw = target[prop]; } catch (_e) { return undefined; }
-      if (typeof raw === "function") {
-        return raw.bind(target);
-      }
-      return raw;
-    }
-  });
-}
-function wrapAdapter(adapter) {
-  if (!adapter) { return adapter; }
-  var featCache = null;
-  var limCache = null;
-  var infoCache = null;
-  function getFeat() {
-    if (!featCache) { featCache = wrapFeatures(adapter.features); }
-    return featCache;
-  }
-  function getLim() {
-    if (!limCache) { limCache = wrapLimits(adapter.limits); }
-    return limCache;
-  }
-  function getInfo() {
-    if (!infoCache) { infoCache = wrapInfo(adapter.info); }
-    return infoCache;
-  }
-  return new Proxy(adapter, {
-    get: function(target, prop, receiver) {
-      if (typeof prop === "symbol") {
-        return Reflect.get(target, prop, target);
-      }
-      var key = String(prop);
-      if (key === "features") { return getFeat(); }
-      if (key === "limits") { return getLim(); }
-      if (key === "info") { return getInfo(); }
-      if (key === "requestDevice") {
-        var origRD = target.requestDevice;
-        return function(desc) {
-          var farbled = getFeat();
-          var newDesc;
-          if (desc === undefined || desc === null) {
-            newDesc = {};
-          } else {
-            try {
-              newDesc = Object.assign({}, desc);
-            } catch (_eAssign) {
-              newDesc = desc;
-            }
-          }
-          if (newDesc && typeof newDesc === "object") {
-            var reqIn = newDesc.requiredFeatures;
-            var reqOut = [];
-            if (reqIn && typeof reqIn.length === "number" && reqIn.length > 0) {
-              for (var ri = 0; ri < reqIn.length; ri++) {
-                var fn = String(reqIn[ri]);
-                if (!farbled.has(fn)) {
-                  return Promise.reject(
-                    new TypeError(
-                      "Failed to execute 'requestDevice' on 'GPUAdapter': " +
-                      "Invalid feature call. Missing feature: " + fn
-                    )
-                  );
-                }
-                reqOut.push(fn);
-              }
-              newDesc.requiredFeatures = reqOut;
-            }
-            // Soft residual (0038 re-XOR): do NOT force full farbled set as
-            // requiredFeatures — native rejects large sets and Marionette still
-            // saw n=1. Overlay sharedFeatCache in wrapDevice instead.
-          }
-          function finish(dev) {
-            return wrapDevice(dev, getFeat(), getLim(), getInfo());
-          }
-          return Promise.resolve(origRD.call(target, newDesc)).then(finish);
-        };
-      }
-      var raw;
-      try { raw = target[prop]; } catch (_e) { return undefined; }
-      if (typeof raw === "function") {
-        return raw.bind(target);
-      }
-      return raw;
-    }
-  });
-}
-
-var hooks = {
-  requestAdapter: null, origRequestAdapter: null, gpuProto: null,
-  seed: SEED, personaInfo: PERSONA_INFO
-};
-
-var gpuObj = null;
-try {
-  if (typeof navigator !== "undefined" && navigator && navigator.gpu) {
-    gpuObj = navigator.gpu;
-  }
-} catch (_e) {}
-var gpuProto = null;
-if (gpuObj) {
-  gpuProto = Object.getPrototypeOf(gpuObj);
-}
-if (!gpuProto && typeof GPU !== "undefined" && GPU.prototype) {
-  gpuProto = GPU.prototype;
-}
-if (gpuProto && typeof gpuProto.requestAdapter === "function") {
-  var origRA = gpuProto.requestAdapter;
-  var wrappedRA = function(options) {
-    var self = this;
-    return Promise.resolve(origRA.apply(self, arguments)).then(function(adapter) {
-      if (!adapter) { return null; }
-      return wrapAdapter(adapter);
-    });
-  };
-  Object.defineProperty(gpuProto, "requestAdapter", {
-    configurable: true, enumerable: true, writable: true, value: wrappedRA
-  });
-  hooks.requestAdapter = wrappedRA;
-  hooks.origRequestAdapter = origRA;
-  hooks.gpuProto = gpuProto;
-}
-
-return hooks;`
+        WEBGPU_BODY
       );
 
       let installedWebGpu;
