@@ -825,6 +825,76 @@ test("0060: a purge reaches live documents (no stale document.cookie)", async ()
   assert.ok(st.purges >= 2 && st.purged >= 3);
 });
 
+// ---- clear-on-quit: PrincipalsCollector lists the sandbox jar ------------------
+/** Gecko OriginAttributes::CreateSuffix shape (only non-default fields). */
+function oaSuffix(oa) {
+  const p = [];
+  if (oa.userContextId) p.push(`userContextId=${oa.userContextId}`);
+  if (oa.privateBrowsingId) p.push(`privateBrowsingId=${oa.privateBrowsingId}`);
+  if (oa.partitionKey) p.push(`partitionKey=${encodeURIComponent(oa.partitionKey).replace(/\(/g, "%28").replace(/\)/g, "%29")}`);
+  return p.length ? "^" + p.join("&") : "";
+}
+/** Stock collector: "https://" + host+suffix → principal. */
+function collectorPrincipal(hostSuffix) {
+  const [host, suffix = ""] = hostSuffix.split("^");
+  const q = new URLSearchParams(suffix);
+  return principal(`https://${host}/`, {
+    userContextId: Number(q.get("userContextId") || 0),
+    privateBrowsingId: Number(q.get("privateBrowsingId") || 0),
+    partitionKey: q.get("partitionKey") || "",
+  });
+}
+test("0060: sandboxCookieHosts gives the collector Gecko's rawHost+suffix for every sandboxed cookie", () => {
+  fresh();
+  ChromeUtils.originAttributesToSuffix = oaSuffix;
+  populate();
+  assert.deepEqual(FW.sandboxCookieHosts().sort(), [
+    "a.test",
+    "a.test^partitionKey=%28https%2Ca.test%29",
+    "a.test^partitionKey=%28https%2Ca.test%2Cf%29",
+    "a.test^privateBrowsingId=1",
+    "a.test^userContextId=1",
+    "b.test",
+    "b.test^partitionKey=%28https%2Ca.test%29",
+    "b.test^partitionKey=%28https%2Cc.test%29",
+    "c.test",
+    "c.test^partitionKey=%28https%2Cb.test%29",
+    "sub.b.test",
+  ]);
+  fresh({ "darkstr.cookieFirewall.enabled": false });
+  assert.deepEqual(FW.sandboxCookieHosts(), [], "disarmed: nothing to add (stock)");
+});
+test("0060: clear-on-quit with a persist-data-on-shutdown exception: same outcome as stock on the sandbox jar", async () => {
+  fresh();
+  ChromeUtils.originAttributesToSuffix = oaSuffix;
+  populate();
+  // Sanitizer.maybeSanitizeSessionPrincipals with an exception for b.test:
+  // first-party principals under b.test kept (host walk), partitioned ones
+  // kept only when the partition's top site is b.test (#93 rule).
+  const keep = (p) => {
+    const pk = p.originAttributes.partitionKey;
+    if (!pk) return Core.hasRootDomain(p.URI.host, "b.test");
+    return /^\(https?,b\.test[,)]/.test(pk);
+  };
+  for (const h of FW.sandboxCookieHosts()) {
+    const p = collectorPrincipal(h);
+    if (!keep(p)) await Cleaner.deleteByPrincipal(p, true);
+  }
+  assert.deepEqual(jarList(), [
+    `${B("https://b.test")}:b1`,
+    `${B("https://b.test")}:dom`,
+    `${B("https://b.test")}:sub1`,
+    `${B("https://b.test", "p")}:c_in_b`,
+  ], "kept site's own jar + what is partitioned under it; b.test framed elsewhere is cleared");
+});
+test("0060: PrincipalsCollector adds the sandbox hosts to the cookie host set (and stays stock outside Darkstr)", () => {
+  const pc = readFileSync(join(F60, "PrincipalsCollector.sys.mjs"), "utf8");
+  const i = pc.indexOf("let hosts = new Set();"), j = pc.indexOf("DarkstrCookieFirewall.sandboxCookieHosts()"), k = pc.indexOf('progress.step = "principals-host-cookie";');
+  assert.ok(i > 0 && j > i && k > j, "after the Services.cookies loop, before principals are built");
+  assert.match(pc, /hosts\.add\(h\);/);
+  assert.match(pc, /\} catch \(_e\) \{\n      \/\/ Not a Darkstr browser build/);
+});
+
 test("0060: ClearDataService wires the cleaner under CLEAR_COOKIES (and so Forget / CSD / sanitizer flags)", () => {
   const cds = readFileSync(join(F60, "ClearDataService.sys.mjs"), "utf8");
   assert.match(cds, /flag: Ci\.nsIClearDataService\.CLEAR_COOKIES,\n    cleaners: \[CookieCleaner, DarkstrCookieFirewallCleaner\],/);

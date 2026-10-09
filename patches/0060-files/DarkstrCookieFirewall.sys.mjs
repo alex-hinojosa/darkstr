@@ -117,6 +117,9 @@
  *     History, Clear-Site-Data, clear-on-quit and container removal, with
  *     Gecko's OriginAttributesPattern semantics: a partitioned clear only
  *     touches that partition (the #93 rule). Live documents get the deletes.
+ *     The shutdown sanitizer clears per collected principal (to honor
+ *     persist-data-on-shutdown exceptions); PrincipalsCollector lists the
+ *     sandbox jar's hosts too (sandboxCookieHosts), so it reaches them.
  *   - One pipeline (PIPELINE below): every cookie admitted to the jar goes
  *     through _admit(), every removal through _purge(), every partition seed
  *     through _seedFor(). 0061 (per-site rotation) plugs in there via
@@ -1449,6 +1452,45 @@ export var DarkstrCookieFirewall = {
         diagPrefs.setStringPref(LAST_PARTITION_PREF, String(jarKey));
       }
     } catch (_e) {}
+  },
+
+  /**
+   * 0060: host + OriginAttributes suffix of every sandboxed cookie, in the
+   * shape PrincipalsCollector builds from Services.cookies (rawHost +
+   * originAttributesToSuffix), so collector-driven clears (the shutdown
+   * sanitizer honoring "persist-data-on-shutdown" exceptions) reach the
+   * sandbox jar. "p" buckets carry partitionKey "(scheme,top)", "pf"
+   * "(scheme,top,f)", exactly what Gecko's CookieCleaner would see.
+   * Memory only; nothing is logged or written. Disarmed → [].
+   */
+  sandboxCookieHosts() {
+    const out = new Set();
+    for (const [key, bucket] of this._jar || []) {
+      const info = parseBucketKey(key);
+      if (!info || !bucket || !bucket.size) {
+        continue;
+      }
+      const oa = {
+        userContextId: info.userContextId,
+        privateBrowsingId: info.privateBrowsingId,
+      };
+      if (info.part) {
+        oa.partitionKey = `(${info.scheme},${info.base}${info.part === "pf" ? ",f" : ""})`;
+      }
+      let suffix = "";
+      try {
+        suffix = ChromeUtils.originAttributesToSuffix(oa);
+      } catch (_e) {
+        continue;
+      }
+      for (const rec of bucket.values()) {
+        const h = normalizeHost(rec.host).replace(/^\./, "");
+        if (h) {
+          out.add(h + suffix);
+        }
+      }
+    }
+    return [...out];
   },
 
   _bucket(jarKey, create) {

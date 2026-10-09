@@ -10,7 +10,9 @@
 #    sandbox decision and jar the partition's documents get; no answer while armed = fail closed.
 #  - ClearDataService: DarkstrCookieFirewallCleaner under CLEAR_COOKIES purges the sandbox jar
 #    (Forget About This Site, Clear Recent History, Clear-Site-Data, clear-on-quit, containers);
-#    a partitioned clear only clears that partition.
+#    a partitioned clear only clears that partition. PrincipalsCollector also lists the sandbox
+#    jar's hosts, so the shutdown sanitizer's per-principal pass (persist-data-on-shutdown
+#    exceptions) reaches sandboxed cookies exactly as it reaches real ones.
 #  - One pipeline (_admit / _purge / _seedFor) with a documented 0061 hook (setPipelineHook).
 #  - No plaintext: site / cookie-value diagnostics reach prefs.js only as keyed digests.
 # Applies on main (789f66c: ... 0056 / 0057c / 0058b). C++ + chrome JS.
@@ -26,6 +28,7 @@ MAP=(
  "ClearDataService.sys.mjs:toolkit/components/cleardata/ClearDataService.sys.mjs"
  "CookieCommons.cpp:netwerk/cookie/CookieCommons.cpp"
  "CookieStoreParent.cpp:dom/cookiestore/CookieStoreParent.cpp"
+ "PrincipalsCollector.sys.mjs:toolkit/components/cleardata/PrincipalsCollector.sys.mjs"
 )
 (cd "$F" && shasum -a 256 -c SHA256SUMS)
 already=1
@@ -47,6 +50,7 @@ grep -Fq 'setPipelineHook(hook)' "$C"
 if grep -Fq 'messageManagerGroups: ["browsers"]' "$C"; then echo "error: actor still limited to browsers" >&2; exit 1; fi
 grep -Fq 'cleaners: [CookieCleaner, DarkstrCookieFirewallCleaner]' "$R/toolkit/components/cleardata/ClearDataService.sys.mjs"
 grep -Fq '"darkstr-cookie-store"' "$R/dom/cookiestore/CookieStoreParent.cpp"
+grep -Fq 'DarkstrCookieFirewall.sandboxCookieHosts()' "$R/toolkit/components/cleardata/PrincipalsCollector.sys.mjs"
 grep -Fq 'darkstr 0060 (was 0048r2 F3' "$R/netwerk/cookie/CookieCommons.cpp"
 echo "0060 applied. Build (objdir pinned; never a bare mach build):"
 echo "  cd \$DARKSTR_GECKO_ROOT && MOZ_OBJDIR=\$DARKSTR_GECKO_ROOT/obj-aarch64-apple-darwin25.6.0 ./mach build && MOZ_OBJDIR=\$DARKSTR_GECKO_ROOT/obj-aarch64-apple-darwin25.6.0 ./mach package"
