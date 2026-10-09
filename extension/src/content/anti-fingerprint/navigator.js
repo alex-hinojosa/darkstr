@@ -16,7 +16,7 @@ export function installNavigator(ctx) {
   spoof(Navigator.prototype, "webdriver", () => false);
 
   spoof(Navigator.prototype, "vendor", () => profile.userAgent.includes("Firefox") ? "" : "Google Inc.");
-  spoof(Navigator.prototype, "appVersion", () => profile.userAgent.replace("Mozilla/", ""));
+  spoof(Navigator.prototype, "appVersion", () => (profile.appVersion || profile.userAgent.replace("Mozilla/", "")));
 
   // maxTouchPoints — desktop = 0, prevents Surface Pro touch leak
   spoof(Navigator.prototype, "maxTouchPoints", () => 0);

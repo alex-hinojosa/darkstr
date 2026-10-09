@@ -194,7 +194,7 @@ export function installMisc(ctx) {
     Object.defineProperty(self.navigator.__proto__, "deviceMemory", { get: () => ${profile.deviceMemory} });
     Object.defineProperty(self.navigator.__proto__, "language", { get: () => ${JSON.stringify(profile.languages[0])} });
     Object.defineProperty(self.navigator.__proto__, "languages", { get: () => Object.freeze(${JSON.stringify(profile.languages)}) });
-    Object.defineProperty(self.navigator.__proto__, "appVersion", { get: () => ${JSON.stringify(profile.userAgent.replace("Mozilla/", ""))} });
+    Object.defineProperty(self.navigator.__proto__, "appVersion", { get: () => ${JSON.stringify((profile.appVersion || profile.userAgent.replace("Mozilla/", "")))} });
   `;
   }
 

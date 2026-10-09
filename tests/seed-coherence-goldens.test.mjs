@@ -22,30 +22,22 @@ test("seed-goldens fixture is present and shaped", () => {
   }
 });
 
-test("chrome 0003 seed UA lists are subsets of Rust goldens families", () => {
-  // Drift pin: chrome must not invent Firefox UAs outside Rust control-plane families.
-  const patch = readFileSync(
-    join(root, "patches/0003-darkstr-native-persona-hooks.patch"),
-    "utf8"
-  );
-  const rustUas = [
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:140.0) Gecko/20100101 Firefox/140.0",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:140.0) Gecko/20100101 Firefox/140.0",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:139.0) Gecko/20100101 Firefox/139.0",
-    "Mozilla/5.0 (X11; Linux x86_64; rv:140.0) Gecko/20100101 Firefox/140.0",
-    "Mozilla/5.0 (X11; Linux x86_64; rv:139.0) Gecko/20100101 Firefox/139.0",
-    "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:140.0) Gecko/20100101 Firefox/140.0",
-  ];
-  const uas = [];
-  for (const line of patch.split("\n")) {
-    if (!line.startsWith("+")) continue;
-    const m = line.match(/"(Mozilla\/5\.0 [^"]*Firefox\/\d+\.0)"/);
-    if (m) uas.push(m[1]);
+test("0055: seed goldens claim the engine version; chrome builds UAs from the Rust OS tokens", () => {
+  // Drift pin (was: chrome 0003 UA literals ⊂ Rust 139/140 families). Since
+  // 0055 (N6) neither side has UA literals: Rust uses firefox_ua!(os) at the
+  // config/milestone.txt version, chrome firefoxUserAgent(os, engine rv).
+  const doc = JSON.parse(readFileSync(join(root, "fixtures/seed-goldens.json"), "utf8"));
+  for (const v of doc.vectors) {
+    assert.match(v.snapshot.userAgent, /; rv:156\.0\) Gecko\/20100101 Firefox\/156\.0$/);
   }
-  assert.ok(uas.length >= 3, "expected chrome UA strings in 0003");
-  for (const ua of uas) {
-    assert.ok(rustUas.includes(ua), `chrome UA not in Rust family: ${ua}`);
-  }
+  const rs = readFileSync(join(root, "crates/duppel-persona/src/lib.rs"), "utf8");
+  const np = readFileSync(join(root, "patches/0055-files/DarkstrNativePersona.sys.mjs"), "utf8");
+  const rustOs = [...rs.matchAll(/firefox_ua!\("([^"]+)"\)/g)].map((m) => m[1]).sort();
+  const npOs = [...np.matchAll(/uaOs: \[([^\]]+)\]/g)]
+    .flatMap((m) => [...m[1].matchAll(/"([^"]+)"/g)].map((x) => x[1]))
+    .sort();
+  assert.deepEqual(npOs, rustOs);
+  assert.doesNotMatch(np, /"Mozilla\/5\.0 \([^"]*Firefox\/\d+\.0"/, "no UA literals in chrome");
 });
 
 test("SEED-COHERENCE + NC banking docs exist", () => {

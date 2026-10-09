@@ -1,0 +1,71 @@
+diff -ruN a/browser/components/DarkstrModeXor.sys.mjs b/browser/components/DarkstrModeXor.sys.mjs
+--- a/browser/components/DarkstrModeXor.sys.mjs
++++ b/browser/components/DarkstrModeXor.sys.mjs
+@@ -65,6 +65,17 @@
+   [FPP_PREF, false],
+   [LIBREWOLF_WEBGL_PROMPT_PREF, false],
+ ]);
++/**
++ * 0053r2 (Proof): stock Gecko sets this to true whenever
++ * browser.contentblocking.category changes (UrlClassifierExceptionListService),
++ * and FPP=false under Pollution makes ContentBlockingPrefs flip the category
++ * (strict → custom on entry, back on exit). darkstr cannot avoid the flip, so
++ * the pref's pre-Pollution state is saved with POLLUTION_PREFS and restored on
++ * exit. It is never *set* by darkstr on entry.
++ */
++const ETP_INTERACTED_PREF =
++  "privacy.trackingprotection.allow_list.hasUserInteractedWithETPSettings";
++const RESTORE_ONLY_PREFS = Object.freeze([ETP_INTERACTED_PREF]);
+ /** Status format written by 0053+ (diagnostics); anything else is pre-0053. */
+ const WEBGL_STATUS_TAG = "v53;";
+ /**
+@@ -386,7 +397,7 @@
+   /** 0053: save the pre-Pollution state of POLLUTION_PREFS (once). */
+   _savePrefs({ assumeStock = false } = {}) {
+     const saved = { v: 1, prefs: {} };
+-    for (const [name] of POLLUTION_PREFS) {
++    for (const name of [...POLLUTION_PREFS.map(([n]) => n), ...RESTORE_ONLY_PREFS]) {
+       if (Services.prefs.getPrefType(name) === Services.prefs.PREF_INVALID) {
+         continue; // e.g. librewolf.webgl.prompt on a non-LibreWolf build
+       }
+@@ -424,19 +435,37 @@
+       saved = null;
+     }
+     const entries = (saved && saved.prefs) || {};
+-    for (const [name] of POLLUTION_PREFS) {
++    const restore = (name) => {
+       const rec = entries[name];
+       if (!rec) {
+-        continue;
++        return; // saved by 0053 before r2 (no record): left as it is
+       }
+       try {
+         if (rec.user === true && typeof rec.value === "boolean") {
+-          Services.prefs.setBoolPref(name, rec.value);
++          if (Services.prefs.getBoolPref(name) !== rec.value) {
++            Services.prefs.setBoolPref(name, rec.value);
++          }
+         } else if (rec.user !== true && Services.prefs.prefHasUserValue(name)) {
+           Services.prefs.clearUserPref(name);
+         }
+       } catch (_e) {}
++    };
++    for (const [name] of POLLUTION_PREFS) {
++      restore(name);
+     }
++    // 0053r2: after RFP/FPP are back, the stock category flip has already set
++    // the ETP-interaction flag (synchronous pref observers); restore it now
++    // and once more after any deferred category re-match.
++    for (const name of RESTORE_ONLY_PREFS) {
++      restore(name);
++    }
++    try {
++      Services.tm.idleDispatchToMainThread(() => {
++        for (const name of RESTORE_ONLY_PREFS) {
++          restore(name);
++        }
++      });
++    } catch (_e) {}
+     try {
+       Services.prefs.clearUserPref(SAVED_PREF);
+     } catch (_e) {}

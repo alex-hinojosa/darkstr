@@ -34,6 +34,17 @@ if (typeof navigator !== "undefined") {
   }
 }
 
+// darkstr 0055 (N6): Firefox personas claim the host engine's own
+// version (read from the real UA before any spoofing), never 139/140.
+const _engineFirefoxRv = (() => {
+  const m = /rv:(\d+)\.0\) Gecko\/20100101 Firefox\/(\d+)\.0/.exec((typeof navigator !== "undefined" ? String(navigator.userAgent) : ""));
+  return m && m[1] === m[2] ? `${m[1]}.0` : null;
+})();
+const ffUa = (os) =>
+  _engineFirefoxRv
+    ? `Mozilla/5.0 (${os}; rv:${_engineFirefoxRv}) Gecko/20100101 Firefox/${_engineFirefoxRv}`
+    : null;
+
 const UA_GROUPS = [
   {
     engine: "chromium",
@@ -72,10 +83,10 @@ const UA_GROUPS = [
     engine: "firefox",
     os: "windows",
     uas: [
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:140.0) Gecko/20100101 Firefox/140.0",
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:139.0) Gecko/20100101 Firefox/139.0",
+      ffUa("Windows NT 10.0; Win64; x64"),
     ],
     platform: "Win32",
+    appVersion: "5.0 (Windows)",
     gpus: [
       { vendor: "Intel", renderer: "Intel(R) UHD Graphics 630" },
       { vendor: "NVIDIA Corporation", renderer: "NVIDIA GeForce GTX 1060 6GB/PCIe/SSE2" },
@@ -88,9 +99,10 @@ const UA_GROUPS = [
     engine: "firefox",
     os: "macos",
     uas: [
-      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:140.0) Gecko/20100101 Firefox/140.0",
+      ffUa("Macintosh; Intel Mac OS X 10.15"),
     ],
     platform: "MacIntel",
+    appVersion: "5.0 (Macintosh)",
     gpus: [
       { vendor: "Apple", renderer: "Apple M1" },
       { vendor: "Apple", renderer: "Apple M2" },
@@ -102,11 +114,11 @@ const UA_GROUPS = [
     engine: "firefox",
     os: "linux",
     uas: [
-      "Mozilla/5.0 (X11; Linux x86_64; rv:140.0) Gecko/20100101 Firefox/140.0",
-      "Mozilla/5.0 (X11; Linux x86_64; rv:139.0) Gecko/20100101 Firefox/139.0",
-      "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:140.0) Gecko/20100101 Firefox/140.0",
+      ffUa("X11; Linux x86_64"),
+      ffUa("X11; Ubuntu; Linux x86_64"),
     ],
     platform: "Linux x86_64",
+    appVersion: "5.0 (X11)",
     gpus: [
       { vendor: "Intel", renderer: "Mesa Intel(R) UHD Graphics 630 (CFL GT2)" },
       { vendor: "NVIDIA Corporation", renderer: "NVIDIA GeForce GTX 1060 6GB/PCIe/SSE2" },
@@ -198,7 +210,7 @@ function pickFrom(arr, rng) {
 }
 
 const UA_GROUPS_FILTERED = UA_GROUPS.filter(
-  (g) => g.engine === _hostEngine && g.os === _hostOS
+  (g) => g.engine === _hostEngine && g.os === _hostOS && g.uas.every(Boolean)
 );
 
 function generateProfile(seed) {
@@ -209,6 +221,7 @@ function generateProfile(seed) {
   const gpu = pickFrom(group.gpus, rng);
   return {
     userAgent: ua,
+    appVersion: group.appVersion || ua.replace("Mozilla/", ""),
     platform: group.platform,
     hardwareConcurrency: pickFrom(CORES, rng),
     deviceMemory: pickFrom(MEMORY, rng),

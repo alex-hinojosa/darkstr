@@ -27,7 +27,7 @@ const FILES = join(root, "patches/0049-files");
 const FILES51 = join(root, "patches/0051-files");
 const FILES52 = join(root, "patches/0052-files");
 // Newest shipped copy of a module (later pins supersede earlier ones).
-const NEWER = ["0053-files", "0052-files"].map((d) => join(root, "patches", d));
+const NEWER = ["0055-files", "0053r2-files", "0053-files", "0052-files"].map((d) => join(root, "patches", d));
 const newest = (f, fallbackDir) => {
   for (const d of NEWER) {
     if (existsSync(join(d, f))) return join(d, f);
@@ -37,8 +37,13 @@ const newest = (f, fallbackDir) => {
 const shipped = (f) => newest(f, FILES);
 const src = (f) => readFileSync(shipped(f), "utf8");
 
-const NATIVE_UA =
+// 0055 (N6): a macOS persona now claims the engine's own UA, byte-identical
+// to the real native one. The stub's native value carries a marker so these
+// tests can still see which layer answered (persona vs native); the real
+// equality is asserted in persona-ff156-0055.test.mjs.
+const REAL_NATIVE_UA =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:156.0) Gecko/20100101 Firefox/156.0";
+const NATIVE_UA = REAL_NATIVE_UA + " (test: native header)";
 const NATIVE_AL = "en-US,en;q=0.9";
 const PID = 4242;
 const TOPIC = "darkstr-worker-persona-resolve";
@@ -62,6 +67,8 @@ function uri(url) {
   return { spec: url, scheme: u.protocol.slice(0, -1), host: u.hostname, asciiHost: u.hostname };
 }
 globalThis.Services = {
+  // 0055: personas derive their Firefox version from the engine.
+  appinfo: { version: "156.0.1", name: "LibreWolf" },
   prefs: {
     getBoolPref: getP,
     getStringPref: getP,
@@ -363,7 +370,9 @@ for (const [name, setup] of Object.entries(SETUPS)) {
     const page = navigate(t, "https://www.alpha.test/2");
     const pv = page.view();
     assert.notEqual(pv.ua, NATIVE_UA, `${name}: page armed`);
-    assert.match(pv.ua, /rv:140\.0\) Gecko\/20100101 Firefox\/140\.0$/);
+    // 0055 (N6): every persona — seed, session or a locked 140 snapshot —
+    // claims the engine's version.
+    assert.match(pv.ua, /rv:156\.0\) Gecko\/20100101 Firefox\/156\.0$/);
     const ded = startWorker({ wg: page.wg });
     assert.deepEqual(pick(ded), pv, `${name}: dedicated worker == page`);
     const shared = startWorker({ kind: "shared", origin: "https://www.alpha.test", partitionKey: "(https,alpha.test)" });
@@ -585,17 +594,19 @@ test("C++: WorkerNavigator serves the per-worker persona natively", () => {
   assert.match(cpp, /aIsChromeWorker\) \{\s*return nullptr;/);
 });
 
-test("persona versions and seed persistence untouched (N6 still open)", () => {
-  // 0052 removed the stale 0051 NativePersona copy; compare the shipped
-  // (0052) module with the 0049 one it was cut from.
+test("0055: persona versions follow the engine (N6 closed); seed persistence untouched", () => {
+  // 0055 replaced the 139/140 UA pool with the engine version
+  // (Services.appinfo.version); seed / snapshot persistence is unchanged.
   const np = src("DarkstrNativePersona.sys.mjs");
   const np49 = readFileSync(join(FILES, "DarkstrNativePersona.sys.mjs"), "utf8");
-  const ua = (s) => s.slice(s.indexOf("const FIREFOX_UA_GROUPS"), s.indexOf("const CORES"));
-  assert.ok(ua(np).length > 100);
-  assert.equal(ua(np), ua(np49), "UA pool identical to 0049");
+  assert.doesNotMatch(np, /rv:1[34]\d\.0|Firefox\/1[34]\d\.0/);
+  assert.match(np, /Services\.appinfo\.version/);
   const readSnap = (s) => s.slice(s.indexOf("  _readSnapshot() {"), s.indexOf("  _readSnapshotFromFfi("));
   assert.ok(readSnap(np).length > 100);
-  assert.equal(readSnap(np), readSnap(np49), "seed/snapshot persistence identical to 0049");
+  // Only the locked UA line changed (engine version, 0055).
+  const norm = (t) => t.replace("userAgent: withEngineFirefoxVersion(parsed.userAgent),", "userAgent: parsed.userAgent,")
+    .replace(/\n\s*\/\/ 0055 \(N6\): an operator lock[^\n]*\n[^\n]*\n/, "\n");
+  assert.equal(norm(readSnap(np)), readSnap(np49), "seed/snapshot persistence identical to 0049");
 });
 
 // ------------------------------------------------------------- 0049r2 ---

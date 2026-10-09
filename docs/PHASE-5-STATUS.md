@@ -504,6 +504,113 @@ All five 0043 Worker/SharedWorker WebGPU XOR gates passed on Proof tip `cc692641
 - Evidence: `~/AgentDocs/proof/darkstr-pr74-0043-xor-20260928-084400/`
 - Apply log: `~/AgentDocs/proof/darkstr-pr74-0043-xor-20260928-084400/darkstr-apply-0043-20260928-084400.log`
 
+## In review — 0055 personas claim the engine's Firefox version (Fable N6 + O9; O12 r2)
+
+| | |
+|---|---|
+| Pin | **0055**: Fable **N6** (decided by Alex: personas claim Firefox 156, the engine's own version), **O9** (seed fallback table: timezone, must match Rust), **O12 r2** (worker Intl locale == page Intl locale; see below) |
+| Branch | `builder/0055-persona-ff156` from `builder/0053-off-mode-hands-off` @ `09062b32` (stacked; needs 0052 + 0053) |
+| Patch | [`patches/0055-darkstr-persona-ff156.patch`](../patches/0055-darkstr-persona-ff156.patch) + `patches/0055-files/` (DarkstrNativePersona, DarkstrFfi, duppel-persona `lib.rs` / `build.rs` / `gecko-milestone.txt`, duppel-ffi `lib.rs` + `SHA256SUMS`) |
+| Apply | `scripts/apply-0055-persona-ff156-mini.sh` (Rust gkrust + chrome JS → libxul relinks; restores the 0049 hooks C++ on a tree that has r1) |
+| Tests | `tests/persona-ff156-0055.test.mjs`; `cargo test` (`n6_*`, goldens `fixtures/persona-goldens-0055.json`); 0049/0051 tests updated (persona UA == native UA on Mac is now expected) |
+| DMG | `~/AgentDocs/builds/darkstr-0055-a89d3e83.dmg` (+ `.sha256`): respin = 0055 r2 + 0053r2. r1 was `darkstr-0055-859635f7.dmg` |
+| Evidence | `~/AgentDocs/proof/darkstr-0055-persona-ff156-20261009-022132/` |
+
+### Bug
+
+- **N6.** Rust (`crates/duppel-persona/src/lib.rs:406-453`), the chrome seed fallback
+  (`DarkstrNativePersona` 147-171) and the extension (`extension/lib/profiles.js`)
+  hard-coded Firefox **139 / 140** UAs on a 156 engine. Every persona claimed a
+  version the engine's features, headers and JS behaviour contradict.
+- **O9.** The chrome fallback (used when the native library fails to load) had its
+  own smaller tables, no timezone, and a different draw order. The same seed gave a
+  different persona with and without the library.
+- **O12 (as filed).** Persona workers got `navigator.languages` from the persona, but
+  their JS locale (`Intl.*().resolvedOptions().locale`) stayed the app locale.
+
+### Fix
+
+- **One source of truth for the version: the engine.**
+  - Rust: `build.rs` reads Gecko's `config/milestone.txt` (from `DARKSTR_MILESTONE_TXT`,
+    then any ancestor `config/milestone.txt`, then `$DARKSTR_GECKO_ROOT`). Outside a
+    Gecko tree (CI) it uses `crates/duppel-persona/gecko-milestone.txt` with a
+    `cargo:warning`. It generates `firefox_ua!(os)`, and every UA table entry is
+    `firefox_ua!("<OS token>")`. `Persona::app_version()` returns Firefox's
+    `navigator.appVersion` ("5.0 (Macintosh)" / "5.0 (Windows)" / "5.0 (X11)"), and the
+    FFI JSON carries it (`DarkstrFfi` passes it through).
+  - Chrome: the version comes from `Services.appinfo.version` at runtime.
+    - An FFI snapshot that claims any other version is not used; the engine-derived
+      fallback is used instead.
+    - An operator-locked `darkstr.persona.snapshot` keeps its OS token and fields, but
+      its Firefox UA is rewritten to the engine version.
+  - Tables: Windows `Windows NT 10.0; Win64; x64`; macOS `Macintosh; Intel Mac OS X 10.15`;
+    Linux `X11; Linux x86_64` and `X11; Ubuntu; Linux x86_64`. The RNG draw order is
+    unchanged, so a seed keeps its hardware / languages / timezone, and only the UA
+    string changes (`fixtures/seed-goldens.json`: only `userAgent` moved, 140 → 156).
+- **O9.** `generatePersonaFallback(seed, os)` is an exact port of `generate_persona`:
+  the same tables (cores, memory, languages, **timezones**), the same mulberry32 draws
+  (gpu / screen / colour depth consumed), and the same clamp. Rust writes and checks
+  `fixtures/persona-goldens-0055.json`, and the JS test checks the same file.
+- **O12 r2 (Proof review of #86).** r1 set `WorkerLoadInfo.mLanguageOverrideLocale =
+  languages[0]`. That made an armed worker's Intl say `en-GB` while its page said `en-US`,
+  a page/worker split that stock never shows. In stock Firefox, Intl in pages **and** workers
+  uses the app locale, independent of Accept-Language and `navigator.languages`, so a
+  `navigator.languages` vs Intl difference is normal. r2 drops the C++ change: 0055 ships
+  no `DarkstrNavigatorHooks.cpp`, and the apply script puts a tree that has r1 back to the
+  0049 copy. Workers keep the persona `navigator.languages` (0049). Intl locale and
+  timezone agree between the page and every worker (self-test).
+
+### Notes for Proof
+
+- **On macOS a persona UA is now byte-identical to the native UA** (same OS token, same
+  version). Persona differentiation on Mac comes from `hardwareConcurrency`,
+  `navigator.languages` and timezone (plus depth seeds), not the UA. "UA != native" is
+  no longer an "armed" signal; the 0049/0051 tests use a marked stub native UA for that.
+- **Intl locale is the app locale everywhere** (pages and workers), as in stock. It does
+  not follow the persona's `navigator.languages`; that is stock behaviour, not a split.
+- The extension is **not bundled** (the app ships only uBlock through policies). It was
+  updated anyway: UAs come from the real engine version, `appVersion` is per OS, and the
+  bootstrap was regenerated with esbuild. Chromium UA groups are unchanged.
+- Rust `mode_pref_effects` is untouched (0053).
+
+## In review — 0053r2 ETP-interaction flag restored after Pollution (Proof follow-up to 0053)
+
+| | |
+|---|---|
+| Pin | **0053r2**: after a Pollution round trip, `privacy.trackingprotection.allow_list.hasUserInteractedWithETPSettings=true` stayed set (Proof) |
+| Where | Separate commit in the 0055 respin (PR #86); 0053 itself is merged (#85). The respin DMG carries 0053r2 + 0055 r2 |
+| Patch | [`patches/0053r2-darkstr-etp-interaction.patch`](../patches/0053r2-darkstr-etp-interaction.patch) + `patches/0053r2-files/` (DarkstrModeXor + `SHA256SUMS`) |
+| Apply | `scripts/apply-0053r2-etp-interaction-mini.sh` (after 0053; chrome JS only; independent of 0055) |
+| Tests | `tests/off-mode-hands-off-0053.test.mjs` (loads the newest ModeXor; stock CB-category / allow-list observers simulated) |
+
+**Cause.** Stock Gecko's `UrlClassifierExceptionListService` sets the flag on **any**
+`browser.contentblocking.category` change. Under Pollution, FPP=false makes
+`ContentBlockingPrefs.matchCBCategory` flip the category (strict → custom on entry),
+so the flag is set as a side effect. The flip can't be avoided: the category
+follows FPP. The observers only exist after the service's `lazyInit` (first
+classified page load), so a run that never loads a page doesn't reproduce it.
+
+**Fix.** On entry, ModeXor saves the flag's pre-Pollution state (user value or none)
+in `darkstr.xor.savedPrefs` along with RFP / FPP / `librewolf.webgl.prompt`.
+darkstr never *sets* the flag. On leaving, it restores the flag after RFP/FPP are
+back (the stock flip-back has already run, because pref observers are synchronous),
+and once more on idle in case of a late category re-match. Off mode still writes
+nothing. A state saved by 0053 before r2 has no record of the flag; the flag is
+then left alone rather than guessed. A real user interaction *during* Pollution is
+also undone on exit (indistinguishable from the stock side effect).
+
+**Live (sandboxed, port 8299, after a page load).** 0053 DMG `924c6036`: flag
+false → true (Pollution) → true after off → true after restart (bug reproduced).
+Respin `a89d3e83`: false → true → **false** → **false** (default, no user value,
+not in prefs.js). Evidence `~/AgentDocs/proof/darkstr-0055-persona-ff156-20261009-022132/selftest/live-etp-negctl-0053`, `live-r2-etp`.
+
+**Residual (not changed here, same on 0053).** After leaving Pollution,
+`browser.contentblocking.category` stays `custom` for the rest of the session. The
+next startup's `matchCBCategory` puts it back to `strict`. Restoring the category
+from ModeXor would re-trigger the stock observer (the flag restore would have to
+follow it again) and re-apply the category's pref set. Proposed as a small
+follow-up if Proof wants in-session parity.
+
 ## In review — 0053 off mode leaves prefs alone (Fable QA B5)
 
 | | |

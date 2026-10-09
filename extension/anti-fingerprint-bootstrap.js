@@ -55,6 +55,11 @@ function bootstrapAntiFingerprint(seed) {
     if (/Windows/.test(_realUA)) _hostOS = "windows";
     else if (/Macintosh|Mac OS X/.test(_realUA)) _hostOS = "macos";
     else if (/Linux|CrOS/.test(_realUA)) _hostOS = "linux";
+    const _engineFirefoxRv = (() => {
+      const m = /rv:(\d+)\.0\) Gecko\/20100101 Firefox\/(\d+)\.0/.exec(_realUA);
+      return m && m[1] === m[2] ? `${m[1]}.0` : null;
+    })();
+    const ffUa = /* @__PURE__ */ __name((os) => _engineFirefoxRv ? `Mozilla/5.0 (${os}; rv:${_engineFirefoxRv}) Gecko/20100101 Firefox/${_engineFirefoxRv}` : null, "ffUa");
     const UA_GROUPS = [
       {
         engine: "chromium",
@@ -93,10 +98,10 @@ function bootstrapAntiFingerprint(seed) {
         engine: "firefox",
         os: "windows",
         uas: [
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:140.0) Gecko/20100101 Firefox/140.0",
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:139.0) Gecko/20100101 Firefox/139.0"
+          ffUa("Windows NT 10.0; Win64; x64")
         ],
         platform: "Win32",
+        appVersion: "5.0 (Windows)",
         gpus: [
           { vendor: "Intel", renderer: "Intel(R) UHD Graphics 630" },
           { vendor: "NVIDIA Corporation", renderer: "NVIDIA GeForce GTX 1060 6GB/PCIe/SSE2" },
@@ -109,9 +114,10 @@ function bootstrapAntiFingerprint(seed) {
         engine: "firefox",
         os: "macos",
         uas: [
-          "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:140.0) Gecko/20100101 Firefox/140.0"
+          ffUa("Macintosh; Intel Mac OS X 10.15")
         ],
         platform: "MacIntel",
+        appVersion: "5.0 (Macintosh)",
         gpus: [
           { vendor: "Apple", renderer: "Apple M1" },
           { vendor: "Apple", renderer: "Apple M2" },
@@ -123,11 +129,11 @@ function bootstrapAntiFingerprint(seed) {
         engine: "firefox",
         os: "linux",
         uas: [
-          "Mozilla/5.0 (X11; Linux x86_64; rv:140.0) Gecko/20100101 Firefox/140.0",
-          "Mozilla/5.0 (X11; Linux x86_64; rv:139.0) Gecko/20100101 Firefox/139.0",
-          "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:140.0) Gecko/20100101 Firefox/140.0"
+          ffUa("X11; Linux x86_64"),
+          ffUa("X11; Ubuntu; Linux x86_64")
         ],
         platform: "Linux x86_64",
+        appVersion: "5.0 (X11)",
         gpus: [
           { vendor: "Intel", renderer: "Mesa Intel(R) UHD Graphics 630 (CFL GT2)" },
           { vendor: "NVIDIA Corporation", renderer: "NVIDIA GeForce GTX 1060 6GB/PCIe/SSE2" },
@@ -211,7 +217,7 @@ function bootstrapAntiFingerprint(seed) {
     }
     __name(pickFrom, "pickFrom");
     const _hostEngine = _isFirefox ? "firefox" : "chromium";
-    const UA_GROUPS_FILTERED = UA_GROUPS.filter((g) => g.engine === _hostEngine && g.os === _hostOS);
+    const UA_GROUPS_FILTERED = UA_GROUPS.filter((g) => g.engine === _hostEngine && g.os === _hostOS && g.uas.every(Boolean));
     function generateProfile(seed2) {
       if (UA_GROUPS_FILTERED.length === 0) return null;
       const rng = mulberry32(seed2);
@@ -220,6 +226,7 @@ function bootstrapAntiFingerprint(seed) {
       const gpu = pickFrom(group.gpus, rng);
       return {
         userAgent: ua,
+        appVersion: group.appVersion || ua.replace("Mozilla/", ""),
         platform: group.platform,
         hardwareConcurrency: pickFrom(CORES, rng),
         deviceMemory: pickFrom(MEMORY, rng),
@@ -395,7 +402,7 @@ function bootstrapAntiFingerprint(seed) {
     spoof(Navigator.prototype, "language", () => profile.languages[0]);
     spoof(Navigator.prototype, "webdriver", () => false);
     spoof(Navigator.prototype, "vendor", () => profile.userAgent.includes("Firefox") ? "" : "Google Inc.");
-    spoof(Navigator.prototype, "appVersion", () => profile.userAgent.replace("Mozilla/", ""));
+    spoof(Navigator.prototype, "appVersion", () => profile.appVersion || profile.userAgent.replace("Mozilla/", ""));
     spoof(Navigator.prototype, "maxTouchPoints", () => 0);
     spoof(Navigator.prototype, "globalPrivacyControl", () => true);
     const _origReferrer = document.referrer;
@@ -1697,7 +1704,7 @@ function bootstrapAntiFingerprint(seed) {
     Object.defineProperty(self.navigator.__proto__, "deviceMemory", { get: () => ${profile.deviceMemory} });
     Object.defineProperty(self.navigator.__proto__, "language", { get: () => ${JSON.stringify(profile.languages[0])} });
     Object.defineProperty(self.navigator.__proto__, "languages", { get: () => Object.freeze(${JSON.stringify(profile.languages)}) });
-    Object.defineProperty(self.navigator.__proto__, "appVersion", { get: () => ${JSON.stringify(profile.userAgent.replace("Mozilla/", ""))} });
+    Object.defineProperty(self.navigator.__proto__, "appVersion", { get: () => ${JSON.stringify(profile.appVersion || profile.userAgent.replace("Mozilla/", ""))} });
   `;
     }
     __name(buildWorkerOverrides, "buildWorkerOverrides");

@@ -1,0 +1,544 @@
+diff -ruN a/browser/components/DarkstrFfi.sys.mjs b/browser/components/DarkstrFfi.sys.mjs
+--- a/browser/components/DarkstrFfi.sys.mjs
++++ b/browser/components/DarkstrFfi.sys.mjs
+@@ -202,6 +202,10 @@
+   }
+   return {
+     userAgent: parsed.userAgent,
++    // 0055 (N6): Firefox navigator.appVersion ("5.0 (Macintosh)"), from the
++    // same native table as userAgent.
++    appVersion:
++      typeof parsed.appVersion === "string" ? parsed.appVersion : undefined,
+     platform: parsed.platform || "MacIntel",
+     hardwareConcurrency: parsed.hardwareConcurrency || 8,
+     deviceMemory: parsed.deviceMemory || 8,
+diff -ruN a/browser/components/DarkstrNativePersona.sys.mjs b/browser/components/DarkstrNativePersona.sys.mjs
+--- a/browser/components/DarkstrNativePersona.sys.mjs
++++ b/browser/components/DarkstrNativePersona.sys.mjs
+@@ -178,39 +178,89 @@
+   "sec-ch-ua-wow64",
+ ];
+ 
+-// Minimal Firefox×macOS / windows / linux families for seed fallback (host-OS filtered).
++// 0055 (Fable N6 / O9): seed fallback used when the in-libxul Rust persona
++// (DarkstrFfi → duppel_persona::generate_persona) is unavailable. It is an
++// exact port of generate_persona: same tables, same mulberry32 draw order, so
++// a seed gives the same persona with or without the native library
++// (fixtures/persona-goldens-0055.json). UAs claim the engine's own Firefox
++// version (Services.appinfo.version), never a hard-coded one.
+ const FIREFOX_UA_GROUPS = [
+   {
+-    os: "macos",
+-    platform: "MacIntel",
+-    uas: [
+-      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:140.0) Gecko/20100101 Firefox/140.0",
+-    ],
+-  },
+-  {
+     os: "windows",
+     platform: "Win32",
+-    uas: [
+-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:140.0) Gecko/20100101 Firefox/140.0",
+-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:139.0) Gecko/20100101 Firefox/139.0",
+-    ],
++    appVersion: "5.0 (Windows)",
++    uaOs: ["Windows NT 10.0; Win64; x64"],
+   },
+   {
++    os: "macos",
++    platform: "MacIntel",
++    appVersion: "5.0 (Macintosh)",
++    uaOs: ["Macintosh; Intel Mac OS X 10.15"],
++  },
++  {
+     os: "linux",
+     platform: "Linux x86_64",
+-    uas: [
+-      "Mozilla/5.0 (X11; Linux x86_64; rv:140.0) Gecko/20100101 Firefox/140.0",
+-    ],
++    appVersion: "5.0 (X11)",
++    uaOs: ["X11; Linux x86_64", "X11; Ubuntu; Linux x86_64"],
+   },
+ ];
+-
+-const CORES = [4, 8, 10, 12, 16];
+-const MEMORY = [4, 8, 16, 32];
++const CORES = [2, 4, 6, 8, 10, 12, 16];
++const MEMORY = [4, 8];
+ const LANGUAGES = [
+   ["en-US", "en"],
++  ["en-US", "en", "es"],
+   ["en-GB", "en"],
++  ["en-US"],
++  ["en-US", "en", "fr"],
++  ["en-US", "en", "de"],
+ ];
++const TIMEZONES = [
++  "America/New_York",
++  "America/Chicago",
++  "America/Denver",
++  "America/Los_Angeles",
++  "America/Phoenix",
++  "Europe/London",
++  "Europe/Berlin",
++  "America/Toronto",
++];
+ 
++/** "<major>.0" of the running engine (Services.appinfo.version), or null. */
++export function engineFirefoxRv() {
++  try {
++    const m = /^(\d+)\./.exec(String(Services.appinfo.version || ""));
++    return m ? `${m[1]}.0` : null;
++  } catch (_e) {
++    return null;
++  }
++}
++
++/** Firefox desktop UA for an OS token at version rv (Gecko's own format). */
++export function firefoxUserAgent(uaOs, rv) {
++  return `Mozilla/5.0 (${uaOs}; rv:${rv}) Gecko/20100101 Firefox/${rv}`;
++}
++
++/**
++ * A Firefox desktop UA with its rv:/Firefox/ version replaced by the engine's
++ * (other UAs, or an unknown engine version, are returned unchanged).
++ */
++export function withEngineFirefoxVersion(ua) {
++  const rv = engineFirefoxRv();
++  const m = /^Mozilla\/5\.0 \(([^()]+); rv:\d+\.\d+\) Gecko\/20100101 Firefox\/\d+\.\d+$/.exec(
++    String(ua)
++  );
++  return rv && m ? firefoxUserAgent(m[1], rv) : String(ua);
++}
++
++/** True when a UA claims exactly the engine's Firefox version. */
++function claimsEngineVersion(ua, rv) {
++  return (
++    !!rv &&
++    typeof ua === "string" &&
++    ua.endsWith(`; rv:${rv}) Gecko/20100101 Firefox/${rv}`)
++  );
++}
++
+ function mulberry32(seed) {
+   return function () {
+     seed |= 0;
+@@ -222,7 +272,7 @@
+ }
+ 
+ function pickFrom(arr, rng) {
+-  return arr[Math.floor(rng() * arr.length)];
++  return arr[Math.min(Math.floor(rng() * arr.length), arr.length - 1)];
+ }
+ 
+ function detectHostOs() {
+@@ -240,6 +290,39 @@
+   return "windows";
+ }
+ 
++/**
++ * 0055 (O9): seed → persona without the native library; must equal
++ * duppel_persona::generate_persona(seed, Firefox, os) (shared goldens).
++ */
++export function generatePersonaFallback(seed, os) {
++  const rv = engineFirefoxRv();
++  if (!rv) {
++    return null;
++  }
++  const rng = mulberry32(seed >>> 0);
++  const groups = FIREFOX_UA_GROUPS.filter(g => g.os === os);
++  const group = pickFrom(groups.length ? groups : [FIREFOX_UA_GROUPS[0]], rng);
++  const uaOs = pickFrom(group.uaOs, rng);
++  // Rust draws gpu then screen here (depth surface; not in the navigator
++  // snapshot) — consume the same two values.
++  rng();
++  rng();
++  const languages = pickFrom(LANGUAGES, rng).slice();
++  const hardwareConcurrency = pickFrom(CORES, rng);
++  const deviceMemory = pickFrom(MEMORY, rng);
++  rng(); // colorDepth (Rust COLOR_DEPTHS)
++  const timezone = pickFrom(TIMEZONES, rng);
++  return {
++    userAgent: firefoxUserAgent(uaOs, rv),
++    platform: group.platform,
++    appVersion: group.appVersion,
++    hardwareConcurrency,
++    deviceMemory,
++    languages,
++    timezone,
++  };
++}
++
+ export var DarkstrNativePersona = {
+   /** 0052: in-memory diagnostics (what used to be darkstr.*.last* prefs). */
+   getDiagnostics() {
+@@ -1042,7 +1125,9 @@
+         const parsed = JSON.parse(raw);
+         if (parsed && typeof parsed.userAgent === "string") {
+           return {
+-            userAgent: parsed.userAgent,
++            // 0055 (N6): an operator lock keeps its OS token / fields, but
++            // a Firefox UA claims the engine's own version.
++            userAgent: withEngineFirefoxVersion(parsed.userAgent),
+             platform: parsed.platform || "MacIntel",
+             hardwareConcurrency: parsed.hardwareConcurrency || 8,
+             deviceMemory: parsed.deviceMemory || 8,
+@@ -1090,6 +1175,18 @@
+       );
+       const snap = DarkstrFfi.personaSnapshotFromSeed(seed, detectHostOs());
+       if (snap && typeof snap.userAgent === "string") {
++        // 0055 (N6): the native table is built from config/milestone.txt; a
++        // library from another train would claim another version — use the
++        // engine-derived fallback instead of a mismatched UA.
++        const rv = engineFirefoxRv();
++        if (!claimsEngineVersion(snap.userAgent, rv)) {
++          console.warn(
++            "DarkstrNativePersona: FFI persona version != engine",
++            rv,
++            snap.userAgent
++          );
++          return null;
++        }
+         // 0051 (N5): never persisted to darkstr.persona.snapshot (that pref
+         // is an explicit operator lock only; see _rotationLocked).
+         return snap;
+@@ -1104,18 +1201,13 @@
+     return null;
+   },
+ 
++  /**
++   * 0055 (O9): exact port of duppel_persona::generate_persona for the host OS
++   * (same draw order: group, ua, gpu, screen, languages, cores, memory,
++   * colorDepth, timezone). Null when the engine version is unknown.
++   */
+   _generateFromSeed(seed) {
+-    const rng = mulberry32(seed);
+-    const os = detectHostOs();
+-    const group =
+-      FIREFOX_UA_GROUPS.find(g => g.os === os) || FIREFOX_UA_GROUPS[0];
+-    return {
+-      userAgent: pickFrom(group.uas, rng),
+-      platform: group.platform,
+-      hardwareConcurrency: pickFrom(CORES, rng),
+-      deviceMemory: pickFrom(MEMORY, rng),
+-      languages: pickFrom(LANGUAGES, rng),
+-    };
++    return generatePersonaFallback(seed, detectHostOs());
+   },
+ 
+   /** Tab key for phase counting: BrowserId is tab-stable across Fission swaps. */
+diff -ruN a/third_party/darkstr/duppel-ffi/src/lib.rs b/third_party/darkstr/duppel-ffi/src/lib.rs
+--- a/third_party/darkstr/duppel-ffi/src/lib.rs
++++ b/third_party/darkstr/duppel-ffi/src/lib.rs
+@@ -62,9 +62,10 @@
+         .collect::<Vec<_>>()
+         .join(",");
+     let json = format!(
+-        "{{\"userAgent\":\"{}\",\"platform\":\"{}\",\"hardwareConcurrency\":{},\"deviceMemory\":{},\"languages\":[{}],\"timezone\":\"{}\"}}",
++        "{{\"userAgent\":\"{}\",\"platform\":\"{}\",\"appVersion\":\"{}\",\"hardwareConcurrency\":{},\"deviceMemory\":{},\"languages\":[{}],\"timezone\":\"{}\"}}",
+         escape(p.user_agent),
+         escape(p.platform),
++        escape(p.app_version()),
+         p.hardware_concurrency,
+         p.device_memory,
+         langs,
+@@ -130,7 +131,10 @@
+         assert!(!ptr.is_null());
+         let json = unsafe { CStr::from_ptr(ptr) }.to_str().unwrap().to_string();
+         unsafe { darkstr_ffi_string_free(ptr) };
+-        assert!(json.contains("Firefox/140.0"));
++        // 0055 (N6): the engine's own version, never a hard-coded one.
++        let rv = duppel_persona::FIREFOX_RV;
++        assert!(json.contains(&format!("rv:{rv}) Gecko/20100101 Firefox/{rv}\"")));
++        assert!(json.contains("\"appVersion\":\"5.0 (Macintosh)\""));
+         assert!(json.contains("MacIntel"));
+         assert!(json.contains("\"hardwareConcurrency\":8"));
+         // Match fixtures/seed-goldens.json vector seed=42 macos
+diff -ruN a/third_party/darkstr/duppel-persona/build.rs b/third_party/darkstr/duppel-persona/build.rs
+--- a/third_party/darkstr/duppel-persona/build.rs
++++ b/third_party/darkstr/duppel-persona/build.rs
+@@ -0,0 +1,75 @@
++//! darkstr 0055 (Fable N6): personas claim the engine's own Firefox version.
++//!
++//! The version is read at build time from Gecko's `config/milestone.txt`
++//! (found by walking up from this crate; inside the LibreWolf tree the crate
++//! lives at `third_party/darkstr/duppel-persona`). `DARKSTR_MILESTONE_TXT` or
++//! `$DARKSTR_GECKO_ROOT/config/milestone.txt` can point at it explicitly.
++//! Standalone checkouts (CI `cargo test`, no Gecko tree) use
++//! `gecko-milestone.txt`, a copy of the pinned train's milestone, and print a
++//! cargo warning.
++use std::env;
++use std::fs;
++use std::path::{Path, PathBuf};
++
++fn milestone_from(path: &Path) -> Option<String> {
++    let text = fs::read_to_string(path).ok()?;
++    text.lines()
++        .map(str::trim)
++        .filter(|l| !l.is_empty() && !l.starts_with('#'))
++        .last()
++        .map(str::to_owned)
++}
++
++fn main() {
++    println!("cargo:rerun-if-env-changed=DARKSTR_MILESTONE_TXT");
++    println!("cargo:rerun-if-env-changed=DARKSTR_GECKO_ROOT");
++    println!("cargo:rerun-if-changed=build.rs");
++    let manifest = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
++    let fallback = manifest.join("gecko-milestone.txt");
++    let mut candidates: Vec<(PathBuf, &str)> = Vec::new();
++    if let Ok(p) = env::var("DARKSTR_MILESTONE_TXT") {
++        candidates.push((PathBuf::from(p), "gecko-config"));
++    }
++    for dir in manifest.ancestors().skip(1) {
++        candidates.push((dir.join("config").join("milestone.txt"), "gecko-config"));
++    }
++    if let Ok(root) = env::var("DARKSTR_GECKO_ROOT") {
++        candidates.push((PathBuf::from(root).join("config").join("milestone.txt"), "gecko-config"));
++    }
++    candidates.push((fallback.clone(), "fallback"));
++    let (path, source, milestone) = candidates
++        .iter()
++        .find_map(|(p, s)| milestone_from(p).map(|m| (p.clone(), *s, m)))
++        .expect("darkstr: no config/milestone.txt and no gecko-milestone.txt");
++    println!("cargo:rerun-if-changed={}", path.display());
++    if source == "fallback" {
++        println!(
++            "cargo:warning=duppel-persona: no Gecko config/milestone.txt found; using gecko-milestone.txt ({milestone})"
++        );
++    }
++    assert!(
++        milestone.chars().all(|c| c.is_ascii_alphanumeric() || c == '.'),
++        "unexpected milestone {milestone:?}"
++    );
++    let major: u32 = milestone
++        .chars()
++        .take_while(|c| c.is_ascii_digit())
++        .collect::<String>()
++        .parse()
++        .expect("milestone major version");
++    let rv = format!("{major}.0");
++    let out = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR")).join("engine_version.rs");
++    let code = format!(
++        "/// Gecko milestone this persona table was built against (config/milestone.txt).\n\
++         pub const ENGINE_MILESTONE: &str = \"{milestone}\";\n\
++         /// \"gecko-config\" (the engine tree) or \"fallback\" (gecko-milestone.txt).\n\
++         pub const ENGINE_MILESTONE_SOURCE: &str = \"{source}\";\n\
++         /// Engine major version (Firefox/<major>.0 in every persona UA).\n\
++         pub const FIREFOX_MAJOR: u32 = {major};\n\
++         /// \"<major>.0\" as it appears in `rv:` and `Firefox/`.\n\
++         pub const FIREFOX_RV: &str = \"{rv}\";\n\
++         /// Firefox desktop UA for an OS token, at the engine's version.\n\
++         macro_rules! firefox_ua {{\n    ($os:literal) => {{\n        concat!(\"Mozilla/5.0 (\", $os, \"; rv:{rv}) Gecko/20100101 Firefox/{rv}\")\n    }};\n}}\n"
++    );
++    fs::write(out, code).expect("write engine_version.rs");
++}
+diff -ruN a/third_party/darkstr/duppel-persona/gecko-milestone.txt b/third_party/darkstr/duppel-persona/gecko-milestone.txt
+--- a/third_party/darkstr/duppel-persona/gecko-milestone.txt
++++ b/third_party/darkstr/duppel-persona/gecko-milestone.txt
+@@ -0,0 +1,5 @@
++# darkstr 0055: copy of the pinned train's config/milestone.txt (LibreWolf
++# 156.0.1-1 / FIREFOX_156_0_1_RELEASE). Only used when the crate is built
++# outside the Gecko tree (CI cargo test); the shipped build reads the tree's
++# config/milestone.txt. tests check the two agree when DARKSTR_GECKO_ROOT is set.
++156.0.1
+diff -ruN a/third_party/darkstr/duppel-persona/src/lib.rs b/third_party/darkstr/duppel-persona/src/lib.rs
+--- a/third_party/darkstr/duppel-persona/src/lib.rs
++++ b/third_party/darkstr/duppel-persona/src/lib.rs
+@@ -14,6 +14,11 @@
+ /// Crate API version string (bumps when snapshot fields change).
+ pub const VERSION: &str = "0.1.0-phase2-m4";
+ 
++// darkstr 0055 (Fable N6): Firefox personas claim the engine's own version.
++// ENGINE_MILESTONE / FIREFOX_MAJOR / FIREFOX_RV and the `firefox_ua!` macro
++// are generated by build.rs from Gecko's config/milestone.txt.
++include!(concat!(env!("OUT_DIR"), "/engine_version.rs"));
++
+ /// Chrome / about:config pref names (stable Phase 1 → 2 Proof pin).
+ pub mod prefs {
+     /// XOR mode: `"homogeneous"` | `"pollution"`.
+@@ -195,6 +200,23 @@
+         Ok(())
+     }
+ 
++    /// `navigator.appVersion` Gecko itself reports for this persona's OS
++    /// (dom/base/Navigator.cpp GetAppVersion: "5.0 (<platform family>)").
++    /// Chromium personas: the UA without the "Mozilla/" prefix.
++    pub fn app_version(&self) -> &'static str {
++        match self.engine {
++            Engine::Firefox => match self.os {
++                HostOs::Windows => "5.0 (Windows)",
++                HostOs::Macos => "5.0 (Macintosh)",
++                HostOs::Linux => "5.0 (X11)",
++            },
++            Engine::Chromium => self
++                .user_agent
++                .strip_prefix("Mozilla/")
++                .unwrap_or(self.user_agent),
++        }
++    }
++
+     /// Canvas 2D noise seed (M4 depth surface — control plane only).
+     pub fn depth_canvas_seed(&self) -> u32 {
+         self.canvas_seed
+@@ -402,10 +424,8 @@
+ static FIREFOX_WINDOWS: UaGroup = UaGroup {
+     engine: Engine::Firefox,
+     os: HostOs::Windows,
+-    uas: &[
+-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:140.0) Gecko/20100101 Firefox/140.0",
+-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:139.0) Gecko/20100101 Firefox/139.0",
+-    ],
++    // 0055: one UA per OS family, at the engine version (no 139/140).
++    uas: &[firefox_ua!("Windows NT 10.0; Win64; x64")],
+     platform: "Win32",
+     gpus: &[
+         GpuInfo {
+@@ -426,7 +446,7 @@
+ static FIREFOX_MACOS: UaGroup = UaGroup {
+     engine: Engine::Firefox,
+     os: HostOs::Macos,
+-    uas: &["Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:140.0) Gecko/20100101 Firefox/140.0"],
++    uas: &[firefox_ua!("Macintosh; Intel Mac OS X 10.15")],
+     platform: "MacIntel",
+     gpus: &[
+         GpuInfo {
+@@ -448,9 +468,8 @@
+     engine: Engine::Firefox,
+     os: HostOs::Linux,
+     uas: &[
+-        "Mozilla/5.0 (X11; Linux x86_64; rv:140.0) Gecko/20100101 Firefox/140.0",
+-        "Mozilla/5.0 (X11; Linux x86_64; rv:139.0) Gecko/20100101 Firefox/139.0",
+-        "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:140.0) Gecko/20100101 Firefox/140.0",
++        firefox_ua!("X11; Linux x86_64"),
++        firefox_ua!("X11; Ubuntu; Linux x86_64"),
+     ],
+     platform: "Linux x86_64",
+     gpus: &[
+@@ -728,6 +747,126 @@
+ 
+ #[cfg(test)]
+ mod tests {
++    // --- 0055 (Fable N6 / O9): engine-version personas + shared goldens ---
++
++    const GOLDEN_SEEDS: &[u32] = &[
++        0, 1, 2, 3, 7, 42, 99, 1000, 65_535, 123_456_789, 3_735_928_559, 4_294_967_295,
++    ];
++
++    fn firefox_uas() -> Vec<&'static str> {
++        ALL_FIREFOX_GROUPS.iter().flat_map(|g| g.uas.iter().copied()).collect()
++    }
++
++    #[test]
++    fn n6_every_firefox_ua_claims_the_engine_version() {
++        let rv = FIREFOX_RV;
++        assert_eq!(rv, format!("{FIREFOX_MAJOR}.0"));
++        assert!(ENGINE_MILESTONE.starts_with(&format!("{FIREFOX_MAJOR}.")));
++        for ua in firefox_uas() {
++            assert!(ua.contains(&format!("; rv:{rv}) Gecko/20100101 Firefox/{rv}")), "{ua}");
++            for old in [139u32, 140] {
++                assert!(!ua.contains(&format!("rv:{old}.")), "{ua}");
++            }
++            assert_eq!(ua.matches("Firefox/").count(), 1, "{ua}");
++        }
++        assert_eq!(FIREFOX_WINDOWS.uas.len(), 1);
++        assert_eq!(FIREFOX_MACOS.uas.len(), 1);
++        assert_eq!(FIREFOX_LINUX.uas.len(), 2);
++    }
++
++    #[test]
++    fn n6_milestone_matches_the_gecko_tree_when_known() {
++        // In-tree builds read config/milestone.txt directly; the standalone
++        // fallback copy must not drift from the pinned tree.
++        if let Ok(root) = std::env::var("DARKSTR_GECKO_ROOT") {
++            let p = std::path::Path::new(&root).join("config/milestone.txt");
++            if let Ok(text) = std::fs::read_to_string(p) {
++                let tree = text
++                    .lines()
++                    .map(str::trim)
++                    .filter(|l| !l.is_empty() && !l.starts_with('#'))
++                    .last()
++                    .unwrap()
++                    .to_string();
++                assert_eq!(ENGINE_MILESTONE, tree);
++            }
++        }
++        let fallback = include_str!("../gecko-milestone.txt");
++        let pinned = fallback
++            .lines()
++            .map(str::trim)
++            .filter(|l| !l.is_empty() && !l.starts_with('#'))
++            .last()
++            .unwrap();
++        assert!(pinned.starts_with(&format!("{FIREFOX_MAJOR}.")), "gecko-milestone.txt {pinned}");
++    }
++
++    #[test]
++    fn n6_app_version_is_what_gecko_reports_for_the_os() {
++        for (os, want) in [
++            (HostOs::Windows, "5.0 (Windows)"),
++            (HostOs::Macos, "5.0 (Macintosh)"),
++            (HostOs::Linux, "5.0 (X11)"),
++        ] {
++            for &seed in GOLDEN_SEEDS {
++                let p = generate_persona(PersonaSeed::new(seed), Engine::Firefox, os).unwrap();
++                assert_eq!(p.app_version(), want);
++                p.validate_internal().unwrap();
++            }
++        }
++    }
++
++    fn json_str(s: &str) -> String {
++        format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
++    }
++
++    /// Text of fixtures/persona-goldens-0055.json (UA version as "{RV}" so
++    /// the vectors survive a train bump; chrome's seed fallback must match).
++    fn goldens_text() -> String {
++        let mut out = String::from(
++            "{\n  \"version\": 2,\n  \"note\": \"darkstr 0055 (O9): duppel_persona::generate_persona vectors. DarkstrNativePersona's seed fallback must produce the same snapshot (UA {RV} = engine <major>.0). Regenerate: DARKSTR_BLESS=1 cargo test -p duppel-persona n6_goldens\",\n  \"vectors\": [\n",
++        );
++        let mut rows = Vec::new();
++        for os in [HostOs::Macos, HostOs::Windows, HostOs::Linux] {
++            for &seed in GOLDEN_SEEDS {
++                let p = generate_persona(PersonaSeed::new(seed), Engine::Firefox, os).unwrap();
++                let ua = p
++                    .user_agent
++                    .replace(&format!("rv:{FIREFOX_RV})"), "rv:{RV})")
++                    .replace(&format!("Firefox/{FIREFOX_RV}"), "Firefox/{RV}");
++                let langs = p.languages.iter().map(|l| json_str(l)).collect::<Vec<_>>().join(", ");
++                rows.push(format!(
++                    "    {{\"seed\": {seed}, \"os\": \"{}\", \"snapshot\": {{\"userAgent\": {}, \"platform\": {}, \"appVersion\": {}, \"hardwareConcurrency\": {}, \"deviceMemory\": {}, \"languages\": [{langs}], \"timezone\": {}}}}}",
++                    os.as_str(),
++                    json_str(&ua),
++                    json_str(p.platform),
++                    json_str(p.app_version()),
++                    p.hardware_concurrency,
++                    p.device_memory,
++                    json_str(p.timezone),
++                ));
++            }
++        }
++        out.push_str(&rows.join(",\n"));
++        out.push_str("\n  ]\n}\n");
++        out
++    }
++
++    #[test]
++    fn n6_goldens_fixture_is_current() {
++        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
++            .join("../../fixtures/persona-goldens-0055.json");
++        let want = goldens_text();
++        if std::env::var("DARKSTR_BLESS").is_ok() {
++            std::fs::write(&path, &want).unwrap();
++        }
++        match std::fs::read_to_string(&path) {
++            Ok(have) => assert_eq!(have, want, "run DARKSTR_BLESS=1 cargo test -p duppel-persona n6_goldens"),
++            // Vendored copy in the Gecko tree has no fixtures/ — repo-only test.
++            Err(_) => assert!(!path.parent().unwrap().parent().unwrap().join("crates").exists()),
++        }
++    }
++
+     use super::*;
+ 
+     #[test]

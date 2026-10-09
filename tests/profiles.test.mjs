@@ -30,7 +30,7 @@ function loadProfiles({ ua, platform }) {
 
 test("Linux Firefox host produces a Firefox Linux persona", () => {
   const ctx = loadProfiles({
-    ua: "Mozilla/5.0 (X11; Linux x86_64; rv:140.0) Gecko/20100101 Firefox/140.0",
+    ua: "Mozilla/5.0 (X11; Linux x86_64; rv:156.0) Gecko/20100101 Firefox/156.0",
     platform: "Linux x86_64",
   });
   assert.equal(ctx.DARKSTR_HOST.engine, "firefox");
@@ -52,7 +52,7 @@ test("Linux Firefox host produces a Firefox Linux persona", () => {
 
 test("same seed is deterministic on a fixed host", () => {
   const ctx = loadProfiles({
-    ua: "Mozilla/5.0 (X11; Linux x86_64; rv:140.0) Gecko/20100101 Firefox/140.0",
+    ua: "Mozilla/5.0 (X11; Linux x86_64; rv:156.0) Gecko/20100101 Firefox/156.0",
     platform: "Linux x86_64",
   });
   const a = ctx.generateProfile(99);
@@ -62,7 +62,7 @@ test("same seed is deterministic on a fixed host", () => {
 
 test("Windows Firefox host does not pick Linux UA", () => {
   const ctx = loadProfiles({
-    ua: "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:140.0) Gecko/20100101 Firefox/140.0",
+    ua: "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:156.0) Gecko/20100101 Firefox/156.0",
     platform: "Win32",
   });
   const profile = ctx.generateProfile(7);

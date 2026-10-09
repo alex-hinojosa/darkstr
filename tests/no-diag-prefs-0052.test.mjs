@@ -27,7 +27,7 @@ const MODULES = [
   "DarkstrWorkerHooks.sys.mjs",
 ];
 // 0053+: the invariants hold for the newest shipped copy of each module.
-const NEWER = ["0053-files", "0052-files"].map((d) => join(root, "patches", d));
+const NEWER = ["0055-files", "0053r2-files", "0053-files", "0052-files"].map((d) => join(root, "patches", d));
 const shippedPath = (f) => NEWER.map((d) => join(d, f)).find((p) => existsSync(p));
 // 0053: ModeXor's one-time legacy-profile check reads the old 0029 status
 // string (migration only, never product behaviour); read-back checks skip it.
@@ -76,6 +76,8 @@ function setPref(k, v) {
   notify(k);
 }
 globalThis.Services = {
+  // 0055: personas derive their Firefox version from the engine.
+  appinfo: { version: "156.0.1", name: "LibreWolf" },
   prefs: prefApi,
   tm: { dispatchToMainThread() {}, idleDispatchToMainThread() {} },
   obs: { addObserver() {}, removeObserver() {}, notifyObservers() {} },
@@ -175,7 +177,7 @@ test("DARKSTR_DIAG_PREFS is diagnostics only (functional state never swept)", ()
 });
 
 test("no shipped chrome module reads a diagnostic pref back", () => {
-  const dirs = ["0053-files", "0052-files", "0051-files", "0049-files"].map((d) => join(root, "patches", d));
+  const dirs = ["0055-files", "0053r2-files", "0053-files", "0052-files", "0051-files", "0049-files"].map((d) => join(root, "patches", d));
   for (const d of dirs) {
     if (!existsSync(d)) continue;
     for (const f of readdirSync(d).filter((x) => x.endsWith(".sys.mjs"))) {
