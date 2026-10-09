@@ -1,0 +1,1158 @@
+--- a/browser/components/DarkstrCookieFirewall.sys.mjs
++++ b/browser/components/DarkstrCookieFirewall.sys.mjs
+@@ -64,9 +64,9 @@
+  *     sandbox, and document.cookie / window.cookieStore are hooked on every
+  *     document with an http(s) principal (including about:blank, srcdoc and
+  *     blob: documents) before page script runs.
+- *     Residual (not covered): ServiceWorkerGlobalScope.cookieStore goes
+- *     straight to Gecko's CookieStoreParent; allowlisted top sites use the
+- *     real jar by design.
++ *     ServiceWorkerGlobalScope.cookieStore follows the same decision and
++ *     jar since 0060 (CookieStoreParent asks this module); allowlisted top
++ *     sites use the real jar by design.
+  *
+  * Allowlist: darkstr.cookieFirewall.allowlist CSV of top-level eTLD+1 → real
+  * jar passthrough for that page and everything it loads.
+@@ -96,6 +96,36 @@
+  *     CookieStoreNotifier refuse the real cookie store unless the content
+  *     child answered "passthrough" (allowlist) for that inner window.
+  *
++ * 0060 (Fable B8, coverage):
++ *   - Extension browsers and frames: the JSWindowActor is registered for
++ *     every message-manager group, not only "browsers" (extension popups,
++ *     sidebars and background pages are "webext-browsers"), so every http(s)
++ *     document gets a gate answer from its own child instead of the C++
++ *     fail-closed default (CookieCommons "darkstr-cookie-gate"). A document
++ *     whose top-level document is not web content (an extension page) is
++ *     owned by its outermost http(s) ancestor, for script and HTTP alike
++ *     (_ownerTopSite), so its document.cookie, CookieStore and requests read
++ *     the same jar.
++ *   - Worker CookieStore (Gecko exposes it on ServiceWorkerGlobalScope only):
++ *     the content process no longer fails closed for every worker;
++ *     CookieStoreParent asks this module ("darkstr-cookie-store") and gets
++ *     the allowlist / sandbox decision and the jar view a document of the
++ *     same partition gets (cookieStoreRequest). No answer while armed =
++ *     fail closed (nothing read, nothing written).
++ *   - Clearing: DarkstrCookieFirewallCleaner (ClearDataService, CLEAR_COOKIES)
++ *     purges the sandbox jar for Forget About This Site, Clear Recent
++ *     History, Clear-Site-Data, clear-on-quit and container removal, with
++ *     Gecko's OriginAttributesPattern semantics: a partitioned clear only
++ *     touches that partition (the #93 rule). Live documents get the deletes.
++ *   - One pipeline (PIPELINE below): every cookie admitted to the jar goes
++ *     through _admit(), every removal through _purge(), every partition seed
++ *     through _seedFor(). 0061 (per-site rotation) plugs in there via
++ *     setPipelineHook(); 0060 ships no hook.
++ *   - No plaintext (0052 rule): diagnostics carrying a site name or a cookie
++ *     value are readable only in memory (getDiagnostics, chrome). Anything
++ *     written out (prefs.js while darkstr.debug.diagPrefs) is a keyed,
++ *     per-session digest. The jar itself is never persisted.
++ *
+  * Soft residual (0042): outbound Cookie on content fetch was empty under 0035
+  * because http-on-modify-request subject was used without QI to nsIHttpChannel
+  * and setRequestHeader failures were swallowed. Pin: QI + surface set errors.
+@@ -155,6 +185,44 @@
+     return Object.fromEntries(gDiag);
+   },
+ };
++/**
++ * 0060: diagnostics that carry a site name or a cookie value. Memory keeps
++ * the value (chrome-only getDiagnostics); prefs.js only ever gets
++ * redactDiag(value): "redacted:<keyed 32-bit digest>:<length>", keyed per
++ * session so it cannot be looked up across runs.
++ */
++const REDACTED_DIAG_PREFS = new Set([
++  LAST_ETLD_PREF,
++  LAST_PARTITION_PREF,
++  LAST_HTTP_ETLD_PREF,
++  LAST_COOKIE_OUT_PREF,
++  LAST_COOKIE_SET_PREF,
++  LAST_COOKIE_ERR_PREF,
++  LAST_ERROR_PREF,
++]);
++const DIAG_DIGEST_KEY = Math.floor(Math.random() * 0x100000000) >>> 0 || 1;
++export function redactDiag(value) {
++  const t = String(value ?? "");
++  if (!t) {
++    return "";
++  }
++  let h = (DIAG_DIGEST_KEY ^ 0x811c9dc5) >>> 0;
++  for (let i = 0; i < t.length; i++) {
++    h = Math.imul(h ^ t.charCodeAt(i), 0x01000193) >>> 0;
++  }
++  h = Math.imul(h ^ (h >>> 15), 0x2c1b3c6d) >>> 0;
++  return `redacted:${("00000000" + h.toString(16)).slice(-8)}:${t.length}`;
++}
++const diagFacadeWrite = diagPrefs._write;
++diagPrefs._write = function (setter, name, value) {
++  if (!REDACTED_DIAG_PREFS.has(name)) {
++    diagFacadeWrite.call(this, setter, name, value);
++    return;
++  }
++  // prefs.js (when diagPrefs is on) gets the digest; memory the value.
++  diagFacadeWrite.call(this, setter, name, redactDiag(value));
++  gDiag.set(name, value);
++};
+ 
+ const SNAPSHOT_PREF = "darkstr.persona.snapshot";
+ const SEED_PREF = "darkstr.persona.seed";
+@@ -168,6 +236,9 @@
+ const DELTA_ACK_TIMEOUT_MS = 2000;
+ const NONE_REQUIRES_SECURE_PREF = "network.cookie.sameSite.noneRequiresSecure";
+ 
++/** 0060: CookieStoreParent (worker / service worker CookieStore) asks here. */
++const COOKIE_STORE_TOPIC = "darkstr-cookie-store";
++
+ const ACTOR_NAME = "DarkstrCookieFirewall";
+ const MSG_INSTALL = "DarkstrCookieFirewall:Install";
+ const MSG_DELTA = "DarkstrCookieFirewall:Delta";
+@@ -756,9 +827,99 @@
+     scheme: fields[0].toLowerCase(),
+     host: normalizeHost(fields[1]),
+     foreignAncestor: fields.slice(2).includes("f"),
++  };
++}
++
++// ---- 0060: buckets vs Gecko OriginAttributes(Pattern) -----------------------
++
++/**
++ * "<u>.<p>|<scheme>://<top base>[|p|pf]" → { userContextId, privateBrowsingId,
++ * scheme, base, part: "" | "p" | "pf" }. null for anything else.
++ */
++function parseBucketKey(key) {
++  const m = /^(\d+)\.(\d+)\|([a-z][a-z0-9+.-]*):\/\/([^|]*)(?:\|(p|pf))?$/.exec(
++    String(key || "")
++  );
++  if (!m) {
++    return null;
++  }
++  return {
++    userContextId: Number(m[1]),
++    privateBrowsingId: Number(m[2]),
++    scheme: m[3],
++    base: m[4],
++    part: m[5] || "",
+   };
+ }
+ 
++/** Services.eTLD.hasRootDomain for normalized hosts (no XPCOM). */
++function hasRootDomain(host, root) {
++  const h = normalizeHost(host);
++  const r = normalizeHost(root);
++  return !!h && !!r && (h === r || h.endsWith("." + r));
++}
++
++/**
++ * Does a bucket hold cookies Gecko keys with OriginAttributes matching
++ * `pattern` (an OriginAttributesPattern dictionary or a principal's
++ * originAttributes)? Unset fields match everything, like Gecko. The jar maps
++ * onto Gecko exactly: "u" = partitionKey "", "p" = (scheme,top),
++ * "pf" = (scheme,top,f). Ports are not part of a jar key, so a partition
++ * key's port is ignored. `baseOf` maps a partition-key host to its site.
++ */
++function bucketMatchesPattern(info, pattern, baseOf = (h) => h) {
++  if (!info) {
++    return false;
++  }
++  const p = pattern || {};
++  if (p.userContextId !== undefined && Number(p.userContextId) !== info.userContextId) {
++    return false;
++  }
++  if (p.privateBrowsingId !== undefined && Number(p.privateBrowsingId) !== info.privateBrowsingId) {
++    return false;
++  }
++  if (p.firstPartyDomain !== undefined && p.firstPartyDomain !== "") {
++    return false; // the jar never uses first-party isolation keys
++  }
++  if (p.partitionKey !== undefined && p.partitionKey !== null) {
++    if (p.partitionKey === "") {
++      if (info.part !== "") {
++        return false;
++      }
++    } else {
++      const pk = parsePartitionKey(p.partitionKey);
++      if (
++        !pk ||
++        info.part === "" ||
++        (pk.scheme && pk.scheme !== info.scheme) ||
++        normalizeHost(baseOf(pk.host)) !== info.base ||
++        !!pk.foreignAncestor !== (info.part === "pf")
++      ) {
++        return false;
++      }
++    }
++  }
++  const kp = p.partitionKeyPattern;
++  if (kp && typeof kp === "object") {
++    if (info.part === "") {
++      return false;
++    }
++    if (kp.scheme !== undefined && String(kp.scheme).toLowerCase() !== info.scheme) {
++      return false;
++    }
++    if (kp.baseDomain !== undefined && normalizeHost(kp.baseDomain) !== info.base) {
++      return false;
++    }
++    if (
++      kp.foreignByAncestorContext !== undefined &&
++      !!kp.foreignByAncestorContext !== (info.part === "pf")
++    ) {
++      return false;
++    }
++  }
++  return true;
++}
++
+ export const DarkstrCookieCore = Object.freeze({
+   mixU32,
+   syntheticToken,
+@@ -787,6 +948,9 @@
+   writeBucketFor,
+   bucketTag,
+   unionMaps,
++  parseBucketKey,
++  hasRootDomain,
++  bucketMatchesPattern,
+   KIND_1P,
+   KIND_3P,
+   KIND_3PF,
+@@ -811,6 +975,11 @@
+     return diagPrefs.snapshot();
+   },
+ 
++  /** 0060: coverage counters (counts only, no names or values). */
++  getCoverageStats() {
++    return { ...this._coverageStats };
++  },
++
+   _inited: false,
+   _actorRegistered: false,
+   _observer: null,
+@@ -825,6 +994,12 @@
+   _liveActors: null,
+   /** F1 diag: responses held for content acks / acks that timed out. */
+   _ackStats: { held: 0, timeouts: 0 },
++  /** 0060: CookieStoreParent observer ("darkstr-cookie-store"). */
++  _cookieStoreObserver: null,
++  /** 0060: counts only (never names / values): purges, worker store calls. */
++  _coverageStats: { purged: 0, purges: 0, workerStore: 0, workerFailClosed: 0 },
++  /** 0061 hook (PIPELINE). null in 0060. */
++  _pipelineHook: null,
+ 
+   init() {
+     if (this._inited) {
+@@ -832,6 +1007,7 @@
+     }
+     this._inited = true;
+     this._jar = new Map();
++    this._coverageStats = { purged: 0, purges: 0, workerStore: 0, workerFailClosed: 0 };
+     this._liveActors = new Set();
+     this._observer = this._observePref.bind(this);
+     for (const p of PREFS_TO_OBSERVE) {
+@@ -858,6 +1034,16 @@
+     try {
+       Services.obs.addObserver(this._pbObserver, "last-pb-context-exited");
+     } catch (_e) {}
++    this._cookieStoreObserver = {
++      observe: (subject, topic) => {
++        if (topic === COOKIE_STORE_TOPIC) {
++          this._onCookieStoreTopic(subject);
++        }
++      },
++    };
++    try {
++      Services.obs.addObserver(this._cookieStoreObserver, COOKIE_STORE_TOPIC);
++    } catch (_e) {}
+     this._ensureHttpObserver();
+     this.refreshPlan();
+   },
+@@ -881,6 +1067,10 @@
+       Services.obs.removeObserver(this._pbObserver, "last-pb-context-exited");
+     } catch (_e) {}
+     this._pbObserver = null;
++    try {
++      Services.obs.removeObserver(this._cookieStoreObserver, COOKIE_STORE_TOPIC);
++    } catch (_e) {}
++    this._cookieStoreObserver = null;
+     this._teardownHttpObserver();
+     if (this._actorRegistered) {
+       try {
+@@ -926,8 +1116,13 @@
+         // No `matches`: about:blank / srcdoc / blob: documents inherit an
+         // http(s) principal and must be hooked too. The child filters on
+         // document principal before any IPC.
++        // 0060: no `messageManagerGroups` either. With ["browsers"] only, web
++        // frames inside extension popups / sidebars / background pages
++        // ("webext-browsers") had no child, so the C++ gate (CookieCommons
++        // "darkstr-cookie-gate") got no answer and blocked them by default
++        // while their requests were sandboxed. Chrome documents stay out
++        // (includeChrome defaults to false).
+         allFrames: true,
+-        messageManagerGroups: ["browsers"],
+         safeForUntrustedWebProcess: true,
+       });
+       this._actorRegistered = true;
+@@ -1291,6 +1486,40 @@
+     }
+   },
+ 
++  /**
++   * 0060: site that owns `bc`'s frame tree for cookies. Normally the
++   * top-level document. When the top-level document is not web content (an
++   * extension page in a tab, popup, sidebar or background page; an opaque
++   * top) the outermost http(s) document under it owns the tree: it is
++   * first-party, like a top-level document of its site. `selfWgp` stands in
++   * for bc's own document while it is being installed (it may not be
++   * bc.currentWindowGlobal yet). null = no web document in the chain.
++   */
++  _ownerTopSite(bc, selfWgp = null) {
++    if (!bc) {
++      return null;
++    }
++    const wgOf = (c) => (selfWgp && c === bc ? selfWgp : c?.currentWindowGlobal);
++    let top = null;
++    try {
++      top = this._siteFromPrincipal(wgOf(bc.top || bc)?.documentPrincipal);
++    } catch (_e) {}
++    if (top) {
++      return top;
++    }
++    let owner = null;
++    for (let c = bc; c; c = c.parent) {
++      let s = null;
++      try {
++        s = this._siteFromPrincipal(wgOf(c)?.documentPrincipal);
++      } catch (_e) {}
++      if (s) {
++        owner = s;
++      }
++    }
++    return owner;
++  },
++
+   /** eTLD+1 of every document from `bc` up to the top (http(s) only). */
+   _ancestorBases(bc) {
+     const out = [];
+@@ -1331,12 +1560,10 @@
+       }
+     } catch (_e) {}
+     const bc = wgp.browsingContext;
+-    let topWG = wgp;
+     let crossSite = false;
+-    if (bc && bc.top && bc.top !== bc) {
+-      topWG = bc.top.currentWindowGlobal;
+-    }
+-    const top = this._siteFromPrincipal(topWG?.documentPrincipal);
++    // 0060: the owner of the frame tree (see _ownerTopSite): the top-level
++    // document, or the outermost web document under an extension page.
++    const top = bc ? this._ownerTopSite(bc, wgp) : doc;
+     if (!top) {
+       return out;
+     }
+@@ -1366,7 +1593,7 @@
+     // set by this document lands in, else its partition.
+     out.cacheKey = out.cacheKeys[0];
+     out.seed =
+-      this._effectiveSeedForEtld(top.base, docPrincipal.originAttributes) >>> 0;
++      this._seedFor(top.base, docPrincipal.originAttributes, "document") >>> 0;
+     const env = this._env(docPrincipal.originAttributes);
+     out.laxByDefault = env.laxByDefault;
+     out.noneRequiresSecure = env.noneRequiresSecure;
+@@ -1508,6 +1735,11 @@
+   _store(bucketKey, built, opts, sink = null) {
+     const bucket = this._bucket(bucketKey, true);
+     const before = built?.ok ? bucket.get(cookieKey(built.record)) : null;
++    if (built?.ok && !built.deletion) {
++      // 0060: creation time in PRTime microseconds (Clear Recent History
++      // range). A replaced cookie keeps its creation time, like Gecko.
++      built.record.ctime = before?.ctime ?? Date.now() * 1000;
++    }
+     const res = applyRecord(bucket, built, { ...opts, seq: ++this._seq });
+     if (!res.changed) {
+       return res;
+@@ -1528,6 +1760,118 @@
+       this._flushDeltas(changes);
+     }
+     return res;
++  },
++
++  // -------------------------------------------------------------------------
++  // PIPELINE (0060). The firewall is the only cookie pipeline while armed:
++  //   in:   HTTP Set-Cookie (_onHttp), document.cookie / window CookieStore
++  //         (setDocumentCookie), worker / service worker CookieStore
++  //         (cookieStoreRequest) -> _admit(source, info, built, bucketKey)
++  //   out:  Cookie request header, document.cookie / CookieStore reads,
++  //         worker CookieStore reads -> matchFor* over readBucketsFor()
++  //   gone: expiry, cleaners (DarkstrCookieFirewallCleaner), disarm,
++  //         mode switch -> _purge() / _jar.clear()
++  //   seed: _seedFor(topBase, oa, source)
++  // 0061 per-site rotation plugs in with setPipelineHook(hook), all optional:
++  //   hook.seedFor({ topBase, oa, source })            -> u32 | undefined
++  //       partition seed (default: _effectiveSeedForEtld, 0030 rules)
++  //   hook.valueFor({ seed, topBase, record, bucketKey, source, mode })
++  //                                                    -> string | undefined
++  //       value stored for an admitted cookie (default: synthetic mode token,
++  //       isolate mode as-is)
++  //   hook.purgeFor(...) is not needed: rotating a partition is
++  //       _purge((info) => <bucket of that partition>, () => true, "rotate").
++  // The parent is authoritative: content caches take the value the parent
++  // stored through the delta it broadcasts (also to the writing document), so
++  // a hook only has to run here. 0060 ships no hook.
++  // -------------------------------------------------------------------------
++
++  /** 0061 entry point; null clears it. Returns the previous hook. */
++  setPipelineHook(hook) {
++    const prev = this._pipelineHook;
++    this._pipelineHook = hook && typeof hook === "object" ? hook : null;
++    return prev;
++  },
++
++  _seedFor(topBase, oa, source) {
++    const hook = this._pipelineHook;
++    if (hook && typeof hook.seedFor === "function") {
++      try {
++        const v = hook.seedFor({ topBase, oa, source });
++        if (Number.isFinite(v)) {
++          return v >>> 0;
++        }
++      } catch (e) {
++        console.error("darkstr 0060: pipeline seedFor hook failed", e);
++      }
++    }
++    return this._effectiveSeedForEtld(topBase, oa) >>> 0;
++  },
++
++  /**
++   * Admit one validated cookie into `bucketKey` (the only write path).
++   * info: { source, mode, seed, topBase }; opts / sink as for _store.
++   */
++  _admit(info, built, bucketKey, opts, sink = null) {
++    if (built?.ok && !built.deletion) {
++      let value;
++      const hook = this._pipelineHook;
++      if (hook && typeof hook.valueFor === "function") {
++        try {
++          value = hook.valueFor({
++            seed: info.seed >>> 0,
++            topBase: info.topBase,
++            record: { ...built.record },
++            bucketKey,
++            source: info.source,
++            mode: info.mode,
++          });
++        } catch (e) {
++          console.error("darkstr 0060: pipeline valueFor hook failed", e);
++          value = undefined;
++        }
++      }
++      if (typeof value === "string") {
++        built.record.value = value;
++      } else if (info.mode === "synthetic") {
++        built.record.value = this._syntheticFor(info.seed, info.topBase, built.record, bucketKey);
++      }
++    }
++    return this._store(bucketKey, built, opts, sink);
++  },
++
++  /**
++   * Remove every record `recMatch(rec, info)` in buckets `bucketMatch(info,
++   * key)` (the only removal path besides expiry / disarm). Live documents get
++   * the deletes. Returns the number removed. Never logs names or values.
++   */
++  _purge(bucketMatch, recMatch, reason = "") {
++    if (!this._jar?.size) {
++      return 0;
++    }
++    const changes = [];
++    for (const [key, bucket] of [...this._jar]) {
++      const info = parseBucketKey(key);
++      if (!info || !bucketMatch(info, key)) {
++        continue;
++      }
++      for (const [k, rec] of [...bucket]) {
++        if (recMatch(rec, info)) {
++          bucket.delete(k);
++          changes.push({ bucketKey: key, rec, deleted: true });
++        }
++      }
++      if (!bucket.size) {
++        this._jar.delete(key);
++      }
++    }
++    if (changes.length) {
++      this._coverageStats.purges++;
++      this._coverageStats.purged += changes.length;
++      this._flushDeltas(changes);
++    }
++    this._coverageStats.lastPurge = `${String(reason || "").slice(0, 16)}:${changes.length}`;
++    return changes.length;
+   },
+ 
+   /** Synthetic token; `bucketKey` keeps u-bucket tokens unchanged vs 0048. */
+@@ -1573,14 +1917,12 @@
+     if (!bucketKey) {
+       return { ok: false, reason: "third-party-unpartitioned" };
+     }
+-    if (plan.mode === "synthetic" && !built.deletion) {
+-      built.record.value = this._syntheticFor(ctx.seed, ctx.topBase, built.record, bucketKey);
+-    }
+-    const res = this._store(bucketKey, built, {
+-      fromHttp: false,
+-      secureOrigin: ctx.secure,
+-      now,
+-    });
++    const res = this._admit(
++      { source: "document", mode: plan.mode, seed: ctx.seed, topBase: ctx.topBase },
++      built,
++      bucketKey,
++      { fromHttp: false, secureOrigin: ctx.secure, now }
++    );
+     return { ok: !!res.changed, reason: res.reason || "" };
+   },
+ 
+@@ -1705,12 +2047,17 @@
+       top = req;
+     } else {
+       try {
+-        top = this._siteFromPrincipal(bc?.top?.currentWindowGlobal?.documentPrincipal);
++        // 0060: same owner rule as documentContext (extension tops).
++        top = bc ? this._ownerTopSite(bc) : null;
+       } catch (_e) {}
+       let pk = null;
+       try {
+         pk = parsePartitionKey(li.cookieJarSettings?.partitionKey);
+       } catch (_e) {}
++      if (pk?.scheme && pk.scheme !== "http" && pk.scheme !== "https") {
++        // 0060: a non-web partition (moz-extension top) is not a site.
++        pk = null;
++      }
+       if (!top && pk?.host) {
+         top = {
+           scheme: pk.scheme || req.scheme,
+@@ -1997,8 +2344,8 @@
+     }
+     const now = Date.now();
+     const seed =
+-      plan.mode === "synthetic"
+-        ? this._effectiveSeedForEtld(ctx.top.base, ctx.oa)
++      plan.mode === "synthetic" || this._pipelineHook
++        ? this._seedFor(ctx.top.base, ctx.oa, "http")
+         : 0;
+     const sink = [];
+     for (const line of String(raw).split(/\r?\n/)) {
+@@ -2031,10 +2378,13 @@
+         // Stock (optInPartitioning): third-party cookie without Partitioned.
+         continue;
+       }
+-      if (plan.mode === "synthetic" && !built.deletion) {
+-        built.record.value = this._syntheticFor(seed, ctx.top.base, built.record, bucketKey);
+-      }
+-      this._store(bucketKey, built, { fromHttp: true, secureOrigin: ctx.secure, now }, sink);
++      this._admit(
++        { source: "http", mode: plan.mode, seed, topBase: ctx.top.base },
++        built,
++        bucketKey,
++        { fromHttp: true, secureOrigin: ctx.secure, now },
++        sink
++      );
+     }
+     if (sink.length) {
+       const requester = this._requesterActor(ctx);
+@@ -2045,5 +2395,327 @@
+       this._holdUntilAcked(channel, acks);
+     }
+     this._writeDiag(ctx.top.base, seed, "sandbox", ctx.jarKey);
++  },
++  // ---- 0060: worker / service worker CookieStore ---------------------------
++
++  /**
++   * Context of a CookieStoreParent request (no browsing context: the worker's
++   * cookie URI, OriginAttributes and the content process's third-party
++   * flags). Top-level site: the partition key (attrs, else the partitioned
++   * attrs a first party also sends), else the cookie site itself for a
++   * first-party context. A third-party request without a partition key has
++   * no knowable top: null (fail closed).
++   */
++  _workerContext(req, site, plan) {
++    let pk = null;
++    for (const k of [req.partitionKey, req.partitionedKey]) {
++      const p = parsePartitionKey(k);
++      if (p?.host && (!p.scheme || p.scheme === "http" || p.scheme === "https")) {
++        pk = p;
++        break;
++      }
++    }
++    let top = null;
++    if (pk) {
++      top = { scheme: pk.scheme || site.scheme, host: pk.host, base: this._baseOfHost(pk.host) };
++    } else if (!req.thirdParty) {
++      top = site;
++    } else {
++      return null;
++    }
++    let kind;
++    if (site.base !== top.base) {
++      kind = KIND_3P;
++    } else if (pk?.foreignAncestor) {
++      kind = KIND_3PF;
++    } else {
++      kind = KIND_1P;
++    }
++    const oa = {
++      userContextId: Number(req.userContextId || 0) >>> 0,
++      privateBrowsingId: Number(req.privateBrowsingId || 0) >>> 0,
++    };
++    const decision = this.decisionForEtld(top.base, plan);
++    const jarKey = this._jarKey(this._oaKey(oa), top);
++    return {
++      decision,
++      top,
++      kind,
++      oa,
++      jarKey,
++      readKeys: readBucketsFor(jarKey, kind),
++      host: site.host,
++      secure: isSecureOrigin(site.scheme, site.host),
++      crossSite: kind !== KIND_1P,
++    };
++  },
++
++  /**
++   * One worker CookieStore operation. req: { op: "get"|"set"|"delete",
++   * uri (nsIURI-like), userContextId, privateBrowsingId, partitionKey,
++   * partitionedKey, thirdParty, name, matchName, path, onlyFirstMatch, value,
++   * session, expires (ms), domain, sameSite ("strict"|"lax"|"none"),
++   * partitioned }. Returns { decision: "passthrough" } (stock store) or
++   * { decision: "sandbox", items?, ok? }.
++   */
++  cookieStoreRequest(req) {
++    const plan = this.getPlan();
++    if (!plan.armed) {
++      return { decision: "passthrough" };
++    }
++    const site = this._siteFromUri(req?.uri);
++    if (!site) {
++      return { decision: "passthrough" };
++    }
++    this._coverageStats.workerStore++;
++    const ctx = this._workerContext(req, site, plan);
++    if (!ctx) {
++      this._coverageStats.workerFailClosed++;
++      return { decision: "sandbox", items: [], ok: false };
++    }
++    if (ctx.decision !== "sandbox") {
++      return { decision: "passthrough" };
++    }
++    const env = this._env(ctx.oa);
++    const now = Date.now();
++    if (req.op === "get") {
++      const buckets = ctx.readKeys.map((k) => {
++        const b = this._bucket(k, false);
++        this._purgeExpired(b, now);
++        return b;
++      });
++      let recs = matchForScript(
++        unionMaps(buckets),
++        {
++          host: ctx.host,
++          path: String(req.path || "/") || "/",
++          secure: ctx.secure,
++          crossSite: ctx.crossSite,
++          now,
++        },
++        env
++      );
++      if (req.matchName) {
++        recs = recs.filter((r) => r.name === String(req.name ?? ""));
++      }
++      if (req.onlyFirstMatch) {
++        recs = recs.slice(0, 1);
++      }
++      return { decision: "sandbox", items: recs.map((r) => ({ name: r.name, value: r.value })) };
++    }
++    if (req.op !== "set" && req.op !== "delete") {
++      return { decision: "sandbox", ok: false };
++    }
++    const isDelete = req.op === "delete";
++    const parts = [`${String(req.name ?? "")}=${isDelete ? "" : String(req.value ?? "")}`];
++    parts.push(`Path=${String(req.path || "/")}`);
++    if (req.domain) {
++      parts.push(`Domain=${String(req.domain)}`);
++    }
++    if (isDelete) {
++      parts.push("Max-Age=0");
++    } else if (!req.session && Number.isFinite(Number(req.expires))) {
++      parts.push(`Expires=${new Date(Number(req.expires)).toUTCString()}`);
++    }
++    const ss = String(req.sameSite || "strict").toLowerCase();
++    parts.push(`SameSite=${ss === "lax" || ss === "none" ? ss : "strict"}`);
++    parts.push("Secure");
++    if (req.partitioned) {
++      parts.push("Partitioned");
++    }
++    const built = buildRecord(
++      parseSetCookie(parts.join("; ")),
++      {
++        host: ctx.host,
++        path: site.path,
++        secure: ctx.secure,
++        fromHttp: false,
++        crossSite: ctx.crossSite,
++        topLevelNav: false,
++        now,
++      },
++      env
++    );
++    if (!built.ok) {
++      return { decision: "sandbox", ok: false, reason: built.reason };
++    }
++    const bucketKey = writeBucketFor(
++      ctx.jarKey,
++      ctx.kind,
++      built.record.partitioned,
++      env.optInPartitioning
++    );
++    if (!bucketKey) {
++      return { decision: "sandbox", ok: false, reason: "third-party-unpartitioned" };
++    }
++    const seed =
++      plan.mode === "synthetic" || this._pipelineHook
++        ? this._seedFor(ctx.top.base, ctx.oa, "worker-cookieStore")
++        : 0;
++    const res = this._admit(
++      { source: "worker-cookieStore", mode: plan.mode, seed, topBase: ctx.top.base },
++      built,
++      bucketKey,
++      { fromHttp: false, secureOrigin: ctx.secure, now }
++    );
++    // Stock CookieStore resolves a valid set / delete even when the store
++    // keeps an existing cookie (HttpOnly / Secure protection); same here.
++    return { decision: "sandbox", ok: true, changed: !!res.changed };
+   },
++
++  /** nsIWritablePropertyBag2 from CookieStoreParent <-> cookieStoreRequest. */
++  _onCookieStoreTopic(subject) {
++    let bag;
++    try {
++      bag = subject.QueryInterface(Ci.nsIWritablePropertyBag2);
++    } catch (_e) {
++      return;
++    }
++    const str = (k) => {
++      try {
++        return bag.getPropertyAsAString(k);
++      } catch (_e) {
++        return "";
++      }
++    };
++    const bool = (k) => {
++      try {
++        return !!bag.getPropertyAsBool(k);
++      } catch (_e) {
++        return false;
++      }
++    };
++    const num = (k) => {
++      try {
++        return Number(bag.getPropertyAsInt64(k));
++      } catch (_e) {
++        return 0;
++      }
++    };
++    let res;
++    try {
++      let uri = null;
++      try {
++        uri = Services.io.newURI(str("uri"));
++      } catch (_e) {}
++      res = this.cookieStoreRequest({
++        op: str("op"),
++        uri,
++        userContextId: num("userContextId"),
++        privateBrowsingId: num("privateBrowsingId"),
++        partitionKey: str("partitionKey"),
++        partitionedKey: str("partitionedKey"),
++        thirdParty: bool("thirdParty"),
++        name: str("name"),
++        matchName: bool("matchName"),
++        path: str("path"),
++        onlyFirstMatch: bool("onlyFirstMatch"),
++        value: str("value"),
++        session: bool("session"),
++        expires: num("expires"),
++        domain: str("domain"),
++        sameSite: str("sameSite"),
++        partitioned: bool("partitioned"),
++      });
++    } catch (e) {
++      console.error("darkstr 0060: worker cookieStore request failed", e);
++      res = { decision: "sandbox", items: [], ok: false };
++    }
++    try {
++      bag.setPropertyAsAString("decision", res.decision);
++      if (res.decision === "sandbox") {
++        const items = res.items || [];
++        bag.setPropertyAsUint32("count", items.length);
++        items.forEach((it, i) => {
++          bag.setPropertyAsAString(`name${i}`, it.name);
++          bag.setPropertyAsAString(`value${i}`, it.value);
++        });
++        bag.setPropertyAsBool("ok", !!res.ok);
++      }
++    } catch (_e) {}
++  },
+ };
++
++/**
++ * 0060: ClearDataService cleaner for the sandbox jar (registered under
++ * CLEAR_COOKIES, so every cookie clear reaches it: Forget About This Site,
++ * Clear Recent History, Clear-Site-Data, clear-on-quit, container removal).
++ * Same matching as Gecko's CookieCleaner:
++ *  - deleteByHost / deleteByPrincipal: cookies of exactly that host, in the
++ *    partitions the OriginAttributes (pattern) selects. A principal carries
++ *    its partitionKey, so a partitioned clear (a framed site's
++ *    Clear-Site-Data, the shutdown sanitizer's partitioned principals) only
++ *    clears that partition; "" only the unpartitioned jar (#93 rule).
++ *  - deleteBySite: the site's cookies in every partition plus every cookie
++ *    partitioned under that top site (ClearDataService hasSite()).
++ *  - deleteByRange: cookies created since aFrom (PRTime us).
++ *  - deleteByOriginAttributes / deleteAll / deleteByLocalFiles.
++ * A disarmed firewall has an empty jar: every method is a no-op (stock).
++ */
++const FW_baseOf = (h) => {
++  try {
++    return DarkstrCookieFirewall._baseOfHost(h) || h;
++  } catch (_e) {
++    return h;
++  }
++};
++export const DarkstrCookieFirewallCleaner = {
++  async deleteAll() {
++    DarkstrCookieFirewall._purge(() => true, () => true, "all");
++  },
++  async deleteByHost(aHost, aOriginAttributes) {
++    const host = normalizeHost(aHost);
++    DarkstrCookieFirewall._purge(
++      (info) => bucketMatchesPattern(info, aOriginAttributes, FW_baseOf),
++      (rec) => normalizeHost(rec.host) === host,
++      "host"
++    );
++  },
++  async deleteByPrincipal(aPrincipal, _aIsUserRequest) {
++    let host = "";
++    try {
++      host = aPrincipal?.host ?? aPrincipal?.URI?.host ?? "";
++    } catch (_e) {}
++    if (!host) {
++      return;
++    }
++    await this.deleteByHost(host, aPrincipal.originAttributes || {});
++  },
++  async deleteBySite(aSchemelessSite, aOriginAttributesPattern, _aIsUserRequest) {
++    const site = normalizeHost(aSchemelessSite);
++    if (!site) {
++      return;
++    }
++    const pattern = aOriginAttributesPattern || {};
++    DarkstrCookieFirewall._purge(
++      (info) => bucketMatchesPattern(info, pattern, FW_baseOf),
++      (rec, info) =>
++        hasRootDomain(rec.host, site) || (info.part !== "" && info.base === site),
++      "site"
++    );
++  },
++  async deleteByRange(aFrom, _aTo) {
++    const from = Number(aFrom) || 0;
++    DarkstrCookieFirewall._purge(
++      () => true,
++      (rec) => Number(rec.ctime || 0) >= from,
++      "range"
++    );
++  },
++  async deleteByOriginAttributes(aOriginAttributesString) {
++    let pattern = {};
++    try {
++      pattern = JSON.parse(String(aOriginAttributesString || "{}")) || {};
++    } catch (_e) {
++      return;
++    }
++    DarkstrCookieFirewall._purge(
++      (info) => bucketMatchesPattern(info, pattern, FW_baseOf),
++      () => true,
++      "oa"
++    );
++  },
++  async deleteByLocalFiles(_aOriginAttributes) {
++    // file: documents are never sandboxed.
++  },
++};
+--- a/toolkit/components/cleardata/ClearDataService.sys.mjs
++++ b/toolkit/components/cleardata/ClearDataService.sys.mjs
+@@ -448,12 +448,53 @@
+   },
+   async deleteByHost(aHost, aOriginAttributesPattern) {
+     await this._impl()?.deleteByHost(aHost, aOriginAttributesPattern);
++  },
++  async deleteByRange(aFrom, aTo) {
++    await this._impl()?.deleteByRange(aFrom, aTo);
++  },
++  async deleteByOriginAttributes(aOriginAttributesString) {
++    await this._impl()?.deleteByOriginAttributes(aOriginAttributesString);
++  },
++};
++
++// darkstr 0060: the cookie firewall's sandbox jar holds the cookies of
++// sandboxed sites while it is armed (they never reach the cookie service),
++// so every cookie clear must reach it too. Partitioned principals / patterns
++// only clear their partition (see DarkstrCookieFirewallCleaner).
++const DarkstrCookieFirewallCleaner = {
++  _impl() {
++    try {
++      return ChromeUtils.importESModule(
++        "moz-src:///browser/components/DarkstrCookieFirewall.sys.mjs"
++      ).DarkstrCookieFirewallCleaner;
++    } catch (_e) {
++      return null;
++    }
++  },
++  async deleteAll() {
++    await this._impl()?.deleteAll();
++  },
++  async deleteByPrincipal(aPrincipal, aIsUserRequest) {
++    await this._impl()?.deleteByPrincipal(aPrincipal, aIsUserRequest);
++  },
++  async deleteBySite(aSchemelessSite, aOriginAttributesPattern, aIsUserRequest) {
++    await this._impl()?.deleteBySite(
++      aSchemelessSite,
++      aOriginAttributesPattern,
++      aIsUserRequest
++    );
++  },
++  async deleteByHost(aHost, aOriginAttributes) {
++    await this._impl()?.deleteByHost(aHost, aOriginAttributes);
+   },
+   async deleteByRange(aFrom, aTo) {
+     await this._impl()?.deleteByRange(aFrom, aTo);
+   },
+   async deleteByOriginAttributes(aOriginAttributesString) {
+     await this._impl()?.deleteByOriginAttributes(aOriginAttributesString);
++  },
++  async deleteByLocalFiles(aOriginAttributes) {
++    await this._impl()?.deleteByLocalFiles(aOriginAttributes);
+   },
+ };
+ 
+@@ -2231,7 +2272,10 @@
+     cleaners: [CertCleaner],
+   },
+ 
+-  { flag: Ci.nsIClearDataService.CLEAR_COOKIES, cleaners: [CookieCleaner] },
++  {
++    flag: Ci.nsIClearDataService.CLEAR_COOKIES,
++    cleaners: [CookieCleaner, DarkstrCookieFirewallCleaner],
++  },
+ 
+   {
+     flag: Ci.nsIClearDataService.CLEAR_NETWORK_CACHE,
+--- a/netwerk/cookie/CookieCommons.cpp
++++ b/netwerk/cookie/CookieCommons.cpp
+@@ -916,12 +916,13 @@
+       return SecurityChecksResult::eDoNotContinue;
+     }
+ 
+-    // darkstr 0048r2 (F3): while the cookie firewall is armed, worker
+-    // CookieStore never reaches the real store (fail closed, including
+-    // allowlisted sites — workers have no per-window firewall answer).
+-    if (StaticPrefs::darkstr_cookieFirewall_contentGate()) {
+-      return SecurityChecksResult::eDoNotContinue;
+-    }
++    // darkstr 0060 (was 0048r2 F3: every worker failed closed while the
++    // cookie firewall was armed, allowlisted or not). Worker CookieStore
++    // requests now continue to CookieStoreParent, which asks the firewall
++    // ("darkstr-cookie-store") for the same allowlist / sandbox decision and
++    // jar the documents of that partition get, and fails closed itself when
++    // the firewall gives no answer. Nothing here reaches the real store
++    // without that parent-side decision.
+ 
+     cookiePrincipal = workerPrivate->GetPrincipal();
+     if (NS_WARN_IF(!cookiePrincipal) || cookiePrincipal->GetIsNullPrincipal()) {
+--- a/dom/cookiestore/CookieStoreParent.cpp
++++ b/dom/cookiestore/CookieStoreParent.cpp
+@@ -10,6 +10,8 @@
+ #include "mozilla/Components.h"
+ #include "mozilla/Maybe.h"
+ #include "mozilla/ScopeExit.h"
++#include "mozilla/Services.h"
++#include "mozilla/StaticPrefs_darkstr.h"
+ #include "mozilla/StaticPrefs_network.h"
+ #include "mozilla/dom/ProcessIsolation.h"
+ #include "mozilla/ipc/BackgroundParent.h"
+@@ -22,9 +24,12 @@
+ #include "mozilla/net/CookieServiceParent.h"
+ #include "mozilla/net/CookieValidation.h"
+ #include "mozilla/net/NeckoParent.h"
++#include "nsHashPropertyBag.h"
++#include "nsICookie.h"
+ #include "nsICookieManager.h"
+ #include "nsICookieService.h"
+ #include "nsIEffectiveTLDService.h"
++#include "nsIObserverService.h"
+ #include "nsNetUtil.h"
+ #include "nsProxyRelease.h"
+ 
+@@ -88,6 +93,62 @@
+   return contentParent && GetCookieServiceParent(contentParent);
+ }
+ 
++// darkstr 0060 (cookie firewall coverage, Fable B8): while the firewall is
++// armed (darkstr.cookieFirewall.contentGate, default branch only), every
++// CookieStore request that reaches the parent -- in practice the service
++// worker CookieStore, since sandboxed documents are served by the
++// firewall's own hooks -- is first offered to DarkstrCookieFirewall over the
++// "darkstr-cookie-store" observer topic. It answers "passthrough" (allowlisted
++// top site: the stock code below runs) or "sandbox" (the request is served
++// from the firewall's jar, nothing touches the cookie service). No answer
++// while armed fails closed. Gate off: no notification, stock behaviour.
++already_AddRefed<nsHashPropertyBag> DarkstrCookieStoreBag(
++    const char* aOp, nsIURI* aCookieURI,
++    const OriginAttributes& aOriginAttributes, bool aThirdPartyContext) {
++  RefPtr<nsHashPropertyBag> bag = new nsHashPropertyBag();
++  (void)bag->SetPropertyAsAString(u"op"_ns, NS_ConvertASCIItoUTF16(aOp));
++  nsAutoCString spec;
++  if (aCookieURI) {
++    (void)aCookieURI->GetSpec(spec);
++  }
++  (void)bag->SetPropertyAsAString(u"uri"_ns, NS_ConvertUTF8toUTF16(spec));
++  (void)bag->SetPropertyAsInt64(u"userContextId"_ns,
++                                aOriginAttributes.mUserContextId);
++  (void)bag->SetPropertyAsInt64(u"privateBrowsingId"_ns,
++                                aOriginAttributes.mPrivateBrowsingId);
++  (void)bag->SetPropertyAsAString(u"partitionKey"_ns,
++                                  aOriginAttributes.mPartitionKey);
++  (void)bag->SetPropertyAsBool(u"thirdParty"_ns, aThirdPartyContext);
++  return bag.forget();
++}
++
++// True when the firewall owns the request (sandbox, or fail closed).
++bool DarkstrCookieStoreFirewallOwns(nsHashPropertyBag* aBag) {
++  if (!StaticPrefs::darkstr_cookieFirewall_contentGate()) {
++    return false;
++  }
++  nsCOMPtr<nsIObserverService> os = mozilla::services::GetObserverService();
++  if (os) {
++    os->NotifyObservers(static_cast<nsIWritablePropertyBag2*>(aBag),
++                        "darkstr-cookie-store", nullptr);
++  }
++  nsAutoString decision;
++  if (NS_FAILED(aBag->GetPropertyAsAString(u"decision"_ns, decision))) {
++    return true;
++  }
++  return !decision.EqualsLiteral("passthrough");
++}
++
++const char16_t* DarkstrSameSiteName(int32_t aSameSite) {
++  if (aSameSite == nsICookie::SAMESITE_STRICT) {
++    return u"strict";
++  }
++  if (aSameSite == nsICookie::SAMESITE_LAX) {
++    return u"lax";
++  }
++  return u"none";
++}
++
+ bool SubscriptionPrincipalMatchesScope(nsIPrincipal* aPrincipal,
+                                        const nsACString& aScopeURL) {
+   nsCOMPtr<nsIURI> scopeURI;
+@@ -372,6 +433,43 @@
+   if (!CheckContentProcessSecurity(aParent, baseDomain, aCookieURI,
+                                    aOriginAttributes)) {
+     return;
++  }
++
++  // darkstr 0060: the cookie firewall's answer first (see above).
++  {
++    RefPtr<nsHashPropertyBag> bag = DarkstrCookieStoreBag(
++        "get", aCookieURI, aOriginAttributes, aThirdPartyContext);
++    if (aPartitionedOriginAttributes) {
++      (void)bag->SetPropertyAsAString(
++          u"partitionedKey"_ns, aPartitionedOriginAttributes->mPartitionKey);
++    }
++    (void)bag->SetPropertyAsAString(u"name"_ns, aName);
++    (void)bag->SetPropertyAsBool(u"matchName"_ns, aMatchName);
++    (void)bag->SetPropertyAsAString(u"path"_ns, NS_ConvertUTF8toUTF16(aPath));
++    (void)bag->SetPropertyAsBool(u"onlyFirstMatch"_ns, aOnlyFirstMatch);
++    if (DarkstrCookieStoreFirewallOwns(bag)) {
++      uint32_t count = 0;
++      if (NS_FAILED(bag->GetPropertyAsUint32(u"count"_ns, &count))) {
++        count = 0;
++      }
++      nsTArray<CookieStoreGetItem> sandboxed;
++      for (uint32_t i = 0; i < count && i < 4096; ++i) {
++        nsAutoString nameKey(u"name"_ns);
++        nameKey.AppendInt(i);
++        nsAutoString valueKey(u"value"_ns);
++        valueKey.AppendInt(i);
++        nsAutoString n;
++        nsAutoString v;
++        if (NS_FAILED(bag->GetPropertyAsAString(nameKey, n)) ||
++            NS_FAILED(bag->GetPropertyAsAString(valueKey, v))) {
++          break;
++        }
++        sandboxed.AppendElement(CookieStoreGetItem(NS_ConvertUTF16toUTF8(n),
++                                                   NS_ConvertUTF16toUTF8(v)));
++      }
++      aResults.SwapElements(sandboxed);
++      return;
++    }
+   }
+ 
+   nsAutoCString hostName;
+@@ -503,6 +601,29 @@
+   if (!CheckContentProcessSecurity(aParent, domain, aCookieURI,
+                                    aOriginAttributes)) {
+     return eSilentFailure;
++  }
++
++  // darkstr 0060: the cookie firewall's answer first (see above). A
++  // sandboxed write never reaches the cookie service and is not notified.
++  {
++    RefPtr<nsHashPropertyBag> bag = DarkstrCookieStoreBag(
++        "set", aCookieURI, aOriginAttributes, aThirdPartyContext);
++    (void)bag->SetPropertyAsAString(u"name"_ns, aName);
++    (void)bag->SetPropertyAsAString(u"value"_ns, aValue);
++    (void)bag->SetPropertyAsBool(u"session"_ns, aSession);
++    (void)bag->SetPropertyAsInt64(u"expires"_ns, aExpires);
++    (void)bag->SetPropertyAsAString(u"domain"_ns, aDomain);
++    (void)bag->SetPropertyAsAString(u"path"_ns, aPath);
++    (void)bag->SetPropertyAsAString(u"sameSite"_ns,
++                                    nsDependentString(DarkstrSameSiteName(aSameSite)));
++    (void)bag->SetPropertyAsBool(u"partitioned"_ns, aPartitioned);
++    if (DarkstrCookieStoreFirewallOwns(bag)) {
++      bool ok = false;
++      if (NS_FAILED(bag->GetPropertyAsBool(u"ok"_ns, &ok))) {
++        ok = false;
++      }
++      return ok ? eSuccess : eSilentFailure;
++    }
+   }
+ 
+   if (aThirdPartyContext &&
+@@ -592,6 +713,19 @@
+     return false;
+   }
+ 
++  // darkstr 0060: the cookie firewall's answer first (see above).
++  {
++    RefPtr<nsHashPropertyBag> bag = DarkstrCookieStoreBag(
++        "delete", aCookieURI, aOriginAttributes, aThirdPartyContext);
++    (void)bag->SetPropertyAsAString(u"name"_ns, aName);
++    (void)bag->SetPropertyAsAString(u"domain"_ns, aDomain);
++    (void)bag->SetPropertyAsAString(u"path"_ns, aPath);
++    (void)bag->SetPropertyAsBool(u"partitioned"_ns, aPartitioned);
++    if (DarkstrCookieStoreFirewallOwns(bag)) {
++      return false;
++    }
++  }
++
+   nsCOMPtr<nsICookieService> service =
+       do_GetService(NS_COOKIESERVICE_CONTRACTID);
+   if (!service) {
