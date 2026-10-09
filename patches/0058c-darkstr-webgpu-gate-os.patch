@@ -63,10 +63,12 @@
  
 --- a/browser/components/DarkstrDepthHooks.sys.mjs
 +++ b/browser/components/DarkstrDepthHooks.sys.mjs
-@@ -155,6 +155,103 @@
+@@ -153,8 +153,119 @@
+     }
+   } catch (_e) {}
    return "windows";
- }
- 
++}
++
 +/**
 + * 0058c: OS of a snapshot -- the UA OS token first, then platform; the same
 + * rule as DarkstrNativePersona.snapshotOs (tests keep them equal). null = unknown.
@@ -122,6 +124,20 @@
 +  return true;
 +}
 +
++/**
++ * 0058c: depth seed of a pasted snapshot that carries none (FNV-1a 32 of its
++ * trimmed pref text; never 0).
++ */
++export function snapshotDepthSeed(raw) {
++  const text = String(raw || "").trim();
++  let h = 0x811c9dc5;
++  for (let i = 0; i < text.length; i++) {
++    h ^= text.charCodeAt(i);
++    h = Math.imul(h, 0x01000193) >>> 0;
++  }
++  return h >>> 0 || 1;
+ }
+ 
 +const gGpuWarned = new Set();
 +function warnGpuOnce(key, msg) {
 +  if (gGpuWarned.has(key)) {
@@ -167,7 +183,7 @@
  function normalizeGpu(raw) {
    if (!raw || typeof raw !== "object") {
      return null;
-@@ -483,6 +580,8 @@
+@@ -483,6 +594,8 @@
      if (!plan.armed || (!plan.seeds && !plan.perSite)) {
        return null;
      }
@@ -176,7 +192,7 @@
      // SubsequentNav arm: reuse NativePersona first-doc gate when available.
      // When 0030 rotatePerSite is active, ALWAYS derive depth seeds (incl.
      // webgpuSeed) from eTLD-effective persona seed — same SoT as sticky
-@@ -511,6 +610,7 @@
+@@ -511,6 +624,7 @@
          if (!snap) {
            return null;
          }
@@ -184,7 +200,7 @@
  
          let rotating = false;
          try {
-@@ -563,7 +663,11 @@
+@@ -563,7 +677,11 @@
              return null;
            }
            if (seed) {
@@ -197,7 +213,7 @@
              if (derived) {
                const out = {
                  canvasSeed: derived.canvasSeed >>> 0,
-@@ -571,10 +675,12 @@
+@@ -571,10 +689,12 @@
                  fontSeed: derived.fontSeed >>> 0,
                  speechSeed: derived.speechSeed >>> 0,
                  webgpuSeed: derived.webgpuSeed >>> 0,
@@ -214,7 +230,7 @@
                };
                this._writeLastSeeds(out);
                return out;
-@@ -595,7 +701,11 @@
+@@ -595,7 +715,11 @@
              fontSeed: snapFont,
              speechSeed: snapSpeech,
              webgpuSeed: readWebGpuSeed(snap, snapSpeech, snapAudio),
@@ -227,7 +243,7 @@
            };
            this._writeLastSeeds(out);
            return out;
-@@ -625,10 +735,11 @@
+@@ -625,10 +749,11 @@
        webgpuSeed:
          (plan.seeds.webgpuSeed >>> 0) ||
          deriveWebGpuSeed(speechSeedOut, plan.seeds.audioSeed),
@@ -243,7 +259,119 @@
      };
      this._writeLastSeeds(out);
      return out;
-@@ -730,14 +841,16 @@
+@@ -636,64 +761,60 @@
+ 
+   _readDepthSeeds() {
+     // Prefer cached persona snapshot (same JSON bridge as NativePersona).
++    // 0058c: the raw pasted snapshot (NativePersona's resolved copy drops
++    // `gpu`) decides the GPU: its own strings when coherent with its OS, else
++    // a default of that OS (personaGpu).
++    let raw = "";
++    let parsed = null;
+     try {
+-      const raw = Services.prefs.getStringPref(SNAPSHOT_PREF, "");
++      raw = String(Services.prefs.getStringPref(SNAPSHOT_PREF, "") || "").trim();
+       if (raw) {
+-        const parsed = JSON.parse(raw);
+-        if (parsed && typeof parsed === "object") {
+-          const canvasSeed = readU32Field(parsed, "canvasSeed", "canvas_seed");
+-          const audioSeed = readU32Field(parsed, "audioSeed", "audio_seed");
+-          const gpu = normalizeGpu(parsed.gpu);
+-          if (canvasSeed !== null && audioSeed !== null && gpu) {
+-            {
+-              const fontSeed = readFontSeed(parsed, canvasSeed, audioSeed);
+-              const speechSeed = readSpeechSeed(parsed, fontSeed, canvasSeed);
+-              return {
+-                canvasSeed,
+-                audioSeed,
+-                fontSeed,
+-                speechSeed,
+-                webgpuSeed: readWebGpuSeed(parsed, speechSeed, audioSeed),
+-                gpu,
+-              };
+-            }
+-          }
+-          // Partial snapshot: fill missing fields from seed fallback below,
+-          // but keep present fields when we have a persona seed.
+-        }
++        const p = JSON.parse(raw);
++        parsed = p && typeof p === "object" && !Array.isArray(p) ? p : null;
+       }
+-    } catch (_e) {}
++    } catch (_e) {
++      parsed = null;
++    }
++    const snapOs = parsed ? snapshotOsForGpu(parsed) || undefined : undefined;
++    if (parsed) {
++      const canvasSeed = readU32Field(parsed, "canvasSeed", "canvas_seed");
++      const audioSeed = readU32Field(parsed, "audioSeed", "audio_seed");
++      const gpu = normalizeGpu(parsed.gpu);
++      // Full depth snapshot (Rust print_persona_snapshot): its own fields.
++      if (canvasSeed !== null && audioSeed !== null && gpu) {
++        const fontSeed = readFontSeed(parsed, canvasSeed, audioSeed);
++        const speechSeed = readSpeechSeed(parsed, fontSeed, canvasSeed);
++        return {
++          canvasSeed,
++          audioSeed,
++          fontSeed,
++          speechSeed,
++          webgpuSeed: readWebGpuSeed(parsed, speechSeed, audioSeed),
++          gpu: personaGpu(parsed, gpu, canvasSeed),
++        };
++      }
++    }
+ 
+     const seed = this._readPersonaSeedPref();
+-    if (!seed) {
+-      // Try partial snapshot fill without persona.seed.
+-      try {
+-        const raw = Services.prefs.getStringPref(SNAPSHOT_PREF, "");
+-        if (raw) {
+-          const parsed = JSON.parse(raw);
+-          const canvasSeed = readU32Field(parsed, "canvasSeed", "canvas_seed");
+-          const audioSeed = readU32Field(parsed, "audioSeed", "audio_seed");
+-          const gpu = normalizeGpu(parsed.gpu);
+-          // Need canvas+audio+gpu for a coherent depth payload; fontSeed fills.
+-          if (canvasSeed !== null && audioSeed !== null && gpu) {
+-            {
+-              const fontSeed = readFontSeed(parsed, canvasSeed, audioSeed);
+-              const speechSeed = readSpeechSeed(parsed, fontSeed, canvasSeed);
+-              return {
+-                canvasSeed,
+-                audioSeed,
+-                fontSeed,
+-                speechSeed,
+-                webgpuSeed: readWebGpuSeed(parsed, speechSeed, audioSeed),
+-                gpu,
+-              };
+-            }
+-          }
+-        }
+-      } catch (_e) {}
++    if (seed) {
++      // Proof seed path; with a pasted snapshot the GPU follows its OS.
++      const d = this._generateDepthFromSeed(seed >>> 0, snapOs);
++      if (parsed) {
++        d.gpu = personaGpu(parsed, d.gpu, d.canvasSeed);
++      }
++      return d;
++    }
++    if (!parsed) {
+       return null;
+     }
+-    return this._generateDepthFromSeed(seed >>> 0);
++    // 0058c: a pasted snapshot without depth seeds and without
++    // darkstr.persona.seed used to leave the depth layer unarmed, so its pages
++    // drew and reported WebGL with the host's real GPU (an Apple GPU under a
++    // Windows / Linux snapshot). Derive the depth seeds deterministically from
++    // the snapshot text instead: same snapshot, same digests.
++    const d = this._generateDepthFromSeed(snapshotDepthSeed(raw), snapOs);
++    d.gpu = personaGpu(parsed, d.gpu, d.canvasSeed);
++    return d;
+   },
+ 
+   /**
+@@ -730,14 +851,16 @@
      return 0;
    },
  

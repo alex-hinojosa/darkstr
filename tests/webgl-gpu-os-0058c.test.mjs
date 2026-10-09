@@ -167,3 +167,73 @@ test("0058c gpu: wired on all three depth paths (rotate, golden snapshot, plan s
   assert.match(f, /gpuSnap = snap;/);
   assert.match(f, /gpu: personaGpu\(\s*gpuSnap,\s*\{ vendor: plan\.seeds\.gpu\.vendor, renderer: plan\.seeds\.gpu\.renderer \},\s*plan\.seeds\.canvasSeed\s*\)/);
 });
+
+// _readDepthSeeds of a source (the method body), with a Services stub and the host OS stubbed to macOS.
+function depthReader(src) {
+  const consts = src.slice(src.indexOf('const MODE_PREF = "darkstr.mode";'), src.indexOf("/** 0057: per-site") > 0 ? src.indexOf("/** 0057: per-site") : src.indexOf("const GPU_BY_OS = {"));
+  const helpers = src.slice(src.indexOf("const GPU_BY_OS = {"), src.indexOf("export var DarkstrDepthHooks = {")).replace(/^export /gm, "");
+  const body = (name) => {
+    const i = src.indexOf(`  ${name}(`); const sig = src.slice(i, src.indexOf("{", i) + 1);
+    return [sig.slice(sig.indexOf("(") + 1, sig.lastIndexOf(")")), src.slice(i + sig.length, src.indexOf("\n  },\n", i))];
+  };
+  const [gp, gb] = body("_generateDepthFromSeed"), [, rb] = body("_readDepthSeeds");
+  return (prefs, warn = () => {}) => {
+    const Services = { prefs: {
+      getStringPref: (n, d) => (n in prefs ? prefs[n] : d),
+      getIntPref: (n, d) => (n in prefs ? prefs[n] : d),
+    } };
+    // host = macOS (the Mini): detectHostOs reads nsIHttpProtocolHandler.oscpu
+    const Cc = { "@mozilla.org/network/protocol;1?name=http": { getService: () => ({ oscpu: "Intel Mac OS X 10.15" }) } };
+    return new Function("Services", "console", "Cc", "Ci", `${consts}; ${helpers};
+      const self = { _readPersonaSeedPref: () => (Services.prefs.getIntPref(SEED_PREF, 0) | 0),
+                     _generateDepthFromSeed: function (${gp}) {${gb}\n} };
+      self._generateDepthFromSeed = self._generateDepthFromSeed.bind(self);
+      return (function () {${rb}\n}).call(self);`)(Services, { warn }, Cc, { nsIHttpProtocolHandler: {} });
+  };
+}
+const read58c = depthReader(DH), read57 = depthReader(DH57);
+const SNAP = "darkstr.persona.snapshot";
+
+test("0058c gpu: a pasted snapshot without depth seeds now arms depth, GPU from its OS (was: unarmed -> host GPU)", () => {
+  const win = JSON.stringify({ userAgent: UA.win, platform: "Win32", hardwareConcurrency: 8 });
+  const lin = JSON.stringify({ userAgent: UA.linux, platform: "Linux x86_64" });
+  const mac = JSON.stringify({ userAgent: UA.mac, platform: "MacIntel" });
+  for (const [raw, os] of [[win, "windows"], [lin, "linux"], [mac, "macos"]]) {
+    assert.equal(read57({ [SNAP]: raw }), null, `${os}: 0057 left depth unarmed`);
+    const d = read58c({ [SNAP]: raw });
+    assert.ok(d && typeof d.canvasSeed === "number", `${os}: armed`);
+    assert.equal(H.gpuCoherentWithOs(d.gpu, os), true, `${os}: ${JSON.stringify(d.gpu)}`);
+    assert.deepEqual(read58c({ [SNAP]: raw }), d, `${os}: deterministic`);
+    assert.deepEqual(read58c({ [SNAP]: `  ${raw}\n` }), d, `${os}: whitespace-insensitive`);
+  }
+  assert.notDeepEqual(read58c({ [SNAP]: win }).canvasSeed, read58c({ [SNAP]: JSON.stringify({ userAgent: UA.win, platform: "Win32", hardwareConcurrency: 4 }) }).canvasSeed);
+  assert.equal(read58c({}), null, "no snapshot, no seed: still unarmed");
+  assert.equal(read58c({ [SNAP]: "not json" }), null);
+});
+
+test("0058c gpu: own GPU strings of the raw snapshot -- coherent kept, incoherent replaced + warned", () => {
+  const own = { vendor: "Google Inc. (NVIDIA)", renderer: "ANGLE (NVIDIA, NVIDIA GeForce GTX 1660 SUPER Direct3D11 vs_5_0 ps_5_0, D3D11)" };
+  assert.deepEqual(read58c({ [SNAP]: JSON.stringify({ userAgent: UA.win, gpu: own }) }).gpu, own);
+  const w = []; const d = read58c({ [SNAP]: JSON.stringify({ userAgent: UA.linux, gpu: APPLE }) }, (m) => w.push(m));
+  assert.equal(H.gpuCoherentWithOs(d.gpu, "linux"), true);
+  assert.equal(w.length, 1); assert.match(w[0], /not coherent with its linux OS/);
+  // a full depth snapshot keeps its seeds; only an incoherent GPU is replaced
+  const full = { userAgent: UA.win, canvasSeed: 11, audioSeed: 22, gpu: APPLE };
+  const f = read58c({ [SNAP]: JSON.stringify(full) }), f57 = read57({ [SNAP]: JSON.stringify(full) });
+  assert.equal(f.canvasSeed, 11); assert.equal(f.audioSeed, 22);
+  assert.deepEqual({ ...f, gpu: null }, { ...f57, gpu: null });
+  assert.equal(H.gpuCoherentWithOs(f.gpu, "windows"), true);
+});
+
+test("0058c gpu: Proof seed paths unchanged -- seed alone byte-identical; seed + Mac snapshot identical", () => {
+  for (const seed of [42, 7, 123456789, -5]) {
+    assert.deepEqual(read58c({ "darkstr.persona.seed": seed }), read57({ "darkstr.persona.seed": seed }), `seed ${seed}`);
+    const mac = JSON.stringify({ userAgent: UA.mac, platform: "MacIntel" });
+    assert.deepEqual(read58c({ "darkstr.persona.seed": seed, [SNAP]: mac }), read57({ "darkstr.persona.seed": seed, [SNAP]: mac }));
+    // seed + Windows snapshot: same seeds, Windows GPU at the same index
+    const w = read58c({ "darkstr.persona.seed": seed, [SNAP]: JSON.stringify({ userAgent: UA.win }) });
+    const a = read57({ "darkstr.persona.seed": seed });
+    assert.deepEqual({ ...w, gpu: null }, { ...a, gpu: null });
+    assert.deepEqual(w.gpu, H.GPU_BY_OS.windows[H.GPU_BY_OS.macos.findIndex((g) => g.renderer === a.gpu.renderer)]);
+  }
+});
