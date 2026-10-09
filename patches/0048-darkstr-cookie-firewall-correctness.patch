@@ -1,7 +1,7 @@
 diff -ruN a/browser/components/DarkstrCookieFirewall.sys.mjs b/browser/components/DarkstrCookieFirewall.sys.mjs
---- a/browser/components/DarkstrCookieFirewall.sys.mjs	2026-10-08 17:15:02.507801754 -0500
-+++ b/browser/components/DarkstrCookieFirewall.sys.mjs	2026-10-08 17:15:02.515801779 -0500
-@@ -3,40 +3,78 @@
+--- a/browser/components/DarkstrCookieFirewall.sys.mjs	2026-10-08 19:26:09.331041735 -0500
++++ b/browser/components/DarkstrCookieFirewall.sys.mjs	2026-10-08 19:26:09.331041735 -0500
+@@ -3,40 +3,103 @@
   * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
  
  /**
@@ -65,9 +65,6 @@ diff -ruN a/browser/components/DarkstrCookieFirewall.sys.mjs b/browser/component
 - *     golden lock snapshot / rotatePerSite=false).
 - *   isolate — sandbox stores accepted values as-is; no synthetic rewrite;
 - *     still kept out of the primary profile jar via Set-Cookie strip.
-- *
-- * Allowlist: darkstr.cookieFirewall.allowlist CSV of eTLD+1 → real jar
-- * passthrough (preserve first-party login / product allowlist expectation).
 + *   synthetic (default when enabled) — values rewritten to seed-tied
 + *     synthetic tokens (0030 eTLD+1 seed of the top-level site when
 + *     rotatePerSite; global seed under golden lock). The top-level site and
@@ -84,10 +81,37 @@ diff -ruN a/browser/components/DarkstrCookieFirewall.sys.mjs b/browser/component
 + *     straight to Gecko's CookieStoreParent; allowlisted top sites use the
 + *     real jar by design.
   *
-- * Residual: CookieService may race Set-Cookie before header strip on some
-- * paths; full dual-jar C++ CookieService hook is a follow-up. Not anti-detect.
+- * Allowlist: darkstr.cookieFirewall.allowlist CSV of eTLD+1 → real jar
+- * passthrough (preserve first-party login / product allowlist expectation).
 + * Allowlist: darkstr.cookieFirewall.allowlist CSV of top-level eTLD+1 → real
 + * jar passthrough for that page and everything it loads.
+  *
+- * Residual: CookieService may race Set-Cookie before header strip on some
+- * paths; full dual-jar C++ CookieService hook is a follow-up. Not anti-detect.
++ * 0048r2 (Proof F1–F3 + check 4):
++ *   - Buckets per top-level site follow Gecko Total Cookie Protection + CHIPS
++ *     exactly: "u" (unpartitioned, first-party), "p" (partition key
++ *     (scheme,top): CHIPS cookies of first parties and every cookie of a
++ *     cross-site frame) and "pf" (partition key (scheme,top,f): a document
++ *     same-site with top but under a cross-site ancestor, A-B-A). A
++ *     first-party context reads u+p, a cross-site context reads p, an A-B-A
++ *     context reads pf, so a cross-site frame never gets the top site's
++ *     first-party cookies (F2). Like stock (network.cookie.cookieBehavior.
++ *     optInPartitioning), a cross-site context may only set cookies that
++ *     carry the Partitioned attribute (check 4); Partitioned needs Secure.
++ *     SameSite is enforced against the initiator, the requesting document
++ *     and every ancestor up to the top.
++ *   - Ordering (F1): http-on-examine-response suspends the channel until every
++ *     content process that can see the new cookie has acked the delta
++ *     (sendQuery), so the response cannot reach the page before its
++ *     document.cookie / CookieStore mirror holds the cookie.
++ *   - Native gate (F3): while armed, the static pref
++ *     darkstr.cookieFirewall.contentGate (default-branch only, never
++ *     persisted) makes CookieCommons::CheckGlobalAndRetrieveCookiePrincipals
++ *     (document.cookie getter/setter from any realm, document.open'ed
++ *     documents, about:blank/srcdoc, window and worker CookieStore) and
++ *     CookieStoreNotifier refuse the real cookie store unless the content
++ *     child answered "passthrough" (allowlist) for that inner window.
   *
   * Soft residual (0042): outbound Cookie on content fetch was empty under 0035
   * because http-on-modify-request subject was used without QI to nsIHttpChannel
@@ -96,7 +120,7 @@ diff -ruN a/browser/components/DarkstrCookieFirewall.sys.mjs b/browser/component
   */
  
  const MODE_PREF = "darkstr.mode";
-@@ -49,6 +87,7 @@
+@@ -49,6 +112,7 @@
  const LAST_ETLD_PREF = "darkstr.cookieFirewall.lastEtld";
  const LAST_SEED_PREF = "darkstr.cookieFirewall.lastSeed";
  const LAST_DECISION_PREF = "darkstr.cookieFirewall.lastDecision";
@@ -104,11 +128,16 @@ diff -ruN a/browser/components/DarkstrCookieFirewall.sys.mjs b/browser/component
  const LAST_INSTALL_PREF = "darkstr.cookieFirewall.lastInstall";
  const LAST_ERROR_PREF = "darkstr.cookieFirewall.lastError";
  const LAST_HTTP_TOPIC_PREF = "darkstr.cookieFirewall.lastHttpTopic";
-@@ -61,6 +100,14 @@
+@@ -61,6 +125,19 @@
  const SEED_PREF = "darkstr.persona.seed";
  const ROTATE_PER_SITE_PREF = "darkstr.persona.rotatePerSite";
  
 +const LAX_BY_DEFAULT_PREF = "network.cookie.sameSite.laxByDefault";
++const OPT_IN_PARTITIONING_PREF = "network.cookie.cookieBehavior.optInPartitioning";
++/** 0048r2 F3: C++ gate (StaticPrefList.yaml, default false). Default branch only. */
++const CONTENT_GATE_PREF = "darkstr.cookieFirewall.contentGate";
++/** 0048r2 F1: longest a response waits for content caches to ack a delta. */
++const DELTA_ACK_TIMEOUT_MS = 2000;
 +const NONE_REQUIRES_SECURE_PREF = "network.cookie.sameSite.noneRequiresSecure";
 +
 +const ACTOR_NAME = "DarkstrCookieFirewall";
@@ -119,7 +148,7 @@ diff -ruN a/browser/components/DarkstrCookieFirewall.sys.mjs b/browser/component
  const PREFS_TO_OBSERVE = [
    MODE_PREF,
    NATIVE_PREF,
-@@ -73,15 +120,22 @@
+@@ -73,15 +150,22 @@
    ROTATE_PER_SITE_PREF,
  ];
  
@@ -151,7 +180,7 @@ diff -ruN a/browser/components/DarkstrCookieFirewall.sys.mjs b/browser/component
  
  function mixU32(a, b) {
    let h = (a >>> 0) ^ 0x9e3779b9;
-@@ -100,39 +154,481 @@
+@@ -100,39 +184,590 @@
    return hex(h1) + hex(h2);
  }
  
@@ -287,6 +316,7 @@ diff -ruN a/browser/components/DarkstrCookieFirewall.sys.mjs b/browser/component
 +    secure: false,
 +    httpOnly: false,
 +    sameSite: "unset",
++    partitioned: false,
 +  };
 +  for (const part of parts) {
 +    const p = part.trim();
@@ -326,6 +356,9 @@ diff -ruN a/browser/components/DarkstrCookieFirewall.sys.mjs b/browser/component
 +      case "httponly":
 +        attrs.httpOnly = true;
 +        break;
++      case "partitioned":
++        attrs.partitioned = true;
++        break;
 +      case "samesite": {
 +        const v = val.toLowerCase();
 +        attrs.sameSite =
@@ -352,11 +385,8 @@ diff -ruN a/browser/components/DarkstrCookieFirewall.sys.mjs b/browser/component
 +
 +function isExpired(rec, now) {
 +  return rec.expiry !== null && rec.expiry !== undefined && rec.expiry <= now;
- }
- 
--function parseDocumentCookieWrite(raw) {
--  // document.cookie setter takes one "name=value; attr..." assignment.
--  return parseSetCookieLine(raw);
++}
++
 +/**
 + * Validate a parsed cookie for a given setting context and build a record.
 + * ctx: { host, path, secure, fromHttp, crossSite, topLevelNav, now }
@@ -381,6 +411,10 @@ diff -ruN a/browser/components/DarkstrCookieFirewall.sys.mjs b/browser/component
 +  }
 +  if (attrs.secure && !ctx.secure) {
 +    return { ok: false, reason: "secure-from-insecure" };
++  }
++  if (attrs.partitioned && !attrs.secure) {
++    // CHIPS: Partitioned requires Secure (Gecko rejects it otherwise).
++    return { ok: false, reason: "partitioned-requires-secure" };
 +  }
 +  let cookieHost = host;
 +  let hostOnly = true;
@@ -441,15 +475,16 @@ diff -ruN a/browser/components/DarkstrCookieFirewall.sys.mjs b/browser/component
 +    secure: !!attrs.secure,
 +    httpOnly: !!attrs.httpOnly,
 +    sameSite,
++    partitioned: !!attrs.partitioned,
 +    expiry,
 +    creation: 0,
 +  };
 +  return { ok: true, record, deletion: expiry !== null && expiry <= now };
  }
  
--function serializeCookiePairMap(map) {
--  if (!map || !map.size) {
--    return "";
+-function parseDocumentCookieWrite(raw) {
+-  // document.cookie setter takes one "name=value; attr..." assignment.
+-  return parseSetCookieLine(raw);
 +/**
 + * Apply a built record to a cookie map (cookieKey → record).
 + * opts: { fromHttp, secureOrigin, now, seq }
@@ -464,10 +499,7 @@ diff -ruN a/browser/components/DarkstrCookieFirewall.sys.mjs b/browser/component
 +  const existing = map.get(key);
 +  if (existing && existing.httpOnly && !opts.fromHttp) {
 +    return { changed: false, reason: "httponly-protected" };
-   }
--  const parts = [];
--  for (const [name, value] of map.entries()) {
--    parts.push(`${name}=${value}`);
++  }
 +  if (!opts.secureOrigin && !rec.secure) {
 +    // "Leave secure cookies alone": insecure origins cannot shadow them.
 +    for (const other of map.values()) {
@@ -512,8 +544,11 @@ diff -ruN a/browser/components/DarkstrCookieFirewall.sys.mjs b/browser/component
 +
 +function hostMatchesRecord(host, rec) {
 +  return rec.hostOnly ? normalizeHost(host) === rec.host : domainMatch(host, rec.host);
-+}
-+
+ }
+ 
+-function serializeCookiePairMap(map) {
+-  if (!map || !map.size) {
+-    return "";
 +/**
 + * Cookies to send on an HTTP request.
 + * req: { host, path, secure, crossSite, topLevelNav, safeMethod, now }
@@ -541,7 +576,10 @@ diff -ruN a/browser/components/DarkstrCookieFirewall.sys.mjs b/browser/component
 +      }
 +    }
 +    out.push(rec);
-+  }
+   }
+-  const parts = [];
+-  for (const [name, value] of map.entries()) {
+-    parts.push(`${name}=${value}`);
 +  return out.sort(compareForSerialization);
 +}
 +
@@ -596,6 +634,94 @@ diff -ruN a/browser/components/DarkstrCookieFirewall.sys.mjs b/browser/component
 +  return { ...rec, stub: false };
 +}
 +
++// ---- 0048r2: Gecko TCP / CHIPS bucket model -------------------------------
++//
++// jarKey  = "<oa>|<scheme>://<top eTLD+1>"         (the top-level site)
++// bucket  = jarKey            unpartitioned first-party jar ("u")
++//         | jarKey + "|p"     partition key (scheme,top)
++//         | jarKey + "|pf"    partition key (scheme,top,f) — A-B-A
++// kind    = "1p"  document same-site with top, no cross-site ancestor
++//         | "3p"  document cross-site with top
++//         | "3pf" document same-site with top under a cross-site ancestor
++
++const KIND_1P = "1p";
++const KIND_3P = "3p";
++const KIND_3PF = "3pf";
++
++/**
++ * Classify a context from eTLD+1s. `self` is the document (or the request
++ * target of a subdocument load); `ancestors` are the bases of every ancestor
++ * document up to and including the top.
++ */
++function classifyContext(selfBase, ancestorBases, topBase) {
++  const self = String(selfBase || "");
++  const top = String(topBase || "");
++  if (self !== top) {
++    return KIND_3P;
++  }
++  for (const a of ancestorBases || []) {
++    if (a && a !== top) {
++      return KIND_3PF;
++    }
++  }
++  return KIND_1P;
++}
++
++/** Buckets a context of `kind` reads, most specific last. */
++function readBucketsFor(jarKey, kind) {
++  if (kind === KIND_3PF) {
++    return [jarKey + "|pf"];
++  }
++  if (kind === KIND_3P) {
++    return [jarKey + "|p"];
++  }
++  return [jarKey, jarKey + "|p"];
++}
++
++/**
++ * Bucket a cookie set from a context of `kind` lands in, or null when stock
++ * Gecko rejects it (cross-site context, no Partitioned attribute, with
++ * network.cookie.cookieBehavior.optInPartitioning — LibreWolf default).
++ */
++function writeBucketFor(jarKey, kind, partitioned, optInPartitioning = true) {
++  if (kind === KIND_1P) {
++    return partitioned ? jarKey + "|p" : jarKey;
++  }
++  const part = kind === KIND_3PF ? jarKey + "|pf" : jarKey + "|p";
++  if (partitioned || !optInPartitioning) {
++    return part;
++  }
++  return null;
++}
++
++/** Tag mixed into synthetic values so the same cookie differs per bucket. */
++function bucketTag(bucketKey) {
++  const s = String(bucketKey || "");
++  if (s.endsWith("|pf")) {
++    return "|pf";
++  }
++  if (s.endsWith("|p")) {
++    return "|p";
++  }
++  return "";
++}
++
++/** Read-only union of several cookie maps (for matchFor*). */
++function unionMaps(maps) {
++  const list = (maps || []).filter(Boolean);
++  return {
++    values() {
++      const out = [];
++      for (const m of list) {
++        for (const r of m.values()) {
++          out.push(r);
++        }
++      }
++      return out;
++    },
++  };
++}
++
 +function parsePartitionKey(pk) {
 +  const s = String(pk || "");
 +  if (!s) {
@@ -611,7 +737,11 @@ diff -ruN a/browser/components/DarkstrCookieFirewall.sys.mjs b/browser/component
 +  if (fields.length < 2 || !fields[0] || !fields[1]) {
 +    return null;
 +  }
-+  return { scheme: fields[0].toLowerCase(), host: normalizeHost(fields[1]) };
++  return {
++    scheme: fields[0].toLowerCase(),
++    host: normalizeHost(fields[1]),
++    foreignAncestor: fields.slice(2).includes("f"),
++  };
 +}
 +
 +export const DarkstrCookieCore = Object.freeze({
@@ -637,6 +767,14 @@ diff -ruN a/browser/components/DarkstrCookieFirewall.sys.mjs b/browser/component
 +  sanitizeForChild,
 +  hostMatchesRecord,
 +  parsePartitionKey,
++  classifyContext,
++  readBucketsFor,
++  writeBucketFor,
++  bucketTag,
++  unionMaps,
++  KIND_1P,
++  KIND_3P,
++  KIND_3PF,
 +  MAX_COOKIES_PER_HOST,
 +});
 +
@@ -654,7 +792,7 @@ diff -ruN a/browser/components/DarkstrCookieFirewall.sys.mjs b/browser/component
  }
  
  export var DarkstrCookieFirewall = {
-@@ -140,9 +636,14 @@
+@@ -140,9 +775,16 @@
    _actorRegistered: false,
    _observer: null,
    _httpObserver: null,
@@ -667,10 +805,12 @@ diff -ruN a/browser/components/DarkstrCookieFirewall.sys.mjs b/browser/component
    _jar: null,
 +  /** Live parent actors (one per WindowGlobal) that installed hooks. */
 +  _liveActors: null,
++  /** F1 diag: responses held for content acks / acks that timed out. */
++  _ackStats: { held: 0, timeouts: 0 },
  
    init() {
      if (this._inited) {
-@@ -150,13 +651,32 @@
+@@ -150,13 +792,32 @@
      }
      this._inited = true;
      this._jar = new Map();
@@ -704,7 +844,7 @@ diff -ruN a/browser/components/DarkstrCookieFirewall.sys.mjs b/browser/component
      this._ensureHttpObserver();
      this.refreshPlan();
    },
-@@ -172,20 +692,29 @@
+@@ -172,20 +833,29 @@
        } catch (_e) {}
      }
      this._observer = null;
@@ -736,7 +876,7 @@ diff -ruN a/browser/components/DarkstrCookieFirewall.sys.mjs b/browser/component
      if (topic !== "nsPref:changed") {
        return;
      }
-@@ -197,7 +726,7 @@
+@@ -197,7 +867,7 @@
        return;
      }
      try {
@@ -745,7 +885,7 @@ diff -ruN a/browser/components/DarkstrCookieFirewall.sys.mjs b/browser/component
          parent: {
            esModuleURI:
              "moz-src:///browser/components/DarkstrCookieFirewallParent.sys.mjs",
-@@ -207,18 +736,23 @@
+@@ -207,18 +877,23 @@
              "moz-src:///browser/components/DarkstrCookieFirewallChild.sys.mjs",
            events: {
              DOMWindowCreated: {},
@@ -771,7 +911,7 @@ diff -ruN a/browser/components/DarkstrCookieFirewall.sys.mjs b/browser/component
          e
        );
        this.recordInstallStatus({
-@@ -239,15 +773,11 @@
+@@ -239,15 +914,11 @@
          try {
            this._onHttp(subject, topic);
          } catch (e) {
@@ -789,7 +929,7 @@ diff -ruN a/browser/components/DarkstrCookieFirewall.sys.mjs b/browser/component
        try {
          Services.obs.addObserver(this._httpObserver, t);
        } catch (_e) {}
-@@ -258,11 +788,7 @@
+@@ -258,11 +929,7 @@
      if (!this._httpObserver) {
        return;
      }
@@ -802,7 +942,7 @@ diff -ruN a/browser/components/DarkstrCookieFirewall.sys.mjs b/browser/component
        try {
          Services.obs.removeObserver(this._httpObserver, t);
        } catch (_e) {}
-@@ -271,13 +797,7 @@
+@@ -271,13 +938,7 @@
    },
  
    /**
@@ -817,7 +957,7 @@ diff -ruN a/browser/components/DarkstrCookieFirewall.sys.mjs b/browser/component
     */
    getPlan() {
      let mode = "homogeneous";
-@@ -287,18 +807,9 @@
+@@ -287,18 +948,9 @@
      if (mode !== "pollution" && mode !== "homogeneous") {
        mode = "homogeneous";
      }
@@ -839,7 +979,7 @@ diff -ruN a/browser/components/DarkstrCookieFirewall.sys.mjs b/browser/component
      let cfMode = "synthetic";
      try {
        cfMode = Services.prefs.getStringPref(CF_MODE_PREF, "synthetic");
-@@ -308,18 +819,25 @@
+@@ -308,18 +960,25 @@
      }
      const pollutionActive = mode === "pollution" && !nativeCompatible;
      const armed = !!(pollutionActive && nativeHooks && enabled);
@@ -872,10 +1012,34 @@ diff -ruN a/browser/components/DarkstrCookieFirewall.sys.mjs b/browser/component
      return plan;
    },
  
-@@ -334,6 +852,38 @@
+@@ -328,12 +987,62 @@
+     try {
+       Services.prefs.setBoolPref(ARMED_PREF, this._armed);
+     } catch (_e) {}
++    this._setContentGate(this._armed);
+     if (!this._armed && this._jar) {
+       // Idle: drop sandbox so a later arm starts clean. Real jar untouched.
+       this._jar.clear();
      }
    },
  
++  /**
++   * 0048r2 F3: flip the C++ cookie gate. Default branch only, so it is never
++   * written to prefs.js (a disarmed profile starts with the static default
++   * false) and every content process receives it through the normal pref
++   * broadcast. A stray user value is cleared so defaults stay inert.
++   */
++  _setContentGate(on) {
++    try {
++      if (Services.prefs.prefHasUserValue?.(CONTENT_GATE_PREF)) {
++        Services.prefs.clearUserPref(CONTENT_GATE_PREF);
++      }
++    } catch (_e) {}
++    try {
++      Services.prefs.getDefaultBranch("").setBoolPref(CONTENT_GATE_PREF, !!on);
++    } catch (_e) {}
++  },
++
 +  /** Ask every live document to (re)install or uninstall its hooks. */
 +  _reinstallAllDocuments() {
 +    const seen = new Set();
@@ -911,15 +1075,20 @@ diff -ruN a/browser/components/DarkstrCookieFirewall.sys.mjs b/browser/component
    _allowlistSet() {
      const out = new Set();
      try {
-@@ -348,38 +898,88 @@
+@@ -348,38 +1057,93 @@
      return out;
    },
  
 -  _etldPlus1FromUri(uri) {
-+  _env() {
++  _env(oa) {
++    const pb = Number(oa?.privateBrowsingId || 0) > 0;
 +    return {
 +      laxByDefault: readBoolPref(LAX_BY_DEFAULT_PREF, false),
 +      noneRequiresSecure: readBoolPref(NONE_REQUIRES_SECURE_PREF, true),
++      // Stock: unpartitioned cookies from a cross-site context are rejected.
++      optInPartitioning:
++        readBoolPref(OPT_IN_PARTITIONING_PREF, false) ||
++        (pb && readBoolPref(OPT_IN_PARTITIONING_PREF + "_pbmode", false)),
 +      isPublicSuffix: (d) => this._isPublicSuffix(d),
 +    };
 +  },
@@ -968,11 +1137,11 @@ diff -ruN a/browser/components/DarkstrCookieFirewall.sys.mjs b/browser/component
 +    try {
 +      if (!uri) {
 +        return null;
-       }
++      }
 +      const scheme = String(uri.scheme || "").toLowerCase();
 +      if (scheme !== "http" && scheme !== "https") {
 +        return null;
-+      }
+       }
 +      const host = normalizeHost(uri.asciiHost || uri.host);
 +      if (!host) {
 +        return null;
@@ -1020,7 +1189,7 @@ diff -ruN a/browser/components/DarkstrCookieFirewall.sys.mjs b/browser/component
    /**
     * Effective seed for synthetic values — mirrors 0030:
     * golden lock (snapshot non-empty OR rotatePerSite=false) → global seed;
-@@ -412,15 +1012,12 @@
+@@ -412,15 +1176,12 @@
    },
  
    /**
@@ -1038,7 +1207,7 @@ diff -ruN a/browser/components/DarkstrCookieFirewall.sys.mjs b/browser/component
        return "passthrough";
      }
      if (this._allowlistSet().has(String(etld).toLowerCase())) {
-@@ -429,7 +1026,7 @@
+@@ -429,7 +1190,7 @@
      return "sandbox";
    },
  
@@ -1047,7 +1216,7 @@ diff -ruN a/browser/components/DarkstrCookieFirewall.sys.mjs b/browser/component
      try {
        if (etld) {
          Services.prefs.setStringPref(LAST_ETLD_PREF, String(etld));
-@@ -440,155 +1037,282 @@
+@@ -440,155 +1201,369 @@
        if (decision) {
          Services.prefs.setStringPref(LAST_DECISION_PREF, String(decision));
        }
@@ -1087,22 +1256,22 @@ diff -ruN a/browser/components/DarkstrCookieFirewall.sys.mjs b/browser/component
 -    }
 -    if (!this._jar.has(key)) {
 -      this._jar.set(key, new Map());
--    }
--    return this._jar.get(key);
--  },
--
--  _maybeRewriteValue(plan, seed, name, value) {
--    if (plan.mode === "synthetic") {
--      return syntheticToken(seed, name);
 +    let b = this._jar.get(jarKey);
 +    if (!b && create) {
 +      b = new Map();
 +      this._jar.set(jarKey, b);
      }
--    return String(value ?? "");
+-    return this._jar.get(key);
 +    return b || null;
    },
  
+-  _maybeRewriteValue(plan, seed, name, value) {
+-    if (plan.mode === "synthetic") {
+-      return syntheticToken(seed, name);
+-    }
+-    return String(value ?? "");
+-  },
+-
 -  ingestPair(etld, name, value, plan) {
 -    const p = plan || this.getPlan();
 -    if (!p.armed || this.decisionForEtld(etld, p) !== "sandbox") {
@@ -1143,6 +1312,25 @@ diff -ruN a/browser/components/DarkstrCookieFirewall.sys.mjs b/browser/component
 -  getCookieStringForEtld(etld) {
 -    const bucket = this._bucket(etld);
 -    return serializeCookiePairMap(bucket);
++  /** eTLD+1 of every document from `bc` up to the top (http(s) only). */
++  _ancestorBases(bc) {
++    const out = [];
++    for (let c = bc; c; c = c.parent) {
++      let s = null;
++      try {
++        s = this._siteFromPrincipal(c.currentWindowGlobal?.documentPrincipal);
++      } catch (_e) {}
++      if (s) {
++        out.push(s.base);
++      }
++    }
++    return out;
+   },
+ 
+-  listCookiesForEtld(etld, nameFilter) {
+-    const bucket = this._bucket(etld);
+-    if (!bucket) {
+-      return [];
 +  /**
 +   * Document context for a WindowGlobalParent (child install, document.cookie
 +   * writes). Uses the document's own principal and the top-level document's
@@ -1158,14 +1346,19 @@ diff -ruN a/browser/components/DarkstrCookieFirewall.sys.mjs b/browser/component
 +    const doc = this._siteFromPrincipal(docPrincipal);
 +    if (!doc) {
 +      return out;
-+    }
+     }
+-    const out = [];
+-    for (const [name, value] of bucket.entries()) {
+-      if (nameFilter && name !== nameFilter) {
+-        continue;
 +    // http(s) documents use their own URL path; about:blank / srcdoc / blob:
 +    // keep the path of the principal URI they inherited (Gecko cookie URI).
 +    try {
 +      const uri = wgp.documentURI;
 +      if (uri?.schemeIs?.("http") || uri?.schemeIs?.("https")) {
 +        doc.path = String(uri.pathQueryRef || "/").split(/[?#]/)[0] || "/";
-+      }
+       }
+-      out.push({ name, value });
 +    } catch (_e) {}
 +    const bc = wgp.browsingContext;
 +    let topWG = wgp;
@@ -1177,13 +1370,11 @@ diff -ruN a/browser/components/DarkstrCookieFirewall.sys.mjs b/browser/component
 +    if (!top) {
 +      return out;
 +    }
-+    crossSite = doc.base !== top.base;
-+    for (let c = bc?.parent; c && !crossSite; c = c.parent) {
-+      const s = this._siteFromPrincipal(c.currentWindowGlobal?.documentPrincipal);
-+      if (s && s.base !== top.base) {
-+        crossSite = true;
-+      }
-+    }
++    const ancestors = this._ancestorBases(bc?.parent);
++    const kind = classifyContext(doc.base, ancestors, top.base);
++    // SameSite for script: any cross-site frame in the chain (Gecko
++    // site-for-cookies) makes Lax/Strict cookies invisible.
++    crossSite = kind !== KIND_1P;
 +    const decision = this.decisionForEtld(top.base, p);
 +    out.decision = decision;
 +    out.etld = top.base;
@@ -1193,40 +1384,23 @@ diff -ruN a/browser/components/DarkstrCookieFirewall.sys.mjs b/browser/component
 +    out.docPath = doc.path;
 +    out.secure = isSecureOrigin(doc.scheme, doc.host);
 +    out.crossSite = crossSite;
++    out.kind = kind;
 +    if (decision !== "sandbox") {
 +      return out;
-+    }
+     }
 +    const oaKey = this._oaKey(docPrincipal.originAttributes);
 +    out.jarKey = this._jarKey(oaKey, top);
-+    out.cacheKey = `${out.jarKey}#${doc.host}`;
++    out.readKeys = readBucketsFor(out.jarKey, kind);
++    out.cacheKeys = out.readKeys.map((k) => `${k}#${doc.host}`);
++    // Legacy single key (diag / Proof scripts): the bucket a plain cookie
++    // set by this document lands in, else its partition.
++    out.cacheKey = out.cacheKeys[0];
 +    out.seed = this._effectiveSeedForEtld(top.base) >>> 0;
-+    const env = this._env();
++    const env = this._env(docPrincipal.originAttributes);
 +    out.laxByDefault = env.laxByDefault;
 +    out.noneRequiresSecure = env.noneRequiresSecure;
++    out.optInPartitioning = env.optInPartitioning;
 +    this._writeDiag(top.base, out.seed, decision, out.jarKey);
-+    return out;
-   },
- 
--  listCookiesForEtld(etld, nameFilter) {
--    const bucket = this._bucket(etld);
--    if (!bucket) {
--      return [];
--    }
-+  /** Records visible to a content process for one document host. */
-+  snapshotForContext(ctx) {
-+    const bucket = this._bucket(ctx.jarKey, false);
-+    const now = Date.now();
-+    this._purgeExpired(bucket, now);
-     const out = [];
--    for (const [name, value] of bucket.entries()) {
--      if (nameFilter && name !== nameFilter) {
--        continue;
-+    for (const rec of bucket?.values() || []) {
-+      if (hostMatchesRecord(ctx.docHost, rec)) {
-+        out.push(sanitizeForChild(rec));
-       }
--      out.push({ name, value });
-     }
      return out;
    },
  
@@ -1235,16 +1409,45 @@ diff -ruN a/browser/components/DarkstrCookieFirewall.sys.mjs b/browser/component
 -    const policy = this.policyForBrowsingContext(bc);
 -    if (policy.decision !== "sandbox") {
 -      return { policy, cookie: null };
++  /**
++   * Records visible to a content process for one document host, per bucket
++   * the document reads: { "<bucketKey>#<host>": [records] }.
++   */
++  snapshotForContext(ctx) {
++    const now = Date.now();
++    const out = {};
++    for (const key of ctx.readKeys || []) {
++      const bucket = this._bucket(key, false);
++      this._purgeExpired(bucket, now);
++      const recs = [];
++      for (const rec of bucket?.values() || []) {
++        if (hostMatchesRecord(ctx.docHost, rec)) {
++          recs.push(sanitizeForChild(rec));
++        }
++      }
++      out[`${key}#${ctx.docHost}`] = recs;
+     }
+-    return {
+-      policy,
+-      cookie: this.getCookieStringForEtld(policy.etld),
+-    };
++    return out;
+   },
+ 
+-  /** Child: document.cookie write. */
+-  setDocumentCookie(bc, raw) {
+-    const policy = this.policyForBrowsingContext(bc);
+-    if (policy.decision !== "sandbox") {
+-      return { policy, ok: false };
 +  _onSyncInstall(message) {
 +    const id = message?.data?.innerWindowId;
 +    const wgp = id ? WindowGlobalParent.getByInnerWindowId(id) : null;
 +    if (!wgp) {
 +      return { decision: "retry" };
      }
--    return {
--      policy,
--      cookie: this.getCookieStringForEtld(policy.etld),
--    };
+-    const parsed = parseDocumentCookieWrite(raw);
+-    if (!parsed) {
+-      return { policy, ok: false };
 +    try {
 +      const senderPid = message.target?.osPid;
 +      if (
@@ -1258,17 +1461,8 @@ diff -ruN a/browser/components/DarkstrCookieFirewall.sys.mjs b/browser/component
 +      }
 +    } catch (_e) {}
 +    return this.installForWindowGlobal(wgp);
-   },
- 
--  /** Child: document.cookie write. */
--  setDocumentCookie(bc, raw) {
--    const policy = this.policyForBrowsingContext(bc);
--    if (policy.decision !== "sandbox") {
--      return { policy, ok: false };
--    }
--    const parsed = parseDocumentCookieWrite(raw);
--    if (!parsed) {
--      return { policy, ok: false };
++  },
++
 +  /** Child install (sync via ppmm, or async fallback via the actor). */
 +  installForWindowGlobal(wgp) {
 +    const ctx = this.documentContext(wgp);
@@ -1296,7 +1490,8 @@ diff -ruN a/browser/components/DarkstrCookieFirewall.sys.mjs b/browser/component
      }
 -    this.ingestPair(policy.etld, parsed.name, parsed.value, this.getPlan());
 -    return { policy, ok: true };
-+    return { ...ctx, records: this.snapshotForContext(ctx) };
++    const buckets = this.snapshotForContext(ctx);
++    return { ...ctx, buckets, records: Object.values(buckets).flat() };
    },
  
 -  storeGet(bc, name) {
@@ -1317,58 +1512,110 @@ diff -ruN a/browser/components/DarkstrCookieFirewall.sys.mjs b/browser/component
 -    }
 -    if (!name) {
 -      return { policy, ok: false };
-+  /** Push one change to every live document whose host can see the cookie. */
-+  _pushDelta(jarKey, rec, deleted) {
-+    const clean = sanitizeForChild(rec);
-+    for (const actor of [...(this._liveActors || [])]) {
-+      const c = actor._darkstrCtx;
-+      if (!c || c.jarKey !== jarKey) {
++  /**
++   * Deliver changes to every live document whose bucket + host can see them.
++   * One message per actor. With `ack`, uses sendQuery and returns the ack
++   * promises (F1: the HTTP response waits on them); otherwise async.
++   * changes: [{ bucketKey, rec, deleted }]
++   */
++  _flushDeltas(changes, opts = {}) {
++    const acks = [];
++    if (!changes?.length) {
++      return acks;
++    }
++    const targets = new Set(this._liveActors || []);
++    for (const a of opts.extraActors || []) {
++      targets.add(a);
++    }
++    for (const actor of targets) {
++      const c = actor?._darkstrCtx;
++      if (!c?.readKeys) {
 +        continue;
 +      }
-+      if (!hostMatchesRecord(c.docHost, rec)) {
++      const byKey = new Map();
++      for (const ch of changes) {
++        if (!c.readKeys.includes(ch.bucketKey) || !hostMatchesRecord(c.docHost, ch.rec)) {
++          continue;
++        }
++        const cacheKey = `${ch.bucketKey}#${c.docHost}`;
++        let d = byKey.get(cacheKey);
++        if (!d) {
++          d = { cacheKey, upserts: [], deletes: [] };
++          byKey.set(cacheKey, d);
++        }
++        if (ch.deleted) {
++          d.deletes.push(cookieKey(ch.rec));
++        } else {
++          d.upserts.push(sanitizeForChild(ch.rec));
++        }
++      }
++      if (!byKey.size) {
 +        continue;
 +      }
++      const data = { batch: [...byKey.values()] };
 +      try {
-+        actor.sendAsyncMessage(MSG_DELTA, {
-+          cacheKey: c.cacheKey,
-+          upserts: deleted ? [] : [clean],
-+          deletes: deleted ? [cookieKey(rec)] : [],
-+        });
++        if (opts.ack && typeof actor.sendQuery === "function") {
++          acks.push(Promise.resolve(actor.sendQuery(MSG_DELTA, data)).catch(() => null));
++        } else {
++          actor.sendAsyncMessage(MSG_DELTA, data);
++        }
 +      } catch (_e) {
-+        this._liveActors.delete(actor);
++        this._liveActors?.delete(actor);
 +      }
      }
 -    this.ingestPair(policy.etld, name, value, this.getPlan());
 -    return { policy, ok: true };
++    return acks;
++  },
++
++  /** Back-compat single change push (async). */
++  _pushDelta(bucketKey, rec, deleted) {
++    return this._flushDeltas([{ bucketKey, rec, deleted }]);
    },
  
 -  storeDelete(bc, name) {
 -    const policy = this.policyForBrowsingContext(bc);
 -    if (policy.decision !== "sandbox") {
 -      return { policy, ok: false };
-+  _store(jarKey, built, opts) {
-+    const bucket = this._bucket(jarKey, true);
++  /**
++   * Apply to a bucket. Changes go to `sink` when given (caller flushes),
++   * otherwise they are pushed asynchronously at once.
++   */
++  _store(bucketKey, built, opts, sink = null) {
++    const bucket = this._bucket(bucketKey, true);
 +    const before = built?.ok ? bucket.get(cookieKey(built.record)) : null;
 +    const res = applyRecord(bucket, built, { ...opts, seq: ++this._seq });
 +    if (!res.changed) {
 +      return res;
 +    }
++    const changes = [];
 +    if (res.deletedKey) {
-+      this._pushDelta(jarKey, before || built.record, true);
++      changes.push({ bucketKey, rec: before || built.record, deleted: true });
 +    } else {
-+      this._pushDelta(jarKey, res.record, false);
++      changes.push({ bucketKey, rec: res.record, deleted: false });
 +      for (const k of res.evicted || []) {
 +        const [name, host, path] = k.split("\u0000");
-+        this._pushDelta(jarKey, { name, host, path, hostOnly: false }, true);
++        changes.push({ bucketKey, rec: { name, host, path, hostOnly: false }, deleted: true });
 +      }
      }
 -    this.deletePair(policy.etld, name);
 -    return { policy, ok: true };
++    if (sink) {
++      sink.push(...changes);
++    } else {
++      this._flushDeltas(changes);
++    }
 +    return res;
 +  },
 +
-+  _syntheticFor(ctxSeed, topBase, rec) {
-+    return syntheticValue(ctxSeed, topBase, this._baseOfHost(rec.host), rec.name);
++  /** Synthetic token; `bucketKey` keeps u-bucket tokens unchanged vs 0048. */
++  _syntheticFor(ctxSeed, topBase, rec, bucketKey = "") {
++    return syntheticValue(
++      ctxSeed,
++      String(topBase || "") + bucketTag(bucketKey),
++      this._baseOfHost(rec.host),
++      rec.name
++    );
 +  },
 +
 +  /** Child: document.cookie / CookieStore write (raw cookie string). */
@@ -1395,10 +1642,19 @@ diff -ruN a/browser/components/DarkstrCookieFirewall.sys.mjs b/browser/component
 +    if (!built.ok) {
 +      return { ok: false, reason: built.reason };
 +    }
-+    if (plan.mode === "synthetic" && !built.deletion) {
-+      built.record.value = this._syntheticFor(ctx.seed, ctx.topBase, built.record);
++    const bucketKey = writeBucketFor(
++      ctx.jarKey,
++      ctx.kind,
++      built.record.partitioned,
++      ctx.optInPartitioning
++    );
++    if (!bucketKey) {
++      return { ok: false, reason: "third-party-unpartitioned" };
 +    }
-+    const res = this._store(ctx.jarKey, built, {
++    if (plan.mode === "synthetic" && !built.deletion) {
++      built.record.value = this._syntheticFor(ctx.seed, ctx.topBase, built.record, bucketKey);
++    }
++    const res = this._store(bucketKey, built, {
 +      fromHttp: false,
 +      secureOrigin: ctx.secure,
 +      now,
@@ -1412,9 +1668,8 @@ diff -ruN a/browser/components/DarkstrCookieFirewall.sys.mjs b/browser/component
 +    if (ctx.decision !== "sandbox") {
 +      return { policy: ctx, cookie: null };
 +    }
-+    const bucket = this._bucket(ctx.jarKey, false);
 +    const recs = matchForScript(
-+      bucket,
++      unionMaps(ctx.readKeys.map((k) => this._bucket(k, false))),
 +      {
 +        host: ctx.docHost,
 +        path: ctx.docPath,
@@ -1440,25 +1695,36 @@ diff -ruN a/browser/components/DarkstrCookieFirewall.sys.mjs b/browser/component
    },
  
    recordInstallStatus(detail, _bc) {
-@@ -613,12 +1337,111 @@
+@@ -613,14 +1588,249 @@
      } catch (_e) {}
    },
  
 -  _channelUri(channel) {
 +  /**
-+   * HTTP context of a channel: request site, top-level site (partition),
-+   * cross-site flag, credentials mode.
++   * HTTP context of a channel (0048r2): request site, top-level site, the
++   * Gecko partition the request uses (kind → buckets), SameSite cross-site
++   * flag against initiator + context chain, credentials mode.
++   *
++   *   top-level document  → 1p; cross-site iff the initiator is
++   *   subdocument         → kind of the new document (target vs the chain of
++   *                          embedders; loadInfo.browsingContext is the parent)
++   *   subresource         → context document (loadingPrincipal) + its
++   *                          ancestors: 1p context & target same-site with top
++   *                          → 1p; 1p context & cross-site target → 3p
++   *                          (partition of top); 3p / 3pf context → its own
++   *                          partition, whatever the target (no top-level
++   *                          cookies from a cross-site context — F2)
++   *   no browsing context → cookieJarSettings.partitionKey (+ ",f") and the
++   *                          loading principal (service / shared workers)
 +   */
 +  _channelContext(channel, plan) {
 +    let li = null;
-     try {
--      return channel.URI || channel.originalURI || null;
--    } catch (_e) {
++    try {
 +      li = channel.loadInfo;
 +    } catch (_e) {}
 +    if (!li) {
-       return null;
-     }
++      return null;
++    }
 +    const req = this._siteFromUri(channel.URI);
 +    if (!req) {
 +      return null;
@@ -1468,6 +1734,7 @@ diff -ruN a/browser/components/DarkstrCookieFirewall.sys.mjs b/browser/component
 +      type = li.externalContentPolicyType;
 +    } catch (_e) {}
 +    const isTopDoc = type === Ci.nsIContentPolicy.TYPE_DOCUMENT;
++    const isSubDoc = type === Ci.nsIContentPolicy.TYPE_SUBDOCUMENT;
 +    let bc = null;
 +    try {
 +      bc = li.browsingContext;
@@ -1484,50 +1751,85 @@ diff -ruN a/browser/components/DarkstrCookieFirewall.sys.mjs b/browser/component
 +        }
 +      } catch (_e) {}
 +    }
++    let initiator = null;
++    try {
++      initiator = this._siteFromPrincipal(li.triggeringPrincipal);
++    } catch (_e) {}
 +    let top = null;
-+    let crossSite = false;
++    let kind = KIND_1P;
++    // Sites whose cross-siteness with the target makes the request
++    // cross-site for SameSite (Gecko site-for-cookies + initiator).
++    const chain = [];
++    if (initiator) {
++      chain.push(initiator.base);
++    }
 +    if (isTopDoc) {
 +      top = req;
-+      try {
-+        const t = this._siteFromPrincipal(li.triggeringPrincipal);
-+        crossSite = !!t && t.base !== req.base;
-+      } catch (_e) {}
 +    } else {
 +      try {
-+        top = this._siteFromPrincipal(
-+          bc?.top?.currentWindowGlobal?.documentPrincipal
-+        );
++        top = this._siteFromPrincipal(bc?.top?.currentWindowGlobal?.documentPrincipal);
 +      } catch (_e) {}
-+      if (!top) {
++      let pk = null;
++      try {
++        pk = parsePartitionKey(li.cookieJarSettings?.partitionKey);
++      } catch (_e) {}
++      if (!top && pk?.host) {
++        top = {
++          scheme: pk.scheme || req.scheme,
++          host: pk.host,
++          base: this._baseOfHost(pk.host),
++        };
++      }
++      let context = null;
++      try {
++        context = this._siteFromPrincipal(li.loadingPrincipal);
++      } catch (_e) {}
++      if (!context && bc) {
 +        try {
-+          const pk = parsePartitionKey(li.cookieJarSettings?.partitionKey);
-+          if (pk?.host) {
-+            top = {
-+              scheme: pk.scheme || req.scheme,
-+              host: pk.host,
-+              base: this._baseOfHost(pk.host),
-+            };
++          context = this._siteFromPrincipal(bc.currentWindowGlobal?.documentPrincipal);
++        } catch (_e) {}
++      }
++      if (!context && !bc) {
++        context = initiator;
++      }
++      if (!top) {
++        top = context || req;
++      }
++      if (isSubDoc) {
++        // New document `req` embedded by bc's document (and its ancestors).
++        const ancestors = bc ? this._ancestorBases(bc) : context ? [context.base] : [];
++        if (!ancestors.length || ancestors[ancestors.length - 1] !== top.base) {
++          ancestors.push(top.base);
++        }
++        kind = classifyContext(req.base, ancestors, top.base);
++        chain.push(...ancestors);
++      } else {
++        let ctxKind;
++        if (bc) {
++          const ancestors = this._ancestorBases(bc.parent);
++          if (!ancestors.length || ancestors[ancestors.length - 1] !== top.base) {
++            ancestors.push(top.base);
 +          }
-+        } catch (_e) {}
-+      }
-+      if (!top) {
-+        try {
-+          top =
-+            this._siteFromPrincipal(li.loadingPrincipal) ||
-+            this._siteFromPrincipal(li.triggeringPrincipal);
-+        } catch (_e) {}
-+      }
-+      if (!top) {
-+        top = req;
-+      }
-+      crossSite = req.base !== top.base;
-+      for (let c = bc; c && !crossSite; c = c.parent) {
-+        const s = this._siteFromPrincipal(c.currentWindowGlobal?.documentPrincipal);
-+        if (s && s.base !== top.base) {
-+          crossSite = true;
++          ctxKind = classifyContext((context || top).base, ancestors, top.base);
++          chain.push(...ancestors);
++        } else if (pk?.foreignAncestor) {
++          ctxKind = KIND_3PF;
++          chain.push(top.base);
++        } else {
++          ctxKind = (context || top).base === top.base ? KIND_1P : KIND_3P;
++          chain.push(top.base);
++        }
++        if (context) {
++          chain.push(context.base);
++        }
++        if (ctxKind === KIND_1P) {
++          kind = req.base === top.base ? KIND_1P : KIND_3P;
++        } else {
++          kind = ctxKind;
 +        }
 +      }
 +    }
++    const crossSite = chain.some((b) => b && b !== req.base);
 +    const decision = this.decisionForEtld(top.base, plan);
 +    let oa = null;
 +    try {
@@ -1541,21 +1843,111 @@ diff -ruN a/browser/components/DarkstrCookieFirewall.sys.mjs b/browser/component
 +    try {
 +      anonymous = !!(channel.loadFlags & Ci.nsIRequest.LOAD_ANONYMOUS);
 +    } catch (_e) {}
++    const jarKey = this._jarKey(this._oaKey(oa), top);
 +    return {
 +      decision,
 +      req,
 +      top,
++      kind,
 +      crossSite,
 +      topLevelNav: isTopDoc,
 +      safeMethod: method === "GET" || method === "HEAD",
 +      secure: isSecureOrigin(req.scheme, req.host),
 +      anonymous,
-+      jarKey: this._jarKey(this._oaKey(oa), top),
++      oa,
++      bc,
++      isDocumentLoad: isTopDoc || isSubDoc,
++      jarKey,
++      readKeys: readBucketsFor(jarKey, kind),
 +    };
++  },
++
++  /**
++   * Live actor of the document that issued a subresource request, with a
++   * context, so the F1 ack also covers a document whose install raced
++   * actor registration.
++   */
++  _requesterActor(ctx) {
++    if (!ctx?.bc || ctx.isDocumentLoad) {
++      return null;
++    }
+     try {
+-      return channel.URI || channel.originalURI || null;
++      const wgp = ctx.bc.currentWindowGlobal;
++      if (!wgp) {
++        return null;
++      }
++      const actor = wgp.getActor(ACTOR_NAME);
++      if (!actor) {
++        return null;
++      }
++      if (!actor._darkstrCtx) {
++        const dctx = this.documentContext(wgp);
++        if (dctx.decision !== "sandbox") {
++          return null;
++        }
++        actor._darkstrCtx = dctx;
++        this._liveActors?.add(actor);
++      }
++      return actor;
+     } catch (_e) {
+       return null;
+     }
    },
  
++  /**
++   * F1: hold the response (examine-* observers run before the channel
++   * delivers OnStartRequest to the content process) until every content
++   * cache that can see the change acked it, or DELTA_ACK_TIMEOUT_MS.
++   */
++  _holdUntilAcked(channel, acks) {
++    if (!acks?.length) {
++      return false;
++    }
++    let suspended = false;
++    try {
++      channel.suspend();
++      suspended = true;
++    } catch (_e) {
++      return false;
++    }
++    let done = false;
++    let timer = null;
++    this._ackStats.held++;
++    const resume = (timedOut) => {
++      if (done) {
++        return;
++      }
++      done = true;
++      if (timedOut === true) {
++        this._ackStats.timeouts++;
++      }
++      try {
++        timer?.cancel?.();
++      } catch (_e) {}
++      if (suspended) {
++        try {
++          channel.resume();
++        } catch (_e) {}
++      }
++    };
++    try {
++      if (typeof Cc !== "undefined" && Ci.nsITimer) {
++        timer = Cc["@mozilla.org/timer;1"].createInstance(Ci.nsITimer);
++        timer.initWithCallback(() => resume(true), DELTA_ACK_TIMEOUT_MS, Ci.nsITimer.TYPE_ONE_SHOT);
++      } else {
++        timer = { t: setTimeout(() => resume(true), DELTA_ACK_TIMEOUT_MS) };
++        timer.cancel = () => clearTimeout(timer.t);
++      }
++    } catch (_e) {}
++    Promise.allSettled(acks).then(() => resume(false), () => resume(false));
++    return true;
++  },
++
    _onHttp(subject, topic) {
-@@ -638,36 +1461,59 @@
+     const plan = this.getPlan();
+     if (!plan.armed) {
+@@ -638,36 +1848,62 @@
        } catch (_e2) {}
        return;
      }
@@ -1579,7 +1971,7 @@ diff -ruN a/browser/components/DarkstrCookieFirewall.sys.mjs b/browser/component
      }
 -    const seed = this._effectiveSeedForEtld(etld);
 -    this._writeDiag(etld, seed, decision);
-+    const env = this._env();
++    const env = this._env(ctx.oa);
  
      if (topic === "http-on-modify-request") {
 -      const cookie = this.getCookieStringForEtld(etld);
@@ -1590,12 +1982,15 @@ diff -ruN a/browser/components/DarkstrCookieFirewall.sys.mjs b/browser/component
 +        } catch (_e) {}
 +        return;
 +      }
-+      const bucket = this._bucket(ctx.jarKey, false);
 +      const now = Date.now();
-+      this._purgeExpired(bucket, now);
++      const buckets = ctx.readKeys.map((k) => {
++        const b = this._bucket(k, false);
++        this._purgeExpired(b, now);
++        return b;
++      });
 +      const cookie = serializeCookies(
 +        matchForRequest(
-+          bucket,
++          unionMaps(buckets),
 +          {
 +            host: ctx.req.host,
 +            path: ctx.req.path,
@@ -1608,7 +2003,7 @@ diff -ruN a/browser/components/DarkstrCookieFirewall.sys.mjs b/browser/component
 +          env
 +        )
 +      );
-+      this._writeDiag(ctx.top.base, undefined, "sandbox", ctx.jarKey);
++      this._writeDiag(ctx.top.base, undefined, "sandbox", ctx.readKeys.join(","));
        try {
 -        Services.prefs.setStringPref(
 -          LAST_COOKIE_OUT_PREF,
@@ -1631,7 +2026,7 @@ diff -ruN a/browser/components/DarkstrCookieFirewall.sys.mjs b/browser/component
          }
          try {
            Services.prefs.setStringPref(
-@@ -688,40 +1534,54 @@
+@@ -688,40 +1924,73 @@
        return;
      }
  
@@ -1667,6 +2062,7 @@ diff -ruN a/browser/components/DarkstrCookieFirewall.sys.mjs b/browser/component
 +    }
 +    const now = Date.now();
 +    const seed = plan.mode === "synthetic" ? this._effectiveSeedForEtld(ctx.top.base) : 0;
++    const sink = [];
 +    for (const line of String(raw).split(/\r?\n/)) {
 +      if (!line.trim()) {
 +        continue;
@@ -1705,22 +2101,40 @@ diff -ruN a/browser/components/DarkstrCookieFirewall.sys.mjs b/browser/component
 -          continue;
 -        }
 -        this.ingestPair(etld, parsed.name, parsed.value, plan);
-+      if (plan.mode === "synthetic" && !built.deletion) {
-+        built.record.value = this._syntheticFor(seed, ctx.top.base, built.record);
++      const bucketKey = writeBucketFor(
++        ctx.jarKey,
++        ctx.kind,
++        built.record.partitioned,
++        env.optInPartitioning
++      );
++      if (!bucketKey) {
++        // Stock (optInPartitioning): third-party cookie without Partitioned.
++        continue;
        }
 -      // Strip so primary jar does not accept these (best-effort vs CookieService race).
 -      try {
 -        channel.setResponseHeader("Set-Cookie", "", false);
 -      } catch (_e) {}
-+      this._store(ctx.jarKey, built, { fromHttp: true, secureOrigin: ctx.secure, now });
++      if (plan.mode === "synthetic" && !built.deletion) {
++        built.record.value = this._syntheticFor(seed, ctx.top.base, built.record, bucketKey);
++      }
++      this._store(bucketKey, built, { fromHttp: true, secureOrigin: ctx.secure, now }, sink);
++    }
++    if (sink.length) {
++      const requester = this._requesterActor(ctx);
++      const acks = this._flushDeltas(sink, {
++        ack: true,
++        extraActors: requester ? [requester] : [],
++      });
++      this._holdUntilAcked(channel, acks);
      }
 +    this._writeDiag(ctx.top.base, seed, "sandbox", ctx.jarKey);
    },
  };
 diff -ruN a/browser/components/DarkstrCookieFirewallChild.sys.mjs b/browser/components/DarkstrCookieFirewallChild.sys.mjs
---- a/browser/components/DarkstrCookieFirewallChild.sys.mjs	2026-10-08 17:15:02.507801754 -0500
-+++ b/browser/components/DarkstrCookieFirewallChild.sys.mjs	2026-10-08 17:15:02.515801779 -0500
-@@ -3,18 +3,48 @@
+--- a/browser/components/DarkstrCookieFirewallChild.sys.mjs	2026-10-08 19:26:09.331041735 -0500
++++ b/browser/components/DarkstrCookieFirewallChild.sys.mjs	2026-10-08 19:26:09.331041735 -0500
+@@ -3,18 +3,107 @@
   * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
  
  /**
@@ -1751,6 +2165,18 @@ diff -ruN a/browser/components/DarkstrCookieFirewallChild.sys.mjs b/browser/comp
 + *
 + * Idle / passthrough / allowlist / non-http(s) principal → uninstall (real
 + * jar behavior), no IPC.
++ *
++ * 0048r2:
++ *   - The cache holds one map per (bucket, host): a document reads the union
++ *     of its buckets (Gecko TCP/CHIPS: first party u+p, cross-site p, A-B-A
++ *     pf) and writes into the bucket the parent's rule picks (cross-site
++ *     contexts only with Partitioned).
++ *   - Deltas arrive batched via sendQuery and are acked after they are
++ *     applied; the parent holds the HTTP response until then (F1).
++ *   - Native gate (F3): this module answers the C++ "darkstr-cookie-gate"
++ *     observer for each inner window: "passthrough" only for documents whose
++ *     parent policy is passthrough; anything else (sandbox, unknown, policy
++ *     unavailable) keeps the real cookie store closed.
   */
  
 -const installedByWindow = new WeakMap();
@@ -1771,12 +2197,59 @@ diff -ruN a/browser/components/DarkstrCookieFirewallChild.sys.mjs b/browser/comp
 +// Documents whose policy has already been fetched (any decision), so the
 +// DOMWindowCreated + DOMDocElementInserted pair costs one sync IPC, not two.
 +const policyCheckedDocuments = new WeakSet();
-+/** cacheKey ("oa|top-site#host") → Map(cookieKey → record). Process-wide. */
++/** cacheKey ("<bucket>#host") → Map(cookieKey → record). Process-wide. */
 +const processCache = new Map();
++
++// ---- F3 native gate --------------------------------------------------------
++const GATE_TOPIC = "darkstr-cookie-gate";
++/** innerWindowId → parent decision ("sandbox" | "passthrough"). */
++const gateDecisions = new Map();
++
++export function recordGateDecision(innerWindowId, decision) {
++  if (!innerWindowId) {
++    return;
++  }
++  if (decision === "sandbox" || decision === "passthrough") {
++    gateDecisions.set(Number(innerWindowId), decision);
++  } else {
++    gateDecisions.delete(Number(innerWindowId));
++  }
++}
++
++/** Decision the C++ gate gets for an inner window (fail closed). */
++export function gateDecisionFor(innerWindowId) {
++  return gateDecisions.get(Number(innerWindowId)) === "passthrough"
++    ? "passthrough"
++    : "block";
++}
++
++const gateObserver = {
++  observe(subject, topic) {
++    if (topic !== GATE_TOPIC) {
++      return;
++    }
++    try {
++      const bag = subject.QueryInterface(Ci.nsIWritablePropertyBag2);
++      let id = 0;
++      try {
++        id = bag.getPropertyAsUint64("innerWindowID");
++      } catch (_e) {}
++      bag.setPropertyAsAString("decision", gateDecisionFor(id));
++    } catch (_e) {}
++  },
++};
++try {
++  Services.obs.addObserver(gateObserver, GATE_TOPIC);
++} catch (_e) {}
++
++/** Test hook. */
++export function _gateDecisionsForTest() {
++  return gateDecisions;
++}
  
  function errorText(error) {
    try {
-@@ -24,207 +54,286 @@
+@@ -24,207 +113,321 @@
    }
  }
  
@@ -1890,21 +2363,26 @@ diff -ruN a/browser/components/DarkstrCookieFirewallChild.sys.mjs b/browser/comp
 -  const parts = [];
 -  for (const [name, value] of map.entries()) {
 -    parts.push(`${name}=${value}`);
-+/** Replace the process cache entry with an authoritative parent snapshot. */
-+function loadSnapshot(cacheKey, records) {
++/** Replace process cache entries with an authoritative parent snapshot. */
++function loadSnapshot(buckets) {
 +  const Core = lazy.DarkstrCookieCore;
-+  const map = new Map();
-+  for (const rec of records || []) {
-+    map.set(Core.cookieKey(rec), { ...rec });
++  for (const [cacheKey, records] of Object.entries(buckets || {})) {
++    const map = new Map();
++    for (const rec of records || []) {
++      map.set(Core.cookieKey(rec), { ...rec });
++    }
++    processCache.set(cacheKey, map);
    }
 -  return parts.join("; ");
-+  processCache.set(cacheKey, map);
-+  return map;
  }
  
 -function restoreDescriptor(target, name, descriptor) {
-+/** Apply a parent delta (HTTP Set-Cookie, other documents, other processes). */
-+export function applyDelta(data) {
+-  try {
+-    if (descriptor) {
+-      Object.defineProperty(target, name, descriptor);
+-    } else {
+-      delete target[name];
++function applyOneDelta(data) {
 +  const Core = lazy.DarkstrCookieCore;
 +  const map = processCache.get(data?.cacheKey);
 +  if (!map) {
@@ -1919,10 +2397,27 @@ diff -ruN a/browser/components/DarkstrCookieFirewallChild.sys.mjs b/browser/comp
 +  return true;
 +}
 +
++/** Apply a parent delta (HTTP Set-Cookie, other documents, other processes). */
++export function applyDelta(data) {
++  if (Array.isArray(data?.batch)) {
++    let any = false;
++    for (const d of data.batch) {
++      any = applyOneDelta(d) || any;
+     }
++    return any;
++  }
++  return applyOneDelta(data);
++}
++
++function mapsFor(ctx) {
++  return (ctx.cacheKeys || [ctx.cacheKey]).map((k) => processCache.get(k));
++}
++
 +function envFor(ctx) {
 +  return {
 +    laxByDefault: !!ctx.laxByDefault,
 +    noneRequiresSecure: ctx.noneRequiresSecure !== false,
++    optInPartitioning: ctx.optInPartitioning !== false,
 +    isPublicSuffix,
 +  };
 +}
@@ -1939,8 +2434,9 @@ diff -ruN a/browser/components/DarkstrCookieFirewallChild.sys.mjs b/browser/comp
 +/** Synchronous document.cookie read from the process cache. */
 +export function readCookieString(ctx) {
 +  const Core = lazy.DarkstrCookieCore;
-+  const map = processCache.get(ctx.cacheKey);
-+  return Core.serializeCookies(Core.matchForScript(map, docView(ctx), envFor(ctx)));
++  return Core.serializeCookies(
++    Core.matchForScript(Core.unionMaps(mapsFor(ctx)), docView(ctx), envFor(ctx))
++  );
 +}
 +
 +/**
@@ -1968,18 +2464,30 @@ diff -ruN a/browser/components/DarkstrCookieFirewallChild.sys.mjs b/browser/comp
 +  if (!built.ok) {
 +    return false;
 +  }
++  const bucketKey = Core.writeBucketFor(
++    ctx.jarKey,
++    ctx.kind || Core.KIND_1P,
++    built.record.partitioned,
++    ctx.optInPartitioning !== false
++  );
++  if (!bucketKey) {
++    // Stock: cross-site context without Partitioned is rejected (check 4).
++    return false;
++  }
 +  if (ctx.mode === "synthetic" && !built.deletion) {
 +    built.record.value = Core.syntheticValue(
 +      ctx.seed >>> 0,
-+      ctx.topBase,
++      String(ctx.topBase || "") + Core.bucketTag(bucketKey),
 +      baseOfHost(built.record.host),
 +      built.record.name
 +    );
 +  }
-+  const map = cacheFor(ctx.cacheKey);
++  const map = cacheFor(`${bucketKey}#${ctx.docHost}`);
 +  let maxCreation = 0;
-+  for (const r of map.values()) {
-+    maxCreation = Math.max(maxCreation, r.creation || 0);
++  for (const m of mapsFor(ctx)) {
++    for (const r of m?.values() || []) {
++      maxCreation = Math.max(maxCreation, r.creation || 0);
++    }
 +  }
 +  const res = Core.applyRecord(map, built, {
 +    fromHttp: false,
@@ -1990,17 +2498,14 @@ diff -ruN a/browser/components/DarkstrCookieFirewallChild.sys.mjs b/browser/comp
 +  if (!res.changed) {
 +    return false;
 +  }
-   try {
--    if (descriptor) {
--      Object.defineProperty(target, name, descriptor);
--    } else {
--      delete target[name];
--    }
++  try {
 +    send(text);
    } catch (_e) {}
 +  return true;
-+}
-+
+ }
+ 
+-function uninstallCookieHooks(rawWindow) {
+-  const record = installedByWindow.get(rawWindow);
 +/** Build the raw cookie string a CookieStore.set()/delete() call implies. */
 +export function cookieStoreRaw(nameOrOpts, value, isDelete) {
 +  let opts;
@@ -2024,11 +2529,12 @@ diff -ruN a/browser/components/DarkstrCookieFirewallChild.sys.mjs b/browser/comp
 +  const ss = String(opts.sameSite || "strict").toLowerCase();
 +  parts.push(`SameSite=${ss === "lax" || ss === "none" ? ss : "strict"}`);
 +  parts.push("Secure");
++  if (opts.partitioned) {
++    parts.push("Partitioned");
++  }
 +  return { name, raw: parts.join("; ") };
- }
- 
--function uninstallCookieHooks(rawWindow) {
--  const record = installedByWindow.get(rawWindow);
++}
++
 +export function uninstallCookieHooks(document) {
 +  const record = installedByDocument.get(document);
    if (!record) {
@@ -2068,6 +2574,8 @@ diff -ruN a/browser/components/DarkstrCookieFirewallChild.sys.mjs b/browser/comp
 +    a &&
 +    b &&
 +    a.cacheKey === b.cacheKey &&
++    String(a.cacheKeys || "") === String(b.cacheKeys || "") &&
++    a.kind === b.kind &&
 +    a.mode === b.mode &&
 +    a.seed === b.seed &&
 +    a.crossSite === b.crossSite &&
@@ -2207,15 +2715,18 @@ diff -ruN a/browser/components/DarkstrCookieFirewallChild.sys.mjs b/browser/comp
      });
      record.docCookie = { target: doc, original: originalCookieDesc };
    } catch (error) {
-@@ -236,128 +345,79 @@
+@@ -236,128 +439,82 @@
      const store = pageWindow.cookieStore;
      if (store && typeof store.get === "function") {
        record.cookieStore = store;
 -      const wrapAsync = (name, impl) => {
 +      const items = (name) => {
 +        const Core = lazy.DarkstrCookieCore;
-+        const map = processCache.get(record.ctx.cacheKey);
-+        const recs = Core.matchForScript(map, docView(record.ctx), envFor(record.ctx));
++        const recs = Core.matchForScript(
++          Core.unionMaps(mapsFor(record.ctx)),
++          docView(record.ctx),
++          envFor(record.ctx)
++        );
 +        return recs
 +          .filter((r) => !name || r.name === name)
 +          .map((r) => ({ name: r.name, value: r.value }));
@@ -2391,7 +2902,7 @@ diff -ruN a/browser/components/DarkstrCookieFirewallChild.sys.mjs b/browser/comp
  }
  
  export class DarkstrCookieFirewallChild extends JSWindowActorChild {
-@@ -369,84 +429,106 @@
+@@ -369,84 +526,122 @@
        error: error ? errorText(error).slice(0, 1000) : "",
      };
      try {
@@ -2455,10 +2966,15 @@ diff -ruN a/browser/components/DarkstrCookieFirewallChild.sys.mjs b/browser/comp
 -        "no-content-window",
 -        "contentWindow unavailable"
 -      );
++    let innerWindowId = 0;
++    try {
++      innerWindowId = this.manager.innerWindowId;
++    } catch (_e) {}
 +    if (!isHttpContentPrincipal(document.nodePrincipal)) {
 +      if (installedByDocument.has(document)) {
 +        uninstallCookieHooks(document);
 +      }
++      recordGateDecision(innerWindowId, null);
        return;
      }
 -
@@ -2472,10 +2988,13 @@ diff -ruN a/browser/components/DarkstrCookieFirewallChild.sys.mjs b/browser/comp
 -      }
 +    const policy = this._policySync();
 +    if (!policy || policy.decision === "retry") {
++      // Unknown policy: the native gate stays closed for this window.
++      recordGateDecision(innerWindowId, null);
 +      this._report(false, eventType, "policy-unavailable");
 +      return;
 +    }
 +    policyCheckedDocuments.add(document);
++    recordGateDecision(innerWindowId, policy.decision);
 +    if (policy.decision !== "sandbox") {
 +      const status = uninstallCookieHooks(document);
 +      this._report(true, eventType, status);
@@ -2483,9 +3002,10 @@ diff -ruN a/browser/components/DarkstrCookieFirewallChild.sys.mjs b/browser/comp
      }
 -
      try {
-+      loadSnapshot(policy.cacheKey, policy.records);
++      loadSnapshot(policy.buckets || { [policy.cacheKey]: policy.records });
 +      const ctx = { ...policy };
 +      delete ctx.records;
++      delete ctx.buckets;
        const status = installCookieHooks(
 -        rawWindow,
 -        this,
@@ -2535,11 +3055,18 @@ diff -ruN a/browser/components/DarkstrCookieFirewallChild.sys.mjs b/browser/comp
 +    }
 +  }
 +
++  didDestroy() {
++    try {
++      recordGateDecision(this.manager?.innerWindowId, null);
++    } catch (_e) {}
++  }
++
 +  receiveMessage(message) {
 +    switch (message.name) {
 +      case MSG_DELTA:
 +        applyDelta(message.data);
-+        break;
++        // Ack (sendQuery): the parent releases the HTTP response now (F1).
++        return true;
 +      case MSG_REINSTALL:
 +        this._install("reinstall");
 +        break;
@@ -2551,8 +3078,8 @@ diff -ruN a/browser/components/DarkstrCookieFirewallChild.sys.mjs b/browser/comp
    }
  }
 diff -ruN a/browser/components/DarkstrCookieFirewallParent.sys.mjs b/browser/components/DarkstrCookieFirewallParent.sys.mjs
---- a/browser/components/DarkstrCookieFirewallParent.sys.mjs	2026-10-08 17:15:02.507801754 -0500
-+++ b/browser/components/DarkstrCookieFirewallParent.sys.mjs	2026-10-08 17:15:02.515801779 -0500
+--- a/browser/components/DarkstrCookieFirewallParent.sys.mjs	2026-10-08 19:26:09.331041735 -0500
++++ b/browser/components/DarkstrCookieFirewallParent.sys.mjs	2026-10-08 19:26:09.331041735 -0500
 @@ -3,49 +3,50 @@
   * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
  

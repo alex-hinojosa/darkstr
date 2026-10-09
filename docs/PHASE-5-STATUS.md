@@ -516,6 +516,8 @@ All five 0043 Worker/SharedWorker WebGPU XOR gates passed on Proof tip `cc692641
 | Tests | [`tests/cookie-firewall-0048.test.mjs`](../tests/cookie-firewall-0048.test.mjs) |
 | Defaults | unchanged — firewall opt-in, hooks default-off |
 | Evidence | `~/AgentDocs/proof/darkstr-0048-cookiefw-20261008/` |
+| Proof (v1 `f3f1e748`) | **FAILED** — F1 fetch Set-Cookie ordering, F2 A-B-A / no-cors top-cookie leak, F3 native setter/getter + `CookieStore.prototype.set` reach the real jar; check 4 changed to match stock (`~/AgentDocs/proof/darkstr-0048-xor-20261008-174506/`) |
+| Respin (0048r2) | JS: ack-ordered deltas + channel suspend (F1), Gecko TCP partition key with foreign-ancestor bit + initiator-context SameSite (F2), reject unpartitioned 3P (check 4). C++: `darkstr.cookieFirewall.contentGate` gate in `CookieCommons` / `CookieStoreNotifier` (F3). See [`COOKIE-SANDBOX-FAKE-JAR.md`](COOKIE-SANDBOX-FAKE-JAR.md#0048r2-respin). Evidence `~/AgentDocs/proof/darkstr-0048r2-cookiefw-20261008/` |
 | Merge | only after Proof PASS |
 
 ## In review — 0051 persona surface (stacked on 0048)
