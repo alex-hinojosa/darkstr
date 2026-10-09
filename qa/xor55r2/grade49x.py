@@ -9,6 +9,7 @@ REAL_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:156.0) Gecko/2010010
 
 import sys as _sys; _sys.path.insert(0, str(__import__('pathlib').Path(__file__).resolve().parent))
 from persona_presence import APPLIED  # noqa: E402
+import persona_presence as _ppd  # noqa: E402
 import persona_presence as _pp  # noqa: E402
 NORM = lambda x: json.loads(re.sub(r'http://(localhost|127\.0\.0\.1|\[::1\]):\d+', 'ORIGIN', re.sub(r'[?&]t=[^"&]*', '', json.dumps(x))))
 PASTED = {'locked42': ('Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:140.0) Gecko/20100101 Firefox/140.0', 'MacIntel', 12, ['en-GB', 'en']),
@@ -31,7 +32,7 @@ def grade(run, base):
         pe = (s.get('page') or {}).get('s') or {}
         chk('page', f'{st}: page fetch UA == page navigator', pe.get('ua') == pn['userAgent'], pe.get('ua'))
         if not armed: chk('3', f'{st}: page plain Firefox 156', pn['userAgent'] == REAL_UA, pn['userAgent'])
-        if armed and s['doc'] != 'd1': chk('5', f'{st}: page persona applied (not real 156)', APPLIED(pn), (pn['userAgent'], pn.get('tz')))
+        if armed and s['doc'] != 'd1': chk('5', f'{st}: page persona applied (persona tuple != native: languages/cores/TZ)', APPLIED(pn), _ppd.describe(pn))
         for k, w in W.items():
             if k == 'swfetch': continue
             if not isinstance(w, dict) or w.get('ctorErr') or w.get('timeout') or w.get('error') or 'nav' not in w:

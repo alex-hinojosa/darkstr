@@ -11,6 +11,7 @@ REAL_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:156.0) Gecko/2010010
 
 import sys as _sys; _sys.path.insert(0, str(__import__('pathlib').Path(__file__).resolve().parent))
 from persona_presence import APPLIED  # noqa: E402
+import persona_presence as _ppd  # noqa: E402
 import persona_presence as _pp  # noqa: E402
 DEF_AL = 'en-US,en;q=0.9'
 SUF = {'s', 'x', 'c', 'xhr', 'img', 'b', 'fr', 'frq', 'frb', 'sf', 'sfq', 'bk', 'sd', 'pp'}
@@ -75,12 +76,12 @@ def grade(run, base):
     if armed:
         for st, p in P.items():
             if p['doc'] != 'd1':
-                chk('X-armed', f'{st}: persona actually applied (UA != real 156)', APPLIED(p['nav']), p['nav']['userAgent'])
+                chk('X-armed', f'{st}: persona actually applied (persona tuple != native: languages/cores/TZ)', APPLIED(p['nav']), _ppd.describe(p['nav']))
         # N2: persona of a document is stable after new tabs / popups
         for a, b in (('t1d2', 't1d2-again'), ('t1d2', 't1d2-after-t3'), ('t1d2', 't1d2-popup'), ('t2d2', 't2d2-again'), ('t2d2', 't2d2-after-t3'), ('t2d2', 't2d2-after-popup'), ('t2d2', 't2d2-final'), ('t1d3', 't1d3-final')):
             if a in P and b in P: chk('N2', f'{b}: same persona as {a} (not flipped by new tab)', persona(P[a]['nav']) == persona(P[b]['nav']), f'{persona(P[a]["nav"])} vs {persona(P[b]["nav"])}')
             else: chk('N2', f'{b} vs {a} present', False, 'missing')
-        if 't1d3' in P: chk('N2', "t1d3: tab1's next document after t3 still armed", APPLIED(P['t1d3']['nav']), P['t1d3']['nav']['userAgent'])
+        if 't1d3' in P: chk('N2', "t1d3: tab1's next document after t3 still armed (persona tuple != native)", APPLIED(P['t1d3']['nav']), _ppd.describe(P['t1d3']['nav']))
     # concurrency loops
     for tab, L in (run.get('loops') or {}).items():
         res = L.get('result') or {}; n = res.get('nav') or {}
