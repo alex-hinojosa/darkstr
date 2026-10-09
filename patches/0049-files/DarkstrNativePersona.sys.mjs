@@ -1377,6 +1377,18 @@ export var DarkstrNativePersona = {
     if (wgp) {
       return this.documentDecision(wgp);
     }
+    // 0049r2: a request made by a dedicated worker (importScripts, module
+    // imports, fetch, XHR — also from nested workers) carries the browsing
+    // context of the window that created the worker. Use that document's
+    // decision: the same one ResolveWorkerPersona gave the worker's
+    // navigator (and its script load, via innerWindowID), so navigator,
+    // timezone, script load and all subresources come from ONE source —
+    // also in popups and in native first documents of an otherwise armed
+    // site. Shared/Service workers carry 0 and keep the site rule.
+    const workerOwner = this._workerOwnerDecisionForChannel(li);
+    if (workerOwner) {
+      return workerOwner;
+    }
     const top = bc?.top;
     if (!top) {
       return this._windowlessDecisionForChannel(li);
@@ -1480,6 +1492,37 @@ export var DarkstrNativePersona = {
       this._workerSiteDecisions.set(site, d);
     }
     return { decision: d, browsingContext: null };
+  },
+
+  /**
+   * 0049r2: decision for a dedicated-worker request via
+   * loadInfo.associatedBrowsingContext (set by Gecko for every request a
+   * dedicated worker makes; 0 for Shared/Service workers). Null when absent.
+   */
+  _workerOwnerDecisionForChannel(li) {
+    let id = 0;
+    try {
+      id = li.associatedBrowsingContextID || 0;
+    } catch (_e) {}
+    if (!id) {
+      return null;
+    }
+    let abc = null;
+    try {
+      abc = li.associatedBrowsingContext;
+    } catch (_e) {}
+    if (!abc) {
+      return null;
+    }
+    let wgp = null;
+    try {
+      wgp = abc.currentWindowGlobal;
+    } catch (_e) {}
+    if (wgp) {
+      return this.documentDecision(wgp);
+    }
+    const top = abc.top || abc;
+    return this._decisionFor(top.currentURI, this._tabArmed(top));
   },
 
   _windowlessDecisionForChannel(li) {

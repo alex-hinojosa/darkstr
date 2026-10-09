@@ -586,6 +586,8 @@ All five 0043 Worker/SharedWorker WebGPU XOR gates passed on Proof tip `cc692641
 | Defaults | unchanged — hooks default-off (C++ never calls chrome then), strictFirstDoc on |
 | Evidence | `~/AgentDocs/proof/darkstr-0049-workers-20261008/` |
 | Merge | after #79 and #80, and only after Proof PASS |
+| Proof (#81 @ `5bc541e`, DMG `baae735f`) | **FAILED** — F1: about:blank popup's dedicated worker (`new w.Worker()` from the opener) had a native navigator / script load but its importScripts / fetch / sync XHR went out with the opener site's persona (rv:140, persona Accept-Language). Evidence `~/AgentDocs/proof/darkstr-0049-xor-20261008-193806/` |
+| Respin (0049r2) | Merged 0051r2 (popup inherits the opener decision), then: every request a dedicated (or nested) worker makes resolves through `loadInfo.associatedBrowsingContext` → that window's `documentDecision` — the same document `ResolveWorkerPersona` used for the worker's navigator/timezone and its script load (innerWindowID). Previously those requests had no window/BC and fell into the windowless site rule ("any live armed doc of the site"), so a worker of a native document (popup, or a first document next to an armed same-site tab) sent armed headers. Shared/Service workers (no associated BC) keep the site rule. Evidence `~/AgentDocs/proof/darkstr-0049r2-workers-20261008/` |
 
 ### Approach — native, no script wrapping
 
@@ -639,6 +641,10 @@ All five 0043 Worker/SharedWorker WebGPU XOR gates passed on Proof tip `cc692641
   changes apply to new workers only.
 - A service worker woken with no live document of its site (push, sync,
   periodic fetch) is native under strictFirstDoc.
+- 0049r2: a dedicated worker's requests follow the creating window's
+  *current* document; a worker still running while its window navigates
+  away (before it is frozen/terminated) would use the new document's
+  decision.
 - The windowless path trusts the principal / partitionKey the content
   process reports (persona strings only; same trust as 0051's install IPC).
 - The 0043 depth prelude is still page-visible JS (toString shows source),

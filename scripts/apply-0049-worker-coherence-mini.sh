@@ -56,6 +56,7 @@ for e in "${MAP[@]}"; do
 done
 C="$R/browser/components"
 grep -Fq 'workerSiteDecision' "$C/DarkstrNativePersona.sys.mjs"
+grep -Fq '_workerOwnerDecisionForChannel' "$C/DarkstrNativePersona.sys.mjs"  # 0049r2
 grep -Fq 'registerProcessActor' "$C/DarkstrWorkerHooks.sys.mjs"
 grep -Fq 'DarkstrWorkerPersonaChild' "$C/DarkstrWorkerHooksChild.sys.mjs"
 grep -Fq 'ResolveWorkerPersona' "$R/dom/workers/WorkerPrivate.cpp"

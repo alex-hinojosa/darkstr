@@ -165,7 +165,7 @@ function newTab() {
   bc.close = () => browsers.splice(browsers.indexOf(browser), 1);
   return bc;
 }
-function channel(url, { bc, type = 20, wg = null, triggering = null, partitionKey = "" } = {}) {
+function channel(url, { bc, type = 20, wg = null, triggering = null, partitionKey = "", assoc = null } = {}) {
   const h = new Map(Object.entries({ "User-Agent": NATIVE_UA, "Accept-Language": NATIVE_AL }));
   return {
     URI: uri(url),
@@ -175,6 +175,9 @@ function channel(url, { bc, type = 20, wg = null, triggering = null, partitionKe
       isTopLevelLoad: type === 6 && !bc?.parent,
       browsingContext: bc,
       innerWindowID: wg ? wg.innerWindowId : 0,
+      // Gecko: set on every request a dedicated (or nested) worker makes.
+      associatedBrowsingContextID: assoc ? assoc.id : 0,
+      associatedBrowsingContext: assoc,
       triggeringPrincipal: triggering,
       loadingPrincipal: triggering,
       originAttributes: { partitionKey },
@@ -574,4 +577,130 @@ test("persona versions and seed persistence untouched (N6 still open)", () => {
   assert.equal(ua(np), ua(np51), "UA pool identical to 0051");
   const readSnap = (s) => s.slice(s.indexOf("  _readSnapshot() {"), s.indexOf("  _readSnapshotFromFfi("));
   assert.equal(readSnap(np), readSnap(np51), "seed/snapshot persistence identical to 0051");
+});
+
+// ------------------------------------------------------------- 0049r2 ---
+// Proof #81 F1: a popup's dedicated worker had a native navigator / script
+// load but its own requests went out with the opener site's persona (site
+// rule). Every dedicated-worker request must use the worker's own decision.
+
+/** All HTTP a dedicated worker makes, as Gecko labels it. */
+function workerTraffic(origin, ownerWg) {
+  const bc = ownerWg.browsingContext;
+  const trig = principal(origin + "/");
+  return {
+    // Main script: loaded with the creating document as loading node.
+    script: fire(channel(origin + "/w/ded.js", { bc, type: 2, wg: ownerWg, triggering: trig })),
+    // In-worker: no window, no browsingContext; associatedBrowsingContext set.
+    importScripts: fire(channel(origin + "/w/lib.js", { bc: null, type: 2, triggering: trig, assoc: bc })),
+    fetch: fire(channel(origin + "/echo?t=ded-f", { bc: null, type: 20, triggering: trig, assoc: bc })),
+    xhr: fire(channel(origin + "/echo?t=ded-x", { bc: null, type: 20, triggering: trig, assoc: bc })),
+    nestedImport: fire(channel(origin + "/w/inner.js", { bc: null, type: 2, triggering: trig, assoc: bc })),
+  };
+}
+function assertOneSource(w, traffic, label) {
+  for (const [k, ch] of Object.entries(traffic)) {
+    assert.equal(ch.ua(), w.ua, `${label}: ${k} UA == worker navigator`);
+    assert.equal(ch.al(), prepareAcceptLanguages(w.languages), `${label}: ${k} Accept-Language == worker navigator.languages`);
+  }
+}
+function openPopup(openerTab, { noopener = false } = {}) {
+  const p = newTab();
+  if (noopener) p.crossGroupOpener = openerTab;
+  else p.opener = openerTab;
+  return p;
+}
+
+for (const [name, setup] of Object.entries(SETUPS)) {
+  test(`0049r2 (${name}): about:blank popup — w.Worker from the opener: navigator, tz, script load and all worker HTTP == popup == opener`, () => {
+    fresh(setup);
+    const t = newTab();
+    navigate(t, "https://alpha.test/");
+    const opener = navigate(t, "https://alpha.test/2");
+    const ov = opener.view();
+    assert.notEqual(ov.ua, NATIVE_UA);
+    const p = openPopup(t);
+    // about:blank inherits the opener's principal (no document channel).
+    const pwg = makeWG(p, "https://alpha.test/2");
+    p.currentWindowGlobal = pwg;
+    p.currentURI = uri("about:blank");
+    p.timezoneOverride = t.timezoneOverride; // BC field inherited by the popup
+    const w = startWorker({ wg: pwg }); // new w.Worker(): creating window = popup
+    assert.deepEqual(pick(w), ov, `${name}: popup worker navigator == opener persona`);
+    assertOneSource(w, workerTraffic("https://alpha.test", pwg), `${name} popup`);
+    if (name === "locked") assert.equal(w.tz, "Europe/London");
+  });
+}
+
+test("0049r2: popup's own script (URL popup) creates the worker: same single source", () => {
+  fresh(ARMED);
+  const t = newTab();
+  navigate(t, "https://alpha.test/");
+  const opener = navigate(t, "https://alpha.test/2");
+  const p = openPopup(t);
+  const pop = navigate(p, "https://alpha.test/popup");
+  assert.equal(pop.nav.userAgent, opener.nav.userAgent, "URL popup inherits the opener (0051r2)");
+  const w = startWorker({ wg: pop.wg });
+  assert.equal(w.ua, opener.nav.userAgent);
+  assertOneSource(w, workerTraffic("https://alpha.test", pop.wg), "URL popup");
+});
+
+test("0049r2: native first document of an armed site — its dedicated worker's HTTP stays native (was: site rule → armed)", () => {
+  fresh(ARMED);
+  const a = newTab();
+  navigate(a, "https://alpha.test/");
+  const armedPage = navigate(a, "https://alpha.test/2");
+  assert.notEqual(armedPage.nav.userAgent, NATIVE_UA);
+  const b = newTab(); // user-opened tab, first document: native (strictFirstDoc)
+  const first = navigate(b, "https://alpha.test/other");
+  assert.equal(first.nav.userAgent, NATIVE_UA);
+  const w = startWorker({ wg: first.wg });
+  assert.equal(w.ua, NATIVE_UA);
+  const tr = workerTraffic("https://alpha.test", first.wg);
+  assertOneSource(w, tr, "native first doc");
+  assert.equal(tr.fetch.ua(), NATIVE_UA);
+  // ... while the armed tab's worker is armed, from the same site.
+  const wa = startWorker({ wg: armedPage.wg });
+  assert.equal(wa.ua, armedPage.nav.userAgent);
+  assertOneSource(wa, workerTraffic("https://alpha.test", armedPage.wg), "armed tab");
+});
+
+test("0049r2: frame's dedicated worker HTTP == top document persona == worker navigator", () => {
+  fresh(ARMED);
+  const t = newTab();
+  navigate(t, "https://alpha.test/");
+  const top = navigate(t, "https://alpha.test/2");
+  const fbc = { id: nextId++, parent: t, top: t, currentURI: uri("https://frame.other.test/") };
+  const fwg = makeWG(fbc, "https://frame.other.test/", top.wg);
+  fbc.currentWindowGlobal = fwg;
+  const w = startWorker({ wg: fwg });
+  assert.equal(w.ua, top.nav.userAgent);
+  assertOneSource(w, workerTraffic("https://frame.other.test", fwg), "frame worker");
+});
+
+test("0049r2: Shared/Service worker requests (no associated BC) keep the site rule", () => {
+  fresh(ARMED);
+  const t = newTab();
+  navigate(t, "https://alpha.test/");
+  const page = navigate(t, "https://alpha.test/2");
+  const b = newTab();
+  navigate(b, "https://alpha.test/x"); // native first doc of the same site
+  const sh = startWorker({ kind: "shared", origin: "https://alpha.test", partitionKey: "(https,alpha.test)" });
+  assert.equal(sh.ua, page.nav.userAgent);
+  const ch = fire(channel("https://alpha.test/shared-fetch", {
+    bc: null, triggering: principal("https://alpha.test/"), partitionKey: "(https,alpha.test)",
+  }));
+  assert.equal(ch.ua(), sh.ua);
+});
+
+test("0049r2: defaults — dedicated worker requests untouched (plain Firefox 156)", () => {
+  fresh({});
+  const t = newTab();
+  navigate(t, "https://alpha.test/");
+  const page = navigate(t, "https://alpha.test/2");
+  const tr = workerTraffic("https://alpha.test", page.wg);
+  for (const ch of Object.values(tr)) {
+    assert.equal(ch.ua(), NATIVE_UA);
+    assert.equal(ch.al(), NATIVE_AL);
+  }
 });
