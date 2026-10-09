@@ -27,7 +27,7 @@ const FILES = join(root, "patches/0049-files");
 const FILES51 = join(root, "patches/0051-files");
 const FILES52 = join(root, "patches/0052-files");
 // Newest shipped copy of a module (later pins supersede earlier ones).
-const NEWER = ["0057-files", "0056-files", "0055-files", "0053r2-files", "0053-files", "0052-files"].map((d) => join(root, "patches", d));
+const NEWER = ["0058-files", "0057c-files", "0057-files", "0056-files", "0055-files", "0053r2-files", "0053-files", "0052-files"].map((d) => join(root, "patches", d));
 const newest = (f, fallbackDir) => {
   for (const d of NEWER) {
     if (existsSync(join(d, f))) return join(d, f);
@@ -597,7 +597,9 @@ test("C++: WorkerNavigator serves the per-worker persona natively", () => {
 test("0055: persona versions follow the engine (N6 closed); seed persistence untouched", () => {
   // 0055 replaced the 139/140 UA pool with the engine version
   // (Services.appinfo.version); seed / snapshot persistence is unchanged.
-  const np = src("DarkstrNativePersona.sys.mjs");
+  // 0058 deliberately completes a locked snapshot's OS fields (covered by the
+  // 0058 tests in persona-surface-0051); this guard pins the last copy before it.
+  const np = readFileSync(join(root, "patches", "0057-files", "DarkstrNativePersona.sys.mjs"), "utf8");
   const np49 = readFileSync(join(FILES, "DarkstrNativePersona.sys.mjs"), "utf8");
   assert.doesNotMatch(np, /rv:1[34]\d\.0|Firefox\/1[34]\d\.0/);
   assert.match(np, /Services\.appinfo\.version/);

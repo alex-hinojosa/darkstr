@@ -1,0 +1,185 @@
+--- a/browser/components/DarkstrModeXor.sys.mjs
++++ b/browser/components/DarkstrModeXor.sys.mjs
+@@ -98,6 +98,15 @@
+   "privacy.trackingprotection.allow_list.hasUserInteractedWithETPSettings";
+ const RESTORE_ONLY_PREFS = Object.freeze([ETP_INTERACTED_PREF]);
+ /**
++ * 0057c: browser.contentblocking.category before Pollution. FPP=false flips it
++ * to "custom" (stock matchCBCategory), and stock never flips back at runtime:
++ * prefsMatch() rejects every category while the pref holds another value, so
++ * only LibreWolf's cfg (pref(), applied at startup) put "strict" back. It is
++ * recorded with the saved copy and re-matched in the idle restore pass.
++ */
++const CATEGORY_RECORD_PREFS = Object.freeze([CB_CATEGORY_PREF]);
++const REMATCH_CATEGORIES = Object.freeze(["strict", "standard"]);
++/**
+  * 0057r2: POLLUTION_PREFS that older builds never wrote. A saved copy made by
+  * such a build lacks them while their current value is still the user's /
+  * stock one, so it is recorded before darkstr takes them over. (RFP / FPP /
+@@ -444,7 +453,11 @@
+   /** 0053: save the pre-Pollution state of POLLUTION_PREFS (once). */
+   _savePrefs({ assumeStock = false } = {}) {
+     const saved = { v: 1, prefs: {} };
+-    for (const name of [...POLLUTION_PREFS.map(([n]) => n), ...RESTORE_ONLY_PREFS]) {
++    for (const name of [
++      ...POLLUTION_PREFS.map(([n]) => n),
++      ...RESTORE_ONLY_PREFS,
++      ...CATEGORY_RECORD_PREFS,
++    ]) {
+       if (Services.prefs.getPrefType(name) === Services.prefs.PREF_INVALID) {
+         continue; // e.g. librewolf.webgl.prompt on a non-LibreWolf build
+       }
+@@ -542,8 +555,13 @@
+     for (const name of RESTORE_ONLY_PREFS) {
+       restore(name);
+     }
++    // 0057c: idle restore pass — once ContentBlockingPrefs has seen the
++    // restored prefs, put the pre-Pollution category back if they fit it
++    // again (no restart needed), then undo the flag the category change sets.
++    const categoryRec = entries[CB_CATEGORY_PREF] || null;
+     try {
+       Services.tm.idleDispatchToMainThread(() => {
++        this._rematchCBCategory(categoryRec);
+         for (const name of RESTORE_ONLY_PREFS) {
+           restore(name);
+         }
+@@ -554,6 +572,139 @@
+     } catch (_e) {}
+   },
+ 
++  /** ContentBlockingPrefs (parent); tests inject a stand-in. */
++  _contentBlockingPrefs() {
++    if (this._cbPrefsForTest) {
++      return this._cbPrefsForTest;
++    }
++    try {
++      return ChromeUtils.importESModule(
++        "moz-src:///browser/components/protections/ContentBlockingPrefs.sys.mjs"
++      ).ContentBlockingPrefs;
++    } catch (_e) {
++      return null;
++    }
++  },
++
++  /**
++   * Category-defining prefs that do not have that category's value
++   * ([name, expected] pairs), or null when the category is unknown.
++   */
++  _cbMismatches(cbp, category) {
++    if (!cbp.CATEGORY_PREFS?.[category] && cbp.setPrefExpectations) {
++      cbp.setPrefExpectations();
++    }
++    const defs = cbp.CATEGORY_PREFS?.[category];
++    if (!defs) {
++      return null;
++    }
++    const out = [];
++    for (const [pref, value] of Object.entries(defs)) {
++      // Same exemptions as stock prefsMatch (user may change these in strict).
++      if (
++        pref === cbp.PREF_ALLOW_LIST_BASELINE ||
++        pref === cbp.PREF_ALLOW_LIST_CONVENIENCE
++      ) {
++        continue;
++      }
++      if (value === null || value === undefined) {
++        if (Services.prefs.prefHasUserValue(pref)) {
++          out.push([pref, null]);
++        }
++        continue;
++      }
++      let current;
++      try {
++        current = readUserValue(pref);
++      } catch (_e) {
++        out.push([pref, value]);
++        continue;
++      }
++      // Stock semantics: a pref that does not exist is not a mismatch; loose !=.
++      // eslint-disable-next-line eqeqeq
++      if (current !== null && current != value) {
++        out.push([pref, value]);
++      }
++    }
++    return out;
++  },
++
++  /**
++   * 0057c: after leaving Pollution, re-match browser.contentblocking.category
++   * to its pre-Pollution value when (and only when) it is still the "custom"
++   * that Pollution's FPP=false caused and every category pref fits the saved
++   * category again. switchingCategory keeps ContentBlockingPrefs from
++   * rewriting any pref (they already match). A category the user changed
++   * meanwhile, a saved "custom", or no record (older saved copy): untouched.
++   * @returns {string} what happened (diagnostics / tests)
++   */
++  _rematchCBCategory(rec) {
++    let result = "no-record";
++    try {
++      if (!rec) {
++        return result;
++      }
++      if (Services.prefs.getStringPref(MODE_PREF, "homogeneous") === "pollution") {
++        return (result = "pollution");
++      }
++      const current = Services.prefs.getStringPref(CB_CATEGORY_PREF, "");
++      const target =
++        rec.user === true && typeof rec.value === "string"
++          ? rec.value
++          : Services.prefs.getDefaultBranch?.("")?.getStringPref(CB_CATEGORY_PREF, "") || "";
++      if (current === target) {
++        return (result = "already");
++      }
++      if (current !== "custom" || !REMATCH_CATEGORIES.includes(target)) {
++        return (result = "left");
++      }
++      const cbp = this._contentBlockingPrefs();
++      const miss = cbp ? this._cbMismatches(cbp, target) : null;
++      if (!miss) {
++        return (result = "no-fit");
++      }
++      // A profile whose first start is already in Pollution saved the
++      // Pollution prefs before ContentBlockingPrefs applied the category (FPP
++      // had no user value yet), so restoring them leaves e.g. FPP=false under
++      // "strict". Only when every mismatch is one of ModeXor's own Pollution
++      // prefs, give those the category's value — what the cfg + stock
++      // setPrefsToCategory do at the next start. Anything else: no-fit.
++      const own = new Set(POLLUTION_PREFS.map(([n]) => n));
++      if (miss.some(([name, v]) => !own.has(name) || typeof v !== "boolean")) {
++        return (result = "no-fit");
++      }
++      for (const [name, v] of miss) {
++        Services.prefs.setBoolPref(name, v);
++      }
++      if (miss.length) {
++        this._lastCategoryFixed = miss.map(([n]) => n);
++      }
++      if (Services.prefs.getStringPref(CB_CATEGORY_PREF, "") === target) {
++        // stock matchCBCategory already re-matched on the pref change
++        return (result = "rematched:" + target + (miss.length ? "+own" : ""));
++      }
++      const was = !!cbp.switchingCategory;
++      cbp.switchingCategory = true;
++      try {
++        if (rec.user === true) {
++          Services.prefs.setStringPref(CB_CATEGORY_PREF, target);
++        } else {
++          Services.prefs.clearUserPref(CB_CATEGORY_PREF);
++        }
++      } finally {
++        cbp.switchingCategory = was;
++      }
++      return (result = "rematched:" + target + (miss.length ? "+own" : ""));
++    } catch (_e) {
++      return (result = "error");
++    } finally {
++      this._lastCategoryRematch = result;
++      try {
++        diagPrefs.setStringPref("darkstr.xor.lastCategoryRematch", result);
++      } catch (_e2) {}
++    }
++  },
++
+   _detectLegacyProfile() {
+     try {
+       if (Services.prefs.getBoolPref(MIGRATED_PREF, false)) {

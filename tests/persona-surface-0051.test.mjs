@@ -24,7 +24,7 @@ const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const FILES = join(root, "patches/0051-files");
 const FILES52 = join(root, "patches/0052-files");
 // Newest shipped copy of a module (later pins supersede earlier ones).
-const NEWER = ["0057-files", "0056-files", "0055-files", "0053r2-files", "0053-files", "0052-files"].map((d) => join(root, "patches", d));
+const NEWER = ["0058-files", "0057c-files", "0057-files", "0056-files", "0055-files", "0053r2-files", "0053-files", "0052-files"].map((d) => join(root, "patches", d));
 const newest = (f, fallbackDir) => {
   for (const d of NEWER) {
     if (existsSync(join(d, f))) return join(d, f);
@@ -126,7 +126,7 @@ const wgById = new Map();
 globalThis.WindowGlobalParent = { getByInnerWindowId: (id) => wgById.get(id) || null };
 
 const personaMod = await import(pathToFileURL(shipped("DarkstrNativePersona.sys.mjs")));
-const childMod = await import(pathToFileURL(join(FILES, "DarkstrNativePersonaChild.sys.mjs")));
+const childMod = await import(pathToFileURL(shipped("DarkstrNativePersonaChild.sys.mjs")));
 const P = personaMod.DarkstrNativePersona;
 const { prepareAcceptLanguages } = personaMod;
 
@@ -230,6 +230,8 @@ function makeWindow() {
   const natives = {
     get userAgent() { check(this, "userAgent"); return NATIVE_UA; },
     get platform() { check(this, "platform"); return "MacIntel"; },
+    get appVersion() { check(this, "appVersion"); return "5.0 (Macintosh)"; },
+    get oscpu() { check(this, "oscpu"); return "Intel Mac OS X 10.15"; },
     get hardwareConcurrency() { check(this, "hardwareConcurrency"); return 8; },
     get language() { check(this, "language"); return "en-US"; },
     get languages() { check(this, "languages"); return langs; },
@@ -438,10 +440,11 @@ test("N4: navigator persona has no deviceMemory/userAgentData and no own propert
   assert.deepEqual(Object.getOwnPropertyNames(nav), []);
   assert.deepEqual(
     Object.keys(childMod.personaValuesFor(p.window)).sort(),
-    ["hardwareConcurrency", "language", "languages", "platform", "userAgent"]
+    // 0058: appVersion / oscpu follow the persona's OS (stock Firefox fields)
+    ["appVersion", "hardwareConcurrency", "language", "languages", "oscpu", "platform", "userAgent"]
   );
   const proto = p.window.Navigator.prototype;
-  for (const prop of ["userAgent", "platform", "hardwareConcurrency", "language", "languages"]) {
+  for (const prop of ["userAgent", "platform", "appVersion", "oscpu", "hardwareConcurrency", "language", "languages"]) {
     const d = Object.getOwnPropertyDescriptor(proto, prop);
     const n = p.window.nativeDescs[prop];
     assert.notEqual(d.get, n.get, `${prop} hooked on the prototype`);
@@ -549,6 +552,38 @@ test("N5: locking is explicit — a pasted snapshot locks and is used verbatim (
     assert.equal(d.ch.al(), "en-GB,en;q=0.9");
   }
   assert.equal(prefs.get("darkstr.persona.snapshot"), JSON.stringify(pasted), "pref untouched");
+});
+
+// ------------------------------------------------------------------ 0058 ---
+// Proof 0055r2 note: a pasted Win32 lock showed navigator.platform Win32 with
+// the host's appVersion "5.0 (Macintosh)". OS-derived fields follow the UA OS.
+for (const [label, pasted, want] of [
+  ["Win32 without appVersion", { userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:139.0) Gecko/20100101 Firefox/139.0", platform: "Win32", hardwareConcurrency: 8, languages: ["en-US", "en"] },
+    { platform: "Win32", appVersion: "5.0 (Windows)", oscpu: "Windows NT 10.0; Win64; x64" }],
+  ["Windows UA, platform MacIntel and a Mac appVersion", { userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:156.0) Gecko/20100101 Firefox/156.0", platform: "MacIntel", appVersion: "5.0 (Macintosh)" },
+    { platform: "Win32", appVersion: "5.0 (Windows)", oscpu: "Windows NT 10.0; Win64; x64" }],
+  ["Ubuntu", { userAgent: "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:156.0) Gecko/20100101 Firefox/156.0" },
+    { platform: "Linux x86_64", appVersion: "5.0 (X11)", oscpu: "Linux x86_64" }],
+]) {
+  test(`0058: pasted lock (${label}) → platform-correct appVersion / oscpu / platform`, () => {
+    fresh({ ...ARMED, "darkstr.strictFirstDoc": false, "darkstr.persona.snapshot": JSON.stringify(pasted) });
+    const { page: p, ch } = navigate(newTab(), "https://alpha.test/");
+    for (const [k, v] of Object.entries(want)) assert.equal(p.nav[k], v, k);
+    assert.match(ch.ua(), /rv:156\.0\) Gecko\/20100101 Firefox\/156\.0$/);
+    assert.equal(p.nav.userAgent, ch.ua());
+    const w = P.workerPersonaFields(P.getPlan().snapshot);
+    assert.equal(w.appVersion, want.appVersion, "worker appVersion");
+    assert.equal(w.platform, want.platform, "worker platform");
+    assert.equal(prefs.get("darkstr.persona.snapshot"), JSON.stringify(pasted), "pref untouched");
+  });
+}
+
+test("0058: a seeded (host-OS) persona keeps the host's appVersion / oscpu", () => {
+  fresh({ ...ARMED, "darkstr.strictFirstDoc": false, "darkstr.persona.seed": 42, "darkstr.persona.rotatePerSite": false });
+  const { page: p } = navigate(newTab(), "https://alpha.test/");
+  assert.equal(p.nav.platform, "MacIntel");
+  assert.equal(p.nav.appVersion, "5.0 (Macintosh)");
+  assert.equal(p.nav.oscpu, "Intel Mac OS X 10.15");
 });
 
 test("N5: seed path is cached per seed and follows seed changes", () => {

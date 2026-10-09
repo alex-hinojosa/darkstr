@@ -1,0 +1,229 @@
+--- a/browser/components/DarkstrNativePersona.sys.mjs
++++ b/browser/components/DarkstrNativePersona.sys.mjs
+@@ -247,6 +247,76 @@
+   "America/Toronto",
+ ];
+ 
++function uaOsToken(ua) {
++  const m = /^Mozilla\/5\.0 \(([^()]+?); rv:/.exec(String(ua || ""));
++  return m ? m[1] : "";
++}
++
++function osOfToken(token) {
++  if (/Windows/.test(token)) {
++    return "windows";
++  }
++  if (/Macintosh|Mac OS X/.test(token)) {
++    return "macos";
++  }
++  if (/X11|Linux/.test(token)) {
++    return "linux";
++  }
++  return null;
++}
++
++function osOfPlatform(platform) {
++  const p = String(platform || "");
++  if (/^Win/.test(p)) {
++    return "windows";
++  }
++  if (/^Mac/.test(p)) {
++    return "macos";
++  }
++  if (/Linux/.test(p)) {
++    return "linux";
++  }
++  return null;
++}
++
++/**
++ * 0058: OS of a snapshot, from its UA OS token first (what HTTP and
++ * navigator.userAgent already claim), else from its platform. null = unknown.
++ */
++export function snapshotOs(snap) {
++  return osOfToken(uaOsToken(snap?.userAgent)) || osOfPlatform(snap?.platform);
++}
++
++/** nsHttpHandler builds the UA OS token from oscpu; this is the inverse. */
++function oscpuOfToken(token) {
++  return token.replace(/^(?:Macintosh|X11); /, "").replace(/^Ubuntu; /, "");
++}
++
++/**
++ * 0058: the OS-derived navigator fields Gecko itself reports on that OS, for
++ * one snapshot: platform,
++ * appVersion ("5.0 (Windows)" / "5.0 (Macintosh)" / "5.0 (X11)") and oscpu
++ * (from the UA OS token, else the OS default). A pasted Win32 snapshot without
++ * appVersion used to get the host's "5.0 (Macintosh)". null = unknown OS.
++ */
++export function platformFieldsFor(snap) {
++  const os = snapshotOs(snap);
++  const group = FIREFOX_UA_GROUPS.find(g => g.os === os);
++  if (!group) {
++    return null;
++  }
++  const token = uaOsToken(snap?.userAgent);
++  const oscpu = oscpuOfToken(osOfToken(token) === os ? token : group.uaOs[0]);
++  return {
++    os,
++    // Gecko: "Win32" on any Windows, "MacIntel" on any Mac, and on Linux the
++    // same "Linux <arch>" string as oscpu.
++    platform: os === "linux" ? oscpu : group.platform,
++    appVersion: group.appVersion,
++    oscpu,
++  };
++}
++
+ /** "<major>.0" of the running engine (Services.appinfo.version), or null. */
+ export function engineFirefoxRv() {
+   try {
+@@ -1298,11 +1368,26 @@
+       if (raw) {
+         const parsed = JSON.parse(raw);
+         if (parsed && typeof parsed.userAgent === "string") {
++          const userAgent = withEngineFirefoxVersion(parsed.userAgent);
++          // 0058: platform / appVersion / oscpu follow the pasted UA's OS
++          // (a Win32 paste no longer gets the host's "5.0 (Macintosh)").
++          const pf = platformFieldsFor({ userAgent, platform: parsed.platform });
++          if (pf && (pf.platform !== parsed.platform || pf.appVersion !== parsed.appVersion)) {
++            diagPrefs.setStringPref(
++              "darkstr.persona.lastSnapshotCompleted",
++              JSON.stringify({
++                os: pf.os,
++                platform: [parsed.platform ?? null, pf.platform],
++                appVersion: [parsed.appVersion ?? null, pf.appVersion],
++              })
++            );
++          }
+           return {
+             // 0055 (N6): an operator lock keeps its OS token / fields, but
+             // a Firefox UA claims the engine's own version.
+-            userAgent: withEngineFirefoxVersion(parsed.userAgent),
+-            platform: parsed.platform || "MacIntel",
++            userAgent,
++            platform: pf?.platform || parsed.platform || "MacIntel",
++            ...(pf ? { appVersion: pf.appVersion, oscpu: pf.oscpu } : {}),
+             hardwareConcurrency: parsed.hardwareConcurrency || 8,
+             deviceMemory: parsed.deviceMemory || 8,
+             languages: Array.isArray(parsed.languages)
+@@ -1915,9 +2000,13 @@
+     if (!snap?.userAgent) {
+       return null;
+     }
++    // 0058: OS-derived fields always agree with the snapshot's UA OS (seeded
++    // personas are the host OS; pasted ones may be any OS).
++    const pf = platformFieldsFor(snap);
+     return {
+       userAgent: String(snap.userAgent),
+-      platform: String(snap.platform || "MacIntel"),
++      platform: String(pf?.platform || snap.platform || "MacIntel"),
++      ...(pf ? { appVersion: pf.appVersion, oscpu: pf.oscpu } : {}),
+       hardwareConcurrency: Number(snap.hardwareConcurrency) || 8,
+       languages: Array.isArray(snap.languages)
+         ? snap.languages.map(String)
+--- a/browser/components/DarkstrNativePersonaChild.sys.mjs
++++ b/browser/components/DarkstrNativePersonaChild.sys.mjs
+@@ -14,7 +14,8 @@
+  *     page script, keyed by innerWindowId so the parent answers for THIS
+  *     document (tab phase + top-level site), never from a global pref.
+  *   - Only fields stock Firefox has: userAgent, platform, hardwareConcurrency,
+- *     language, languages. No deviceMemory, no userAgentData.
++ *     language, languages, and (0058) appVersion / oscpu, which follow the
++ *     snapshot's OS. No deviceMemory, no userAgentData.
+  *   - Overrides replace the accessor on Navigator.prototype (where the native
+  *     one lives) — never own properties of navigator. Getter name / length /
+  *     toString / attributes match the native accessor. `this` decides: this
+@@ -28,7 +29,15 @@
+ 
+ const MSG_INSTALL = "DarkstrNativePersona:Install";
+ const MSG_REFRESH = "DarkstrNativePersona:Refresh";
+-const PROPS = ["userAgent", "platform", "hardwareConcurrency", "language", "languages"];
++const PROPS = [
++  "userAgent",
++  "platform",
++  "appVersion",
++  "oscpu",
++  "hardwareConcurrency",
++  "language",
++  "languages",
++];
+ 
+ /** unwaived navigator → { values: Map(prop → value) } */
+ const navValues = new WeakMap();
+@@ -109,6 +118,12 @@
+     get platform() {
+       return read(this, "platform");
+     },
++    get appVersion() {
++      return read(this, "appVersion");
++    },
++    get oscpu() {
++      return read(this, "oscpu");
++    },
+     get hardwareConcurrency() {
+       return read(this, "hardwareConcurrency");
+     },
+@@ -199,6 +214,12 @@
+     ["language", langs[0]],
+     ["languages", pageLangs],
+   ]);
++  // 0058: absent (older parent) → the native getter answers.
++  for (const prop of ["appVersion", "oscpu"]) {
++    if (typeof snapshot[prop] === "string" && snapshot[prop]) {
++      values.set(prop, snapshot[prop]);
++    }
++  }
+   if (!hookPrototype(pageWindow, navProto)) {
+     return "no-hookable-accessor";
+   }
+--- a/browser/components/DarkstrWorkerHooksChild.sys.mjs
++++ b/browser/components/DarkstrWorkerHooksChild.sys.mjs
+@@ -508,6 +508,10 @@
+     }
+     if (persona.timezone) {
+       bag.setPropertyAsAString("timezone", String(persona.timezone));
++    }
++    // 0058: WorkerNavigator.appVersion follows the persona's OS too.
++    if (persona.appVersion) {
++      bag.setPropertyAsAString("appVersion", String(persona.appVersion));
+     }
+   }
+   const prelude = persona ? buildWorkerPrelude(result.depth) : "";
+--- a/dom/base/DarkstrNavigatorHooks.cpp
++++ b/dom/base/DarkstrNavigatorHooks.cpp
+@@ -240,6 +240,7 @@
+   RefPtr<DarkstrWorkerPersona> persona = new DarkstrWorkerPersona();
+   (void)bag->GetPropertyAsAString(u"userAgent"_ns, persona->mUserAgent);
+   (void)bag->GetPropertyAsAString(u"platform"_ns, persona->mPlatform);
++  (void)bag->GetPropertyAsAString(u"appVersion"_ns, persona->mAppVersion);
+   uint32_t hw = 0;
+   if (NS_SUCCEEDED(
+           bag->GetPropertyAsUint32(u"hardwareConcurrency"_ns, &hw))) {
+--- a/dom/base/DarkstrNavigatorHooks.h
++++ b/dom/base/DarkstrNavigatorHooks.h
+@@ -49,6 +49,8 @@
+ 
+   nsString mUserAgent;
+   nsString mPlatform;
++  // darkstr 0058: "5.0 (Windows)" etc. for the persona's OS; empty = native.
++  nsString mAppVersion;
+   uint32_t mHardwareConcurrency = 0;
+   nsTArray<nsString> mLanguages;
+   nsString mTimezone;
+--- a/dom/workers/WorkerNavigator.cpp
++++ b/dom/workers/WorkerNavigator.cpp
+@@ -148,6 +148,14 @@
+   MOZ_ASSERT(workerPrivate);
+ 
+   if (aCallerType != CallerType::System) {
++    // darkstr 0058: same appVersion as the creating page's persona (its OS).
++    RefPtr<DarkstrWorkerPersona> persona =
++        DarkstrNavigatorHooks::PersonaForWorker(workerPrivate);
++    if (persona && persona->HasNavigator() && !persona->mAppVersion.IsEmpty()) {
++      aAppVersion = persona->mAppVersion;
++      return;
++    }
++
+     if (workerPrivate->ShouldResistFingerprinting(
+             RFPTarget::NavigatorAppVersion)) {
+       // See nsRFPService.h for spoofed value.

@@ -19,7 +19,7 @@ import { dirname, join } from "node:path";
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 // 0053r2 (Proof: ETP-interaction flag) ships ModeXor from patches/0053r2-files.
 // 0057r2 (baseline FPP under Pollution) ships the newest ModeXor from patches/0057-files.
-const F53 = ["0057-files", "0053r2-files", "0053-files"].map((d) => join(root, "patches", d)).find((d) => existsSync(join(d, "DarkstrModeXor.sys.mjs")));
+const F53 = ["0058-files", "0057c-files", "0057-files", "0053r2-files", "0053-files"].map((d) => join(root, "patches", d)).find((d) => existsSync(join(d, "DarkstrModeXor.sys.mjs")));
 
 // ------------------------------------------------- Gecko-like pref store ---
 // Default branch + user branch. Like libpref, setting a user value equal to
@@ -407,6 +407,196 @@ test("0057r2: xorSafe requires baseline FPP off under Pollution", () => {
   assert.equal(MX.applyModeEffects().xorSafe, true);
   setUser("darkstr.mode", "homogeneous");
   MX.uninit();
+});
+
+// ------------------------- 0057c: contentblocking category re-match ---
+// Stock Gecko, faithfully: matchCBCategory() picks the first category whose
+// prefsMatch() holds, else "custom"; prefsMatch() rejects every category while
+// the category pref has another user value, so "custom" never goes back at
+// runtime (only LibreWolf's cfg re-sets "strict" at startup).
+const CBP_STRICT = {
+  "privacy.fingerprintingProtection": true,
+  "network.cookie.cookieBehavior": 5,
+  "privacy.trackingprotection.allow_list.baseline.enabled": true,
+  "privacy.annotate_channels.strict_list.enabled": null,
+};
+function installRealisticCB() {
+  defaults.set("network.cookie.cookieBehavior", 5);
+  defaults.set("privacy.trackingprotection.allow_list.baseline.enabled", true);
+  const cbp = {
+    PREF_CB_CATEGORY: "browser.contentblocking.category",
+    PREF_ALLOW_LIST_BASELINE: "privacy.trackingprotection.allow_list.baseline.enabled",
+    PREF_ALLOW_LIST_CONVENIENCE: "privacy.trackingprotection.allow_list.convenience.enabled",
+    CATEGORY_PREFS: { strict: CBP_STRICT, standard: { "privacy.fingerprintingProtection": null, "network.cookie.cookieBehavior": null } },
+    switchingCategory: false,
+    switchLog: [],
+    prefsMatch(cat) {
+      if (user.has(this.PREF_CB_CATEGORY) && get(this.PREF_CB_CATEGORY) != cat) return false;
+      for (const [k, v] of Object.entries(this.CATEGORY_PREFS[cat])) {
+        if (k === this.PREF_ALLOW_LIST_BASELINE) continue;
+        if (v == null) { if (user.has(k)) return false; }
+        else if (prefs.getPrefType(k) && get(k) != v) return false;
+      }
+      return true;
+    },
+    matchCBCategory() {
+      if (this.switchingCategory) return;
+      for (const c of ["standard", "strict"]) if (this.prefsMatch(c)) { setUser(this.PREF_CB_CATEGORY, c); return; }
+      setUser(this.PREF_CB_CATEGORY, "custom");
+    },
+  };
+  for (const k of ["privacy.fingerprintingProtection", "network.cookie.cookieBehavior"]) prefs.addObserver(k, () => cbp.matchCBCategory());
+  prefs.addObserver("browser.contentblocking.category", () => {
+    cbp.switchLog.push([get("browser.contentblocking.category"), cbp.switchingCategory]);
+    setUser(ETP, true);
+  });
+  MX._cbPrefsForTest = cbp;
+  return cbp;
+}
+function cbProfile(extra = {}) {
+  freshProfile({ "browser.contentblocking.category": "strict", "privacy.fingerprintingProtection": true, ...extra });
+  return installRealisticCB();
+}
+test("0057c: leaving Pollution re-matches the category to strict in the idle pass (no restart), flag exact", () => {
+  const cbp = cbProfile();
+  MX.init();
+  setUser("darkstr.mode", "pollution");
+  assert.equal(get("browser.contentblocking.category"), "custom", "stock flip on FPP=false");
+  assert.deepEqual(JSON.parse(get("darkstr.xor.savedPrefs")).prefs["browser.contentblocking.category"], { user: true, value: "strict" });
+  setUser("darkstr.mode", "homogeneous");
+  assert.equal(get("privacy.fingerprintingProtection"), true, "FPP restored");
+  assert.equal(get("browser.contentblocking.category"), "custom", "stock alone stays custom (the lag)");
+  for (const f of idle.splice(0)) f();
+  assert.equal(get("browser.contentblocking.category"), "strict", "re-matched without a restart");
+  assert.equal(MX._lastCategoryRematch, "rematched:strict");
+  assert.deepEqual(cbp.switchLog.at(-1), ["strict", true], "set under switchingCategory");
+  assert.equal(cbp.switchingCategory, false, "switchingCategory reset");
+  assert.equal(user.has(ETP), false, "ETP interaction flag back to its pre-Pollution state");
+  assert.equal(user.has("darkstr.xor.savedPrefs"), false);
+  MX.uninit();
+});
+test("0057c: user-valued ETP flag stays true; standard user category re-matched too", () => {
+  freshProfile({ [ETP]: true, "browser.contentblocking.category": "standard" });
+  installRealisticCB();
+  MX.init();
+  setUser("darkstr.mode", "pollution");
+  // (FPP's default is false here, so simulate the stock flip directly.)
+  setUser("browser.contentblocking.category", "custom");
+  setUser("darkstr.mode", "homogeneous");
+  for (const f of idle.splice(0)) f();
+  assert.equal(get("browser.contentblocking.category"), "standard");
+  assert.equal(get(ETP), true);
+  MX.uninit();
+});
+test("0057c: category the user changed after leaving is left alone", () => {
+  cbProfile();
+  MX.init();
+  setUser("darkstr.mode", "pollution");
+  setUser("darkstr.mode", "homogeneous");
+  setUser("browser.contentblocking.category", "standard");
+  for (const f of idle.splice(0)) f();
+  assert.equal(get("browser.contentblocking.category"), "standard");
+  assert.equal(MX._lastCategoryRematch, "left");
+  MX.uninit();
+});
+test("0057c: prefs that no longer fit strict keep custom", () => {
+  cbProfile();
+  MX.init();
+  setUser("darkstr.mode", "pollution");
+  setUser("network.cookie.cookieBehavior", 1); // user customised during Pollution
+  setUser("darkstr.mode", "homogeneous");
+  for (const f of idle.splice(0)) f();
+  assert.equal(get("browser.contentblocking.category"), "custom");
+  assert.equal(MX._lastCategoryRematch, "no-fit");
+  assert.equal(get("network.cookie.cookieBehavior"), 1, "no pref rewritten");
+  MX.uninit();
+});
+test("0057c: a saved custom category, or an older saved copy without the record, is not re-matched", () => {
+  cbProfile({ "browser.contentblocking.category": "custom" });
+  MX.init();
+  setUser("darkstr.mode", "pollution");
+  setUser("darkstr.mode", "homogeneous");
+  for (const f of idle.splice(0)) f();
+  assert.equal(get("browser.contentblocking.category"), "custom");
+  MX.uninit();
+  cbProfile();
+  MX.init();
+  setUser("darkstr.mode", "pollution");
+  const saved = JSON.parse(get("darkstr.xor.savedPrefs"));
+  delete saved.prefs["browser.contentblocking.category"];
+  setUser("darkstr.xor.savedPrefs", JSON.stringify(saved));
+  setUser("darkstr.mode", "homogeneous");
+  for (const f of idle.splice(0)) f();
+  assert.equal(get("browser.contentblocking.category"), "custom");
+  assert.equal(MX._lastCategoryRematch, "no-record");
+  MX.uninit();
+});
+test("0057c: off mode never touches the category or calls ContentBlockingPrefs", () => {
+  const cbp = cbProfile();
+  writes.length = 0;
+  session({ cbSettle: false });
+  session({ cbSettle: false });
+  assert.deepEqual(cbp.switchLog, []);
+  assert.deepEqual(writes.filter(([, k]) => k === "browser.contentblocking.category"), []);
+});
+test("0057c: re-entering Pollution before the idle pass runs skips the re-match", () => {
+  cbProfile();
+  MX.init();
+  setUser("darkstr.mode", "pollution");
+  setUser("darkstr.mode", "homogeneous");
+  const pending = idle.splice(0);
+  setUser("darkstr.mode", "pollution");
+  for (const f of pending) f();
+  assert.equal(get("browser.contentblocking.category"), "custom");
+  MX.uninit();
+  delete MX._cbPrefsForTest;
+});
+test("0057c: first start already in Pollution (FPP saved before CB applied strict): own prefs fixed, strict re-matched", () => {
+  // librewolf.cfg put "strict" in place, but ContentBlockingPrefs had not yet
+  // set FPP when ModeXor saved its state: FPP has no user value (default false).
+  const cbp = cbProfile();
+  user.delete("privacy.fingerprintingProtection");
+  user.set("network.cookie.cookieBehavior", 5);
+  MX.init();
+  setUser("darkstr.mode", "pollution");
+  setUser("browser.contentblocking.category", "custom");
+  assert.deepEqual(JSON.parse(get("darkstr.xor.savedPrefs")).prefs["privacy.fingerprintingProtection"], { user: false, value: null });
+  setUser("darkstr.mode", "homogeneous");
+  assert.equal(get("privacy.fingerprintingProtection"), false, "restored exactly (no user value)");
+  for (const f of idle.splice(0)) f();
+  assert.equal(get("browser.contentblocking.category"), "strict");
+  assert.equal(get("privacy.fingerprintingProtection"), true, "strict's value, as the next start would set it");
+  assert.match(MX._lastCategoryRematch, /^rematched:strict\+own$/);
+  assert.equal(cbp.switchingCategory, false);
+  assert.equal(user.has(ETP), false);
+  MX.uninit();
+});
+test("0057c: a non-ModeXor pref mismatch still blocks the re-match (no-fit), nothing rewritten", () => {
+  cbProfile();
+  MX.init();
+  setUser("darkstr.mode", "pollution");
+  setUser("network.cookie.cookieBehavior", 1);
+  prefs.clearUserPref("privacy.fingerprintingProtection");
+  setUser("darkstr.mode", "homogeneous");
+  const fppBefore = get("privacy.fingerprintingProtection");
+  for (const f of idle.splice(0)) f();
+  assert.equal(get("browser.contentblocking.category"), "custom");
+  assert.equal(MX._lastCategoryRematch, "no-fit");
+  assert.equal(get("privacy.fingerprintingProtection"), fppBefore, "own prefs not touched when blocked");
+  MX.uninit();
+});
+test("0057c: patch artifacts — SHA256SUMS, base pinned to 0057-files, apply script wiring", async () => {
+  const { createHash } = await import("node:crypto");
+  const sha = (p) => createHash("sha256").update(readFileSync(join(root, p))).digest("hex");
+  const [h, n] = readFileSync(join(root, "patches/0057c-files/SHA256SUMS"), "utf8").trim().split(/\s+/);
+  assert.equal(n, "DarkstrModeXor.sys.mjs");
+  assert.equal(sha("patches/0057c-files/DarkstrModeXor.sys.mjs"), h);
+  const [bh] = readFileSync(join(root, "patches/0057c-files/BASE_SHA256SUMS"), "utf8").trim().split(/\s+/);
+  assert.equal(sha("patches/0057-files/DarkstrModeXor.sys.mjs"), bh);
+  const sh = readFileSync(join(root, "scripts/apply-0057c-cb-category-mini.sh"), "utf8");
+  assert.match(sh, /0057c-darkstr-cb-category-rematch\.patch/);
+  assert.match(sh, /obj-aarch64-apple-darwin25\.6\.0/);
+  assert.doesNotMatch(sh.split("\n").filter((l) => !l.startsWith("#")).join("\n"), /\bmv\b/);
 });
 
 // ------------------------------- 0057r4: private-window FP prefs (Proof #92) ---
