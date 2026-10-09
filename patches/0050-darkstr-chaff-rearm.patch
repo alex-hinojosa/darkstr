@@ -1,0 +1,71 @@
+--- a/browser/components/DarkstrChaffScheduler.sys.mjs
++++ b/browser/components/DarkstrChaffScheduler.sys.mjs
+@@ -613,8 +613,10 @@
+     try {
+       const plan = this.resolvePlan();
+       this._persistDiagnostics(plan);
++      // Gate/level prefs changed (or first arm): drop any pending batch from
++      // the previous plan, then arm a fresh interval if still armed.
++      this._cancelAll();
+       if (!plan.armed) {
+-        this._cancelAll();
+         return plan;
+       }
+       this._armIntervalTimer(plan);
+@@ -636,23 +638,39 @@
+     } catch (_e) {}
+   },
+ 
++  /**
++   * Full stop: interval timer AND every pending batch timer. Used when chaff
++   * is disabled / the gate prefs change (refreshPlan) and on uninit.
++   */
+   _cancelAll() {
++    this._cancelIntervalTimer();
++    this._cancelBatchTimers();
++  },
++
++  // 0050 (B6): the rearm path must only replace the interval timer. Pending
++  // batch timers belong to the batch that was just scheduled and must survive.
++  _cancelIntervalTimer() {
+     if (this._timer) {
+       try {
+         this._timer.cancel();
+       } catch (_e) {}
+       this._timer = null;
+     }
+-    for (const t of this._batchTimers) {
++  },
++
++  _cancelBatchTimers() {
++    const pending = this._batchTimers;
++    this._batchTimers = [];
++    for (const t of pending) {
+       try {
+         t.cancel();
+       } catch (_e) {}
+     }
+-    this._batchTimers = [];
+   },
+ 
+   _armIntervalTimer(plan) {
+-    this._cancelAll();
++    // Replace only the interval timer; pending batch timers are left alone.
++    this._cancelIntervalTimer();
+     const delayMs = Math.max(
+       1000,
+       Math.floor((plan.intervalMinutes || 3) * 60 * 1000)
+@@ -692,6 +710,13 @@
+       const timer = Cc["@mozilla.org/timer;1"].createInstance(Ci.nsITimer);
+       timer.initWithCallback(
+         () => {
++          // Fired one-shot timers leave the pending list (no unbounded growth).
++          const idx = this._batchTimers.indexOf(timer);
++          if (idx === -1) {
++            // Already cancelled (disable / mode change / uninit) — never fire.
++            return;
++          }
++          this._batchTimers.splice(idx, 1);
+           this._fireOneBeacon(i, count, level);
+         },
+         delay,
