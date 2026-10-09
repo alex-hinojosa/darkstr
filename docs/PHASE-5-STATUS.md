@@ -1798,3 +1798,21 @@ These are properties of Pollution's pref set, not of the WebGPU gate. Intel-pers
   - **b120e999: 1303/1303 PASS.** Windows snapshots: ANGLE D3D11 buckets; the own GPU (GTX 1660 SUPER) is reported as stock does (`GTX 980` bucket). Linux snapshots: Mesa / NVIDIA / AMD buckets; the Apple GPU is replaced by a Linux default. The Mac snapshot is unchanged (Apple). Every worker equals its page, and WebGPU stays hidden for Windows / Linux.
   - **Negative controls:** 9eea6a5 (#96 before this commit, `darkstr-0058c-84d876e7`; that name is the DMG's sha256 prefix, not a commit) **FAIL 1243/1303**, and bc32b6ee **FAIL 1243/1303**. In both, all 60 failures are the Windows / Linux snapshot documents reporting `Apple / Apple M1, or similar`.
   - **Regression on b120e999:** WebGL / depth 605/605, private windows 71/71, Fable S1 PASS. Keychain: own seed items deleted, none left.
+
+### 0058c r2: combined with 0059 after main moved to 2c8da76 (shadow-copy fix)
+- **Problem:** `patches/0058c-files/DarkstrDepthHooks.sys.mjs` and `patches/0059-files/DarkstrDepthHooks.sys.mjs` were both full copies cut from the same base (the 0057 copy). On main (0059 applied), apply-0058c's base check failed. Applied in the other order, 0058c's copy would have silently dropped 0059's actor change (no `matches`, so opaque frames get depth noise). npm could not see it, because each pin's tests read only their own copy.
+- **Fix (commit 8aabd6f):**
+  - 0058c's copy is the 3-way merge (`git merge-file`, clean) of the 0058c copy and the 0059 copy over their common base. The only difference from the Proof-tested 0058c copy is 0059's hunk.
+  - `BASE_SHA256SUMS` now names 0059's copy (`de8f1d4d…`), and the patch is regenerated against it.
+  - apply-0058c checks against main (0058b + 0059) and fails if 0059's change is missing.
+- **Guard:** `patches/STACK` (shipped pins, oldest first) and `tests/stack-consistency.test.mjs`. For every file carried by more than one pin:
+  - (A) a pin's `BASE_SHA256SUMS` must name the previous carrier's exact copy;
+  - (B) replaying the stack, every line a pin's patch adds must survive in the shipped copy, unless a later pin's patch removes it.
+
+  On fd257b5 it fails with "0058c: DarkstrDepthHooks.sys.mjs was cut on 0057 instead of 0059 … 0059's change is shadowed" and "5 line(s) added by 0059 are gone". It passes on main, on 8aabd6f, and on main + #96 + #98 + #99 combined.
+- **DMG `darkstr-0058c-r2-8aabd6f9.dmg`** (main 2c8da76 + 0058c r2), sha256 `b27848ca4ddc1309198f574baa0e24078713636a377a79ecd765670ef21c67cd`. dmgverify: 4/4 omni files MATCH. npm 344/344.
+- **Suites on r2** (`~/AgentDocs/proof/darkstr-0058c-r2-20261009-1625/suites/`, each on its own port, fresh profiles):
+  - 0059 opaque frames: **1285/1285**.
+  - 0058c snapshots: **1303/1303**. On the first run, one profile's browser had no WebGL context at all (`gl is null` in page and every worker, 20 checks). A rerun passed 1303/1303, so this is an environment flake, not a wrong string.
+  - WebGL/depth: **605/605**.
+  - Private windows: **71/71**.
