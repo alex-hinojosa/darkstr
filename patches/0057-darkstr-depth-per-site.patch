@@ -29,7 +29,30 @@
  
  /**
   * 0052 (Fable B1 / O7): diagnostics stay in memory. They reach prefs.js only
-@@ -225,9 +240,25 @@
+@@ -90,6 +105,9 @@
+ };
+ 
+ // Host-OS filtered Firefox-family GPU pairs (thin subset of profiles.js).
++// 0057r4: renderers are the RAW GL_RENDERER Firefox gets on that OS (Windows:
++// ANGLE Direct3D11); page / worker hooks report them through Gecko's
++// sanitizer like stock ("..., or similar").
+ const GPU_BY_OS = {
+   macos: [
+     { vendor: "Apple", renderer: "Apple M1" },
+@@ -97,9 +115,9 @@
+     { vendor: "Intel Inc.", renderer: "Intel(R) Iris(R) Plus Graphics" },
+   ],
+   windows: [
+-    { vendor: "Google Inc. (Intel)", renderer: "ANGLE (Intel, Intel(R) UHD Graphics 630, OpenGL 4.5)" },
+-    { vendor: "Google Inc. (NVIDIA)", renderer: "ANGLE (NVIDIA, NVIDIA GeForce RTX 3060, OpenGL 4.5)" },
+-    { vendor: "Google Inc. (AMD)", renderer: "ANGLE (AMD, AMD Radeon RX 580, OpenGL 4.5)" },
++    { vendor: "Google Inc. (Intel)", renderer: "ANGLE (Intel, Intel(R) UHD Graphics 630 Direct3D11 vs_5_0 ps_5_0, D3D11)" },
++    { vendor: "Google Inc. (NVIDIA)", renderer: "ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 Direct3D11 vs_5_0 ps_5_0, D3D11)" },
++    { vendor: "Google Inc. (AMD)", renderer: "ANGLE (AMD, AMD Radeon RX 580 Direct3D11 vs_5_0 ps_5_0, D3D11)" },
+   ],
+   linux: [
+     { vendor: "Intel", renderer: "Mesa Intel(R) UHD Graphics 630 (CFL GT2)" },
+@@ -225,9 +243,25 @@
      }
      this._inited = true;
      this._observer = this._observe.bind(this);
@@ -56,7 +79,7 @@
      this._registerActor();
      this.refreshPlan();
    },
-@@ -236,11 +267,15 @@
+@@ -236,11 +270,15 @@
      if (!this._inited) {
        return;
      }
@@ -73,7 +96,7 @@
      if (this._actorRegistered) {
        try {
          ChromeUtils.unregisterWindowActor("DarkstrDepthHooks");
-@@ -273,6 +308,10 @@
+@@ -273,6 +311,10 @@
              "moz-src:///browser/components/DarkstrDepthHooksChild.sys.mjs",
            events: {
              DOMWindowCreated: {},
@@ -84,7 +107,7 @@
              pageshow: {},
            },
          },
-@@ -326,13 +365,24 @@
+@@ -326,13 +368,24 @@
  
      const pollutionActive = mode === "pollution" && !nativeCompatible;
      const seeds = pollutionActive ? this._readDepthSeeds() : null;
@@ -111,10 +134,12 @@
      };
      this._seeds = this._plan.seeds;
      this._setArmed(armed, this._seeds);
-@@ -343,6 +393,47 @@
-     return this._plan || this.refreshPlan();
-   },
+@@ -341,6 +394,47 @@
  
+   getPlan() {
+     return this._plan || this.refreshPlan();
++  },
++
 +  _nativePersona() {
 +    return ChromeUtils.importESModule(
 +      "moz-src:///browser/components/DarkstrNativePersona.sys.mjs"
@@ -154,12 +179,10 @@
 +      }
 +    } catch (_e) {}
 +    return { seeds: this.depthSeedsForBrowsingContext(wgp.browsingContext, wgp) };
-+  },
-+
+   },
+ 
    /** Persist content-install diagnostics. Never writes privacy.*. */
-   recordInstallStatus(detail, browsingContext = null) {
-     const payload = {
-@@ -376,10 +467,17 @@
+@@ -376,10 +470,17 @@
      }
    },
  
@@ -180,7 +203,7 @@
        return null;
      }
      // SubsequentNav arm: reuse NativePersona first-doc gate when available.
-@@ -395,8 +493,18 @@
+@@ -395,8 +496,18 @@
        const { DarkstrNativePersona } = ChromeUtils.importESModule(
          "moz-src:///browser/components/DarkstrNativePersona.sys.mjs"
        );
@@ -201,7 +224,7 @@
          if (!snap) {
            return null;
          }
-@@ -418,7 +526,9 @@
+@@ -418,7 +529,9 @@
          if (rotating) {
            let etld = null;
            try {
@@ -212,7 +235,7 @@
                etld = DarkstrNativePersona._etldPlus1FromBrowsingContext(bc);
              }
            } catch (_eEtld) {}
-@@ -427,18 +537,24 @@
+@@ -427,18 +540,24 @@
            // "last writer wins" prefs, so a frame whose own site could not be
            // resolved took another site's depth seeds. Now it gets none.
            let seed = 0;
@@ -245,18 +268,18 @@
            }
            if (!seed) {
              return null;
-@@ -486,6 +602,10 @@
-       // 0052: NativePersona unavailable → no per-tab phase or site decision.
-       // The global darkstr.persona.docShellPhase mirror is diagnostics only
+@@ -488,6 +607,10 @@
        // now (and was another tab's last load anyway), so fail closed.
-+      return null;
-+    }
-+    if (!plan.seeds) {
-+      // 0057: per-site arming has no global fallback (fail closed).
        return null;
      }
++    if (!plan.seeds) {
++      // 0057: per-site arming has no global fallback (fail closed).
++      return null;
++    }
      const fontSeedOut =
-@@ -699,6 +819,13 @@
+       (plan.seeds.fontSeed >>> 0) ||
+       deriveFontSeed(plan.seeds.canvasSeed, plan.seeds.audioSeed);
+@@ -699,6 +822,13 @@
      try {
        diagPrefs.setBoolPref(ARMED_PREF, this._armed);
      } catch (_e) {}
@@ -565,7 +588,7 @@
 +    }
 +  } catch (_e) {}
 +  return out;
- }
++}
 +function overlayDeviceInfo(device, info) {
 +  // Device features / limits stay native (what was granted). Only adapterInfo
 +  // follows the adapter's persona info.
@@ -631,7 +654,7 @@
 +  });
 +  wrappedAdapters.set(adapter, proxy);
 +  return proxy;
-+}
+ }
 +var gpuProto = Object.getPrototypeOf(gpuObj);
 +if (!gpuProto && typeof GPU !== "undefined" && GPU.prototype) {
 +  gpuProto = GPU.prototype;
@@ -677,7 +700,168 @@
    Object.defineProperty(proto, name, { ...descriptor, value: wrapper });
    replacements.push({
      proto,
-@@ -263,7 +588,8 @@
+@@ -240,7 +565,160 @@
+     maxAnisotropy: 16,
+   },
+ };
++
++// 0057r4: Gecko's WebGL renderer sanitizer (dom/canvas/SanitizeRenderer.cpp,
++// Firefox 156) ported 1:1. A persona's RENDERER and UNMASKED_RENDERER_WEBGL are
++// what Gecko reports for that GPU's raw GL_RENDERER: the same bucket plus the
++// ", or similar" suffix. Byte-identical in DarkstrDepthHooksChild and
++// DarkstrWorkerHooksChild (tests/webgl-renderer-0057r4 checks).
++function geckoChooseDeviceReplacement(str) {
++  str = String(str);
++  if (str.indexOf("llvmpipe") === 0) return "llvmpipe";
++  if (str.indexOf("Apple") === 0) return "Apple M1";
++  let m;
++  const has = (part) => str.indexOf(part) !== -1;
++  // AMD
++  const RADEON_HD_3000 = "Radeon HD 3200 Graphics";
++  const RADEON_HD_5850 = "Radeon HD 5850";
++  const RADEON_R9_290 = "Radeon R9 200 Series";
++  if (has("REMBRANDT") || has("RENOIR") || has("Vega") || has("VII") || has("Fury")) {
++    return RADEON_R9_290;
++  }
++  m = /Radeon.*?((R[579X]|HD) )?([0-9][0-9][0-9]+)/.exec(str);
++  if (m) {
++    const modelNum = parseInt(m[3], 10);
++    if ((m[2] || "") === "HD") {
++      if (modelNum >= 5000) return RADEON_HD_5850;
++      return RADEON_HD_3000;
++    }
++    return RADEON_R9_290;
++  }
++  m = /FirePro.*?([VDW])[0-9][0-9][0-9]+/.exec(str);
++  if (m) return m[1] === "V" ? RADEON_HD_3000 : RADEON_R9_290;
++  if (has("ARUBA")) return RADEON_HD_5850;
++  if (has("AMD ") || has("FirePro") || has("Radeon")) return RADEON_HD_3000;
++  // NVIDIA
++  const GEFORCE_8800 = "GeForce 8800 GTX";
++  const GEFORCE_480 = "GeForce GTX 480";
++  const GEFORCE_980 = "GeForce GTX 980";
++  if (has("NVIDIA") || has("GeForce") || has("Quadro")) {
++    let ret = GEFORCE_8800;
++    if ((m = /GeForce.*?([0-9][0-9][0-9]+)/.exec(str))) {
++      const modelNum = parseInt(m[1], 10);
++      if (modelNum >= 8000) ret = GEFORCE_8800;
++      else if (modelNum >= 900) ret = GEFORCE_980;
++      else if (modelNum >= 400) ret = GEFORCE_480;
++      else ret = GEFORCE_8800;
++    } else if ((m = /Quadro.*?([KMPVT]?)[0-9][0-9][0-9]+/.exec(str))) {
++      if (has("RTX")) ret = GEFORCE_980;
++      else if (m[1]) ret = "MPVT".indexOf(m[1]) !== -1 ? GEFORCE_980 : GEFORCE_480;
++      else ret = GEFORCE_8800;
++    } else if ((m = /TITAN( [BZXVR])?/.exec(str))) {
++      const letter = m[1] ? m[1][1] : " ";
++      ret = letter === " " || letter === "B" || letter === "Z" ? GEFORCE_480 : GEFORCE_980;
++    }
++    if (str.indexOf("NVIDIA") === 0) ret = "NVIDIA " + ret;
++    return ret;
++  }
++  if ((m = /^NV(1?[0-9A-F][0-9A-F])$/.exec(str))) {
++    const modelNum = parseInt(m[1], 16);
++    if (modelNum >= 0x120) return GEFORCE_980;
++    if (modelNum >= 0xc0) return GEFORCE_480;
++    return GEFORCE_8800;
++  }
++  // Intel
++  if (has("Intel")) {
++    if (has("Intel(R) Arc(TM)")) return "Intel(R) Arc(TM) A750 Graphics";
++    if ((m = /Intel.*Graphics( P?([0-9][0-9][0-9]+))?/.exec(str))) {
++      if (!m[1]) return "Intel(R) HD Graphics";
++      const modelNum = parseInt(m[2], 10);
++      if (modelNum >= 5000) return "Intel(R) HD Graphics 400";
++      if (modelNum >= 1000) return "Intel(R) HD Graphics";
++      return "Intel(R) HD Graphics 400";
++    }
++    return "Intel 945GM";
++  }
++  if ((m = /Adreno.*?([A-Z]?[0-9]-?[0-9]+)/.exec(str))) {
++    const modelName = m[1];
++    if (modelName[0] === "A") return "Adreno (TM) A11";
++    if (modelName[0] === "X") return "Adreno (TM) X1-45";
++    const modelNum = parseInt(modelName, 10);
++    if (modelNum >= 600) return "Adreno (TM) 650";
++    if (modelNum >= 500) return "Adreno (TM) 540";
++    if (modelNum >= 400) return "Adreno (TM) 430";
++    if (modelNum >= 300) return "Adreno (TM) 330";
++    return "Adreno (TM) 225";
++  }
++  if ((m = /Mali.*?([0-9][0-9]+)/.exec(str))) {
++    const modelNum = parseInt(m[1], 10);
++    if (modelNum >= 800) return "Mali-T880";
++    if (modelNum >= 700) return "Mali-T760";
++    if (modelNum >= 600) return "Mali-T628";
++    if (modelNum >= 400) return "Mali-400 MP";
++    return "Mali-G51";
++  }
++  if (has("PowerVR")) return has("Rogue") ? "PowerVR Rogue G6200" : "PowerVR SGX 540";
++  if (has("Samsung Xclipse")) return "Samsung Xclipse 920";
++  if (has("Vivante")) return "Vivante GC1000";
++  if (has("VideoCore")) return "VideoCore IV HW";
++  if (has("Tegra")) return "NVIDIA Tegra";
++  if (has("Microsoft Basic Render Driver")) return str;
++  return null;
++}
+ 
++export function geckoSanitizeRenderer(rawRenderer) {
++  const raw = String(rawRenderer);
++  const GENERIC_RENDERER = "Generic Renderer";
++  const device = (() => {
++    let m;
++    if ((m = /^ANGLE [(]([^,]*), ([^,]*)( Direct3D[^,]*), .*[)]$/.exec(raw))) {
++      const r2 = geckoChooseDeviceReplacement(m[2]) || GENERIC_RENDERER;
++      return "ANGLE (" + m[1] + ", " + r2 + m[3] + ")";
++    }
++    if ((m = /^ANGLE [(]+(.*)[)]( on Vulkan) [0-9.]*[)]*$/.exec(raw))) {
++      const r2 = geckoChooseDeviceReplacement(m[1]) || GENERIC_RENDERER;
++      return "ANGLE (" + r2 + ")" + m[2];
++    }
++    if ((m = /^ANGLE [(]([^,]*), ANGLE Metal Renderer: ([^,]*), Version .*[)]$/.exec(raw))) {
++      const r2 = geckoChooseDeviceReplacement(m[2]) || GENERIC_RENDERER;
++      return "ANGLE (" + m[1] + ", ANGLE Metal Renderer: " + r2 + ")";
++    }
++    if (raw.indexOf("ANGLE") !== -1) return null;
++    if ((m = /^(.*) OpenGL Engine$/.exec(raw))) return geckoChooseDeviceReplacement(m[1]);
++    if ((m = /^(.*)(\/PCIe?\/SSE2)$/.exec(raw))) return geckoChooseDeviceReplacement(m[1]);
++    if ((m = /^(.*)( [(].*[)])$/.exec(raw))) return geckoChooseDeviceReplacement(m[1]);
++    return geckoChooseDeviceReplacement(raw);
++  })();
++  if (!device) return GENERIC_RENDERER;
++  return device + ", or similar";
++}
++
++/** webgl.sanitize-unmasked-renderer (Gecko default true). */
++export function sanitizeUnmaskedPref() {
++  try {
++    const prefs = globalThis.Services?.prefs;
++    if (!prefs?.getBoolPref) return true;
++    return prefs.getBoolPref("webgl.sanitize-unmasked-renderer", true) !== false;
++  } catch (_e) {
++    return true;
++  }
++}
++
++/**
++ * RENDERER (0x1F01) / UNMASKED_VENDOR_WEBGL (0x9245) / UNMASKED_RENDERER_WEBGL
++ * (0x9246) for a persona GPU, given what stock returned for the same call.
++ * Stock non-strings (no WEBGL_debug_renderer_info: null + INVALID_ENUM) and
++ * RFP constants ("Mozilla...") pass through; VENDOR (0x1F00) is never touched
++ * (stock "Mozilla").
++ */
++export function personaGlString(param, native, gpu, sanitizeUnmasked = true) {
++  if (typeof native !== "string" || native.indexOf("Mozilla") === 0) return native;
++  if (param === 0x9245) return String(gpu?.vendor || "Apple");
++  const raw = String(gpu?.renderer || "Apple M1");
++  if (param === 0x1f01) return geckoSanitizeRenderer(raw);
++  return sanitizeUnmasked ? geckoSanitizeRenderer(raw) : raw;
++}
++
+ function getCapBucket(renderer) {
+   const r = String(renderer || "");
+   if (/Apple\s+M[12]/.test(r)) {
+@@ -263,7 +741,8 @@
  }
  
  function installDepthHooks(rawWindow, seeds, onRuntimeError) {
@@ -687,7 +871,15 @@
    if (prior && prior.replacements.every(methodIsInstalled)) {
      return "already-installed";
    }
-@@ -315,6 +641,19 @@
+@@ -290,6 +769,7 @@
+       ? seeds.webgpuSeed >>> 0
+       : (speechSeed ^ Math.imul(audioSeed, 0xc2b2ae35)) >>> 0;
+   const gpu = seeds.gpu || { vendor: "Apple", renderer: "Apple M1" };
++  const sanitizeUnmasked = sanitizeUnmaskedPref();
+   const replacements = [];
+ 
+   try {
+@@ -315,6 +795,19 @@
        throw new Error("Canvas 2D native methods unavailable");
      }
  
@@ -707,7 +899,7 @@
      function noisyClone(src) {
        const c = doc.createElement("canvas");
        c.width = src.width;
-@@ -322,7 +661,7 @@
+@@ -322,7 +815,7 @@
        const cctx = c.getContext("2d");
        cctx.drawImage(src, 0, 0);
        const id = Reflect.apply(origGetImageData, cctx, [0, 0, c.width, c.height]);
@@ -716,7 +908,7 @@
        cctx.putImageData(id, 0, 0);
        return c;
      }
-@@ -333,7 +672,7 @@
+@@ -333,7 +826,7 @@
        "toDataURL",
        function (...args) {
          try {
@@ -725,7 +917,7 @@
              return Reflect.apply(origToDataURL, noisyClone(this), args);
            }
          } catch (error) {
-@@ -350,7 +689,7 @@
+@@ -350,7 +843,7 @@
        "toBlob",
        function (callback, ...args) {
          try {
@@ -734,7 +926,7 @@
              return Reflect.apply(origToBlob, noisyClone(this), [callback, ...args]);
            }
          } catch (error) {
-@@ -367,7 +706,11 @@
+@@ -367,7 +860,11 @@
        "getImageData",
        function (...args) {
          const id = Reflect.apply(origGetImageData, this, args);
@@ -747,7 +939,29 @@
          return id;
        },
        replacements
-@@ -547,10 +890,27 @@
+@@ -499,11 +996,16 @@
+           proto,
+           "getParameter",
+           function (param) {
+-            if (param === 0x9245) {
+-              return gpu.vendor;
+-            }
+-            if (param === 0x9246) {
+-              return gpu.renderer;
++            if (param === 0x1f01 || param === 0x9245 || param === 0x9246) {
++              // 0057r4: stock first (null + INVALID_ENUM without the
++              // extension, "Mozilla" under RFP), then the persona's string
++              // as Gecko reports it (sanitized RENDERER / UNMASKED_*).
++              return personaGlString(
++                param,
++                Reflect.apply(origGetParameter, this, [param]),
++                gpu,
++                sanitizeUnmasked
++              );
+             }
+             if (Object.prototype.hasOwnProperty.call(activeGlCaps, param)) {
+               return activeGlCaps[param];
+@@ -547,10 +1049,27 @@
              ]);
              if (
                pixels &&
@@ -776,7 +990,7 @@
              }
              return result;
            },
-@@ -705,74 +1065,91 @@
+@@ -705,72 +1224,89 @@
      }
  
      // OffscreenCanvas window parity with HTMLCanvasElement depth (Phase 1 webgl.js).
@@ -874,8 +1088,8 @@
            replacements
          );
        }
-     }
- 
++    }
++
 +    // 0057r3: record canvases that get a WebGPU context (only when WebGPU is
 +    // exposed) so their exports stay native (see webgpuCanvases).
 +    if (pageWindow.navigator?.gpu) {
@@ -904,12 +1118,10 @@
 +      };
 +      trackWebGpu(canvasProto, "canvas.getContext");
 +      trackWebGpu(pageWindow.OffscreenCanvas?.prototype, "offscreencanvas.getContext");
-+    }
-+
+     }
+ 
      // Soft residual (0036)+0039: fonts coherence / fingerprint farbling.
-     // Brave-inspired, Firefox/LibreWolf/Gecko persona only — no Chrome font lists.
-     // Surfaces: measureText width (Canvas2D + OffscreenCanvas2D), document.fonts.check,
-@@ -1509,425 +1886,15 @@
+@@ -1509,425 +2045,15 @@
        }
      }
  
@@ -1339,7 +1551,7 @@
        );
  
        let installedWebGpu;
-@@ -1992,6 +1959,16 @@
+@@ -1992,6 +2118,16 @@
  var noisedBuffers = new WeakMap();
  // Brave BALANCED-style fudge: [0.999, 1.0). Zero * fudge === 0 (silence-safe).
  var fudge = 0.999 + (((seed >>> 0) / 4294967295) / 1000);
@@ -1356,7 +1568,7 @@
  function contentKey(data) {
    var n = data.length | 0;
    if (!n) { return "0"; }
-@@ -2113,6 +2090,8 @@
+@@ -2113,6 +2249,8 @@
        if (array && array.length) {
          if (kind === "float") {
            farbleFloat(array);
@@ -1365,7 +1577,7 @@
          } else if (kind === "byteTime") {
            farbleByteTimeDomain(array);
          } else {
-@@ -2130,7 +2109,7 @@
+@@ -2130,7 +2268,7 @@
      analyserHooks.push({ name: name, wrapper: wrapped, original: orig });
    }
    wrapAnalyser("getFloatTimeDomainData", "float");
@@ -1374,7 +1586,7 @@
    wrapAnalyser("getByteTimeDomainData", "byteTime");
    wrapAnalyser("getByteFrequencyData", "byteFreq");
  }
-@@ -2228,7 +2207,7 @@
+@@ -2228,7 +2366,7 @@
      }
  
  
@@ -1383,7 +1595,7 @@
      return "installed";
    } catch (error) {
      for (const replacement of replacements.slice().reverse()) {
-@@ -2255,15 +2234,59 @@
+@@ -2255,15 +2393,59 @@
      }
    }
  
@@ -1449,7 +1661,7 @@
  
      const rawWindow = this.contentWindow;
      if (!rawWindow) {
-@@ -2295,7 +2318,11 @@
+@@ -2295,7 +2477,11 @@
    }
  
    async handleEvent(event) {
@@ -1664,7 +1876,174 @@
    };
 --- a/browser/components/DarkstrWorkerHooksChild.sys.mjs
 +++ b/browser/components/DarkstrWorkerHooksChild.sys.mjs
-@@ -37,15 +37,34 @@
+@@ -26,6 +26,159 @@
+ const TOPIC = "darkstr-worker-persona-resolve";
+ const MSG_RESOLVE = "DarkstrWorkerHooks:Resolve";
+ 
++// 0057r4: Gecko's WebGL renderer sanitizer (dom/canvas/SanitizeRenderer.cpp,
++// Firefox 156) ported 1:1. A persona's RENDERER and UNMASKED_RENDERER_WEBGL are
++// what Gecko reports for that GPU's raw GL_RENDERER: the same bucket plus the
++// ", or similar" suffix. Byte-identical in DarkstrDepthHooksChild and
++// DarkstrWorkerHooksChild (tests/webgl-renderer-0057r4 checks).
++function geckoChooseDeviceReplacement(str) {
++  str = String(str);
++  if (str.indexOf("llvmpipe") === 0) return "llvmpipe";
++  if (str.indexOf("Apple") === 0) return "Apple M1";
++  let m;
++  const has = (part) => str.indexOf(part) !== -1;
++  // AMD
++  const RADEON_HD_3000 = "Radeon HD 3200 Graphics";
++  const RADEON_HD_5850 = "Radeon HD 5850";
++  const RADEON_R9_290 = "Radeon R9 200 Series";
++  if (has("REMBRANDT") || has("RENOIR") || has("Vega") || has("VII") || has("Fury")) {
++    return RADEON_R9_290;
++  }
++  m = /Radeon.*?((R[579X]|HD) )?([0-9][0-9][0-9]+)/.exec(str);
++  if (m) {
++    const modelNum = parseInt(m[3], 10);
++    if ((m[2] || "") === "HD") {
++      if (modelNum >= 5000) return RADEON_HD_5850;
++      return RADEON_HD_3000;
++    }
++    return RADEON_R9_290;
++  }
++  m = /FirePro.*?([VDW])[0-9][0-9][0-9]+/.exec(str);
++  if (m) return m[1] === "V" ? RADEON_HD_3000 : RADEON_R9_290;
++  if (has("ARUBA")) return RADEON_HD_5850;
++  if (has("AMD ") || has("FirePro") || has("Radeon")) return RADEON_HD_3000;
++  // NVIDIA
++  const GEFORCE_8800 = "GeForce 8800 GTX";
++  const GEFORCE_480 = "GeForce GTX 480";
++  const GEFORCE_980 = "GeForce GTX 980";
++  if (has("NVIDIA") || has("GeForce") || has("Quadro")) {
++    let ret = GEFORCE_8800;
++    if ((m = /GeForce.*?([0-9][0-9][0-9]+)/.exec(str))) {
++      const modelNum = parseInt(m[1], 10);
++      if (modelNum >= 8000) ret = GEFORCE_8800;
++      else if (modelNum >= 900) ret = GEFORCE_980;
++      else if (modelNum >= 400) ret = GEFORCE_480;
++      else ret = GEFORCE_8800;
++    } else if ((m = /Quadro.*?([KMPVT]?)[0-9][0-9][0-9]+/.exec(str))) {
++      if (has("RTX")) ret = GEFORCE_980;
++      else if (m[1]) ret = "MPVT".indexOf(m[1]) !== -1 ? GEFORCE_980 : GEFORCE_480;
++      else ret = GEFORCE_8800;
++    } else if ((m = /TITAN( [BZXVR])?/.exec(str))) {
++      const letter = m[1] ? m[1][1] : " ";
++      ret = letter === " " || letter === "B" || letter === "Z" ? GEFORCE_480 : GEFORCE_980;
++    }
++    if (str.indexOf("NVIDIA") === 0) ret = "NVIDIA " + ret;
++    return ret;
++  }
++  if ((m = /^NV(1?[0-9A-F][0-9A-F])$/.exec(str))) {
++    const modelNum = parseInt(m[1], 16);
++    if (modelNum >= 0x120) return GEFORCE_980;
++    if (modelNum >= 0xc0) return GEFORCE_480;
++    return GEFORCE_8800;
++  }
++  // Intel
++  if (has("Intel")) {
++    if (has("Intel(R) Arc(TM)")) return "Intel(R) Arc(TM) A750 Graphics";
++    if ((m = /Intel.*Graphics( P?([0-9][0-9][0-9]+))?/.exec(str))) {
++      if (!m[1]) return "Intel(R) HD Graphics";
++      const modelNum = parseInt(m[2], 10);
++      if (modelNum >= 5000) return "Intel(R) HD Graphics 400";
++      if (modelNum >= 1000) return "Intel(R) HD Graphics";
++      return "Intel(R) HD Graphics 400";
++    }
++    return "Intel 945GM";
++  }
++  if ((m = /Adreno.*?([A-Z]?[0-9]-?[0-9]+)/.exec(str))) {
++    const modelName = m[1];
++    if (modelName[0] === "A") return "Adreno (TM) A11";
++    if (modelName[0] === "X") return "Adreno (TM) X1-45";
++    const modelNum = parseInt(modelName, 10);
++    if (modelNum >= 600) return "Adreno (TM) 650";
++    if (modelNum >= 500) return "Adreno (TM) 540";
++    if (modelNum >= 400) return "Adreno (TM) 430";
++    if (modelNum >= 300) return "Adreno (TM) 330";
++    return "Adreno (TM) 225";
++  }
++  if ((m = /Mali.*?([0-9][0-9]+)/.exec(str))) {
++    const modelNum = parseInt(m[1], 10);
++    if (modelNum >= 800) return "Mali-T880";
++    if (modelNum >= 700) return "Mali-T760";
++    if (modelNum >= 600) return "Mali-T628";
++    if (modelNum >= 400) return "Mali-400 MP";
++    return "Mali-G51";
++  }
++  if (has("PowerVR")) return has("Rogue") ? "PowerVR Rogue G6200" : "PowerVR SGX 540";
++  if (has("Samsung Xclipse")) return "Samsung Xclipse 920";
++  if (has("Vivante")) return "Vivante GC1000";
++  if (has("VideoCore")) return "VideoCore IV HW";
++  if (has("Tegra")) return "NVIDIA Tegra";
++  if (has("Microsoft Basic Render Driver")) return str;
++  return null;
++}
++
++export function geckoSanitizeRenderer(rawRenderer) {
++  const raw = String(rawRenderer);
++  const GENERIC_RENDERER = "Generic Renderer";
++  const device = (() => {
++    let m;
++    if ((m = /^ANGLE [(]([^,]*), ([^,]*)( Direct3D[^,]*), .*[)]$/.exec(raw))) {
++      const r2 = geckoChooseDeviceReplacement(m[2]) || GENERIC_RENDERER;
++      return "ANGLE (" + m[1] + ", " + r2 + m[3] + ")";
++    }
++    if ((m = /^ANGLE [(]+(.*)[)]( on Vulkan) [0-9.]*[)]*$/.exec(raw))) {
++      const r2 = geckoChooseDeviceReplacement(m[1]) || GENERIC_RENDERER;
++      return "ANGLE (" + r2 + ")" + m[2];
++    }
++    if ((m = /^ANGLE [(]([^,]*), ANGLE Metal Renderer: ([^,]*), Version .*[)]$/.exec(raw))) {
++      const r2 = geckoChooseDeviceReplacement(m[2]) || GENERIC_RENDERER;
++      return "ANGLE (" + m[1] + ", ANGLE Metal Renderer: " + r2 + ")";
++    }
++    if (raw.indexOf("ANGLE") !== -1) return null;
++    if ((m = /^(.*) OpenGL Engine$/.exec(raw))) return geckoChooseDeviceReplacement(m[1]);
++    if ((m = /^(.*)(\/PCIe?\/SSE2)$/.exec(raw))) return geckoChooseDeviceReplacement(m[1]);
++    if ((m = /^(.*)( [(].*[)])$/.exec(raw))) return geckoChooseDeviceReplacement(m[1]);
++    return geckoChooseDeviceReplacement(raw);
++  })();
++  if (!device) return GENERIC_RENDERER;
++  return device + ", or similar";
++}
++
++/** webgl.sanitize-unmasked-renderer (Gecko default true). */
++export function sanitizeUnmaskedPref() {
++  try {
++    const prefs = globalThis.Services?.prefs;
++    if (!prefs?.getBoolPref) return true;
++    return prefs.getBoolPref("webgl.sanitize-unmasked-renderer", true) !== false;
++  } catch (_e) {
++    return true;
++  }
++}
++
++/**
++ * RENDERER (0x1F01) / UNMASKED_VENDOR_WEBGL (0x9245) / UNMASKED_RENDERER_WEBGL
++ * (0x9246) for a persona GPU, given what stock returned for the same call.
++ * Stock non-strings (no WEBGL_debug_renderer_info: null + INVALID_ENUM) and
++ * RFP constants ("Mozilla...") pass through; VENDOR (0x1F00) is never touched
++ * (stock "Mozilla").
++ */
++export function personaGlString(param, native, gpu, sanitizeUnmasked = true) {
++  if (typeof native !== "string" || native.indexOf("Mozilla") === 0) return native;
++  if (param === 0x9245) return String(gpu?.vendor || "Apple");
++  const raw = String(gpu?.renderer || "Apple M1");
++  if (param === 0x1f01) return geckoSanitizeRenderer(raw);
++  return sanitizeUnmasked ? geckoSanitizeRenderer(raw) : raw;
++}
++
+ export function buildDepthOverrides(depth) {
+   if (!depth || typeof depth.canvasSeed !== "number") {
+     return "";
+@@ -33,438 +186,267 @@
+   const seed = depth.canvasSeed >>> 0;
+   const vendor = depth.gpu?.vendor || "Apple";
+   const renderer = depth.gpu?.renderer || "Apple M1";
++  // 0057r4: RENDERER / UNMASKED_RENDERER_WEBGL as Gecko reports them.
++  const rendererMasked = geckoSanitizeRenderer(renderer);
++  const rendererUnmasked = sanitizeUnmaskedPref() ? rendererMasked : renderer;
+   return `
  ;(function(){
    var __s=${seed};
    function __pn(s,i,v){var h=s^(i*2654435761);h=(h^(v*2246822519))>>>0;h=Math.imul(h^(h>>>16),0x45d9f3b);h=Math.imul(h^(h>>>16),0x45d9f3b);h=(h^(h>>>16))>>>0;var m=(h>>>1)&3;return(h&1)?m:-m;}
@@ -1689,6 +2068,9 @@
    }
 -  if(typeof WebGLRenderingContext!=='undefined'){var _rp=WebGLRenderingContext.prototype.readPixels;WebGLRenderingContext.prototype.readPixels=function(x,y,w,h,f,t,p){_rp.call(this,x,y,w,h,f,t,p);if(p&&f===0x1908&&t===0x1401)__an(p,__s);};}
 -  if(typeof WebGL2RenderingContext!=='undefined'){var _rp2=WebGL2RenderingContext.prototype.readPixels;WebGL2RenderingContext.prototype.readPixels=function(x,y,w,h,f,t,p){_rp2.call(this,x,y,w,h,f,t,p);if(p&&f===0x1908&&t===0x1401)__an(p,__s);};}
+-  var __gv=${JSON.stringify(vendor)},__gr=${JSON.stringify(renderer)};
+-  if(typeof WebGLRenderingContext!=='undefined'){var _gp=WebGLRenderingContext.prototype.getParameter;WebGLRenderingContext.prototype.getParameter=function(p){if(p===0x9245)return __gv;if(p===0x9246)return __gr;return _gp.call(this,p);};}
+-  if(typeof WebGL2RenderingContext!=='undefined'){var _gp2=WebGL2RenderingContext.prototype.getParameter;WebGL2RenderingContext.prototype.getParameter=function(p){if(p===0x9245)return __gv;if(p===0x9246)return __gr;return _gp2.call(this,p);};}
 +  if(typeof WebGLRenderingContext!=='undefined'){var _rp=WebGLRenderingContext.prototype.readPixels;WebGLRenderingContext.prototype.readPixels=function(x,y,w,h,f,t,p){var ret=_rp.apply(this,arguments);if(p&&typeof p==='object'&&arguments.length<=7&&f===0x1908&&t===0x1401){try{__ar(p,__s,x,y,w,h,this.drawingBufferWidth,this.drawingBufferHeight,true);}catch(e){}}return ret;};}
 +  if(typeof WebGL2RenderingContext!=='undefined'){var _rp2=WebGL2RenderingContext.prototype.readPixels;WebGL2RenderingContext.prototype.readPixels=function(x,y,w,h,f,t,p){var ret=_rp2.apply(this,arguments);if(p&&typeof p==='object'&&arguments.length<=7&&f===0x1908&&t===0x1401){try{__ar(p,__s,x,y,w,h,this.drawingBufferWidth,this.drawingBufferHeight,true);}catch(e){}}return ret;};}
 +  // 0057: fonts parity with the window (DepthHooksChild 0036): OffscreenCanvas
@@ -1701,10 +2083,12 @@
 +    var __props=["actualBoundingBoxLeft","actualBoundingBoxRight","actualBoundingBoxAscent","actualBoundingBoxDescent","fontBoundingBoxAscent","fontBoundingBoxDescent","emHeightAscent","emHeightDescent","hangingBaseline","alphabeticBaseline","ideographicBaseline"];
 +    Object.defineProperty(OffscreenCanvasRenderingContext2D.prototype,"measureText",{configurable:true,enumerable:true,writable:true,value:function(text){var m=_oMT.apply(this,arguments);if(!m)return m;var w=m.width,fw=__fw(w);if(fw===w)return m;var out={width:fw};for(var i=0;i<__props.length;i++){var k=__props[i];try{var v=m[k];if(typeof v==='number'){out[k]=(k==="actualBoundingBoxLeft"||k==="actualBoundingBoxRight")?__fw(v):v;}}catch(e){}}return out;}});
 +  }
-   var __gv=${JSON.stringify(vendor)},__gr=${JSON.stringify(renderer)};
-   if(typeof WebGLRenderingContext!=='undefined'){var _gp=WebGLRenderingContext.prototype.getParameter;WebGLRenderingContext.prototype.getParameter=function(p){if(p===0x9245)return __gv;if(p===0x9246)return __gr;return _gp.call(this,p);};}
-   if(typeof WebGL2RenderingContext!=='undefined'){var _gp2=WebGL2RenderingContext.prototype.getParameter;WebGL2RenderingContext.prototype.getParameter=function(p){if(p===0x9245)return __gv;if(p===0x9246)return __gr;return _gp2.call(this,p);};}
-@@ -54,417 +73,223 @@
++  var __gv=${JSON.stringify(vendor)},__gr=${JSON.stringify(rendererUnmasked)},__grm=${JSON.stringify(rendererMasked)};
++  function __gs(p,v){if(typeof v!=='string'||v.indexOf('Mozilla')===0)return v;if(p===0x9245)return __gv;if(p===0x1F01)return __grm;return __gr;}
++  if(typeof WebGLRenderingContext!=='undefined'){var _gp=WebGLRenderingContext.prototype.getParameter;WebGLRenderingContext.prototype.getParameter=function(p){if(p===0x9245||p===0x9246||p===0x1F01)return __gs(p,_gp.call(this,p));return _gp.call(this,p);};}
++  if(typeof WebGL2RenderingContext!=='undefined'){var _gp2=WebGL2RenderingContext.prototype.getParameter;WebGL2RenderingContext.prototype.getParameter=function(p){if(p===0x9245||p===0x9246||p===0x1F01)return __gs(p,_gp2.call(this,p));return _gp2.call(this,p);};}
+ })();`;
+ }
  
  
  /**
@@ -1742,22 +2126,6 @@
 -  // worker compartment via the native 0049 prelude (no chrome Xray channel).
 -  return `
 -;(function(){
--  try {
--    if (typeof navigator === "undefined" || !navigator || !navigator.gpu ||
--        typeof navigator.gpu.requestAdapter !== "function") {
--      return;
--    }
--  } catch (_abs) { return; }
--  var SEED = ${seed} >>> 0;
--  var VENDOR = ${JSON.stringify(vendor)};
--  var RENDERER = ${JSON.stringify(renderer)};
--  function hashStr(s) {
--    var h = SEED;
--    var str = String(s || "");
--    for (var i = 0; i < str.length; i++) {
--      h = Math.imul(h ^ str.charCodeAt(i), 0x01000193) >>> 0;
--    }
--    return h >>> 0;
 +} catch (_e) {}
 +if (!gpuObj) { return hooks; }
 +// WebGL persona -> Firefox-plausible AdapterInfo. Never Chrome/ANGLE brands.
@@ -1766,69 +2134,10 @@
 +  var r = String(RENDERER || "");
 +  if (/apple/i.test(v) || /apple/i.test(r)) {
 +    return { vendor: "apple", architecture: "common-3", device: "", description: r || "Apple GPU" };
-   }
--  function mapAdapterInfo() {
--    var v = VENDOR.toLowerCase();
--    var r = String(RENDERER || "");
--    var desc = r;
--    if (/apple/i.test(v) || /apple/i.test(r)) {
--      return { vendor: "apple", architecture: "common-3", device: "", description: desc || "Apple GPU" };
--    }
--    if (/intel/i.test(v) || /intel/i.test(r)) {
--      return { vendor: "intel", architecture: "gen-12lp", device: "", description: desc || "Intel Graphics" };
--    }
--    if (/nvidia/i.test(v) || /nvidia/i.test(r)) {
--      return { vendor: "nvidia", architecture: "gpu", device: "", description: desc || "NVIDIA GPU" };
--    }
--    if (/amd/i.test(v) || /radeon/i.test(r)) {
--      return { vendor: "amd", architecture: "gcn", device: "", description: desc || "AMD GPU" };
--    }
--    return { vendor: "apple", architecture: "common-3", device: "", description: desc || "Apple GPU" };
++  }
 +  if (/intel/i.test(v) || /intel/i.test(r)) {
 +    return { vendor: "intel", architecture: "gen-12lp", device: "", description: r || "Intel Graphics" };
-   }
--  var PERSONA_INFO = mapAdapterInfo();
--  var ALWAYS_KEEP_FEATURES = { "core-features-and-limits": 1 };
--  function wrapFeatures(nativeFeatures) {
--    if (!nativeFeatures) { return nativeFeatures; }
--    // Soft residual (0043 re-XOR): idempotent — Window DepthHooks may share
--    // GPU.prototype with Worker; a second wrapFeatures on plain farbled feats
--    // dropped timestamp-query (14→13) and broke window↔worker digest parity.
--    try {
--      if (nativeFeatures && nativeFeatures.__darkstrFeats) {
--        return nativeFeatures;
--      }
--      // DepthHooks window wrap may share GPU.prototype and already return a
--      // plain {has,forEach,size} object (Object.prototype / null). Re-subsetting
--      // drops another seed-ranked feature (14→13) and breaks digest parity.
--      var featsProto = Object.getPrototypeOf(nativeFeatures);
--      if (featsProto === Object.prototype || featsProto === null) {
--        return nativeFeatures;
--      }
--    } catch (_idem) {}
--    var all = [];
--    try {
--      if (typeof nativeFeatures.forEach === "function") {
--        nativeFeatures.forEach(function(name) { all.push(String(name)); });
--      } else if (typeof nativeFeatures.values === "function") {
--        var it = nativeFeatures.values();
--        var step;
--        while (!(step = it.next()).done) { all.push(String(step.value)); }
--      }
--    } catch (_e) { return nativeFeatures; }
--    var always = [];
--    var optional = [];
--    for (var i = 0; i < all.length; i++) {
--      if (ALWAYS_KEEP_FEATURES[all[i]]) { always.push(all[i]); }
--      else { optional.push(all[i]); }
--    }
--    optional.sort(function(a, b) {
--      var ra = hashStr("rank:" + a);
--      var rb = hashStr("rank:" + b);
--      if (ra !== rb) { return ra < rb ? -1 : 1; }
--      if (a < b) { return -1; }
--      if (a > b) { return 1; }
--      return 0;
++  }
 +  if (/nvidia/i.test(v) || /nvidia/i.test(r)) {
 +    return { vendor: "nvidia", architecture: "gpu", device: "", description: r || "NVIDIA GPU" };
 +  }
@@ -1860,24 +2169,141 @@
 +  if (known) { return known; }
 +  var visible = new Set();
 +  var hidden = false;
-+  try {
+   try {
+-    if (typeof navigator === "undefined" || !navigator || !navigator.gpu ||
+-        typeof navigator.gpu.requestAdapter !== "function") {
+-      return;
+-    }
+-  } catch (_abs) { return; }
+-  var SEED = ${seed} >>> 0;
+-  var VENDOR = ${JSON.stringify(vendor)};
+-  var RENDERER = ${JSON.stringify(renderer)};
+-  function hashStr(s) {
+-    var h = SEED;
+-    var str = String(s || "");
+-    for (var i = 0; i < str.length; i++) {
+-      h = Math.imul(h ^ str.charCodeAt(i), 0x01000193) >>> 0;
+-    }
+-    return h >>> 0;
 +    nativeFeatures.forEach(function(name) {
 +      name = String(name);
 +      if (HIDDEN_FEATURES[name] === 1) { hidden = true; } else { visible.add(name); }
-     });
++    });
++  } catch (_e) {
++    return nativeFeatures;
+   }
+-  function mapAdapterInfo() {
+-    var v = VENDOR.toLowerCase();
+-    var r = String(RENDERER || "");
+-    var desc = r;
+-    if (/apple/i.test(v) || /apple/i.test(r)) {
+-      return { vendor: "apple", architecture: "common-3", device: "", description: desc || "Apple GPU" };
+-    }
+-    if (/intel/i.test(v) || /intel/i.test(r)) {
+-      return { vendor: "intel", architecture: "gen-12lp", device: "", description: desc || "Intel Graphics" };
+-    }
+-    if (/nvidia/i.test(v) || /nvidia/i.test(r)) {
+-      return { vendor: "nvidia", architecture: "gpu", device: "", description: desc || "NVIDIA GPU" };
+-    }
+-    if (/amd/i.test(v) || /radeon/i.test(r)) {
+-      return { vendor: "amd", architecture: "gcn", device: "", description: desc || "AMD GPU" };
+-    }
+-    return { vendor: "apple", architecture: "common-3", device: "", description: desc || "Apple GPU" };
++  if (!hidden) {
++    featureViews.set(nativeFeatures, nativeFeatures);
++    return nativeFeatures;
+   }
+-  var PERSONA_INFO = mapAdapterInfo();
+-  var ALWAYS_KEEP_FEATURES = { "core-features-and-limits": 1 };
+-  function wrapFeatures(nativeFeatures) {
+-    if (!nativeFeatures) { return nativeFeatures; }
+-    // Soft residual (0043 re-XOR): idempotent — Window DepthHooks may share
+-    // GPU.prototype with Worker; a second wrapFeatures on plain farbled feats
+-    // dropped timestamp-query (14→13) and broke window↔worker digest parity.
+-    try {
+-      if (nativeFeatures && nativeFeatures.__darkstrFeats) {
+-        return nativeFeatures;
++  // Proxy over the real GPUSupportedFeatures: instanceof, toStringTag and
++  // prototype stay native; the setlike members read a real Set (Set iterators,
++  // native-looking bound functions; keys === values === @@iterator).
++  var values = named(visible.values.bind(visible), "values");
++  var own = {
++    has: named(visible.has.bind(visible), "has"),
++    values: values,
++    keys: values,
++    entries: named(visible.entries.bind(visible), "entries"),
++    forEach: named(visible.forEach.bind(visible), "forEach")
++  };
++  var view = new Proxy(nativeFeatures, {
++    get: function(target, prop) {
++      if (prop === Symbol.iterator) { return values; }
++      if (prop === "size") { return visible.size; }
++      if (typeof prop === "string" && Object.prototype.hasOwnProperty.call(own, prop)) {
++        return own[prop];
+       }
+-      // DepthHooks window wrap may share GPU.prototype and already return a
+-      // plain {has,forEach,size} object (Object.prototype / null). Re-subsetting
+-      // drops another seed-ranked feature (14→13) and breaks digest parity.
+-      var featsProto = Object.getPrototypeOf(nativeFeatures);
+-      if (featsProto === Object.prototype || featsProto === null) {
+-        return nativeFeatures;
+-      }
+-    } catch (_idem) {}
+-    var all = [];
+-    try {
+-      if (typeof nativeFeatures.forEach === "function") {
+-        nativeFeatures.forEach(function(name) { all.push(String(name)); });
+-      } else if (typeof nativeFeatures.values === "function") {
+-        var it = nativeFeatures.values();
+-        var step;
+-        while (!(step = it.next()).done) { all.push(String(step.value)); }
+-      }
+-    } catch (_e) { return nativeFeatures; }
+-    var always = [];
+-    var optional = [];
+-    for (var i = 0; i < all.length; i++) {
+-      if (ALWAYS_KEEP_FEATURES[all[i]]) { always.push(all[i]); }
+-      else { optional.push(all[i]); }
++      return Reflect.get(target, prop, target);
+     }
+-    optional.sort(function(a, b) {
+-      var ra = hashStr("rank:" + a);
+-      var rb = hashStr("rank:" + b);
+-      if (ra !== rb) { return ra < rb ? -1 : 1; }
+-      if (a < b) { return -1; }
+-      if (a > b) { return 1; }
+-      return 0;
+-    });
 -    var drop = 0;
 -    if (optional.length > 0) {
 -      drop = 1 + (SEED % Math.min(3, optional.length));
 -      if (drop > optional.length) { drop = optional.length; }
 -      if (optional.length >= 2 && drop >= optional.length) { drop = optional.length - 1; }
--    }
++  });
++  featureViews.set(nativeFeatures, view);
++  return view;
++}
++function wrapInfo(nativeInfo) {
++  // Plain object (a Proxy(GPUAdapterInfo) is Xray-transparent to Marionette).
++  var out = {
++    vendor: String(PERSONA_INFO.vendor || ""),
++    architecture: String(PERSONA_INFO.architecture || ""),
++    device: String(PERSONA_INFO.device || ""),
++    description: String(PERSONA_INFO.description || "")
++  };
++  try {
++    if (nativeInfo && typeof nativeInfo.isFallbackAdapter === "boolean") {
++      out.isFallbackAdapter = nativeInfo.isFallbackAdapter;
+     }
 -    var kept = always.concat(optional.slice(drop));
 -    if (!kept.length && all.length) { kept.push(all[0]); }
 -    var seen = Object.create(null);
 -    var uniq = [];
 -    for (var k = 0; k < kept.length; k++) {
 -      if (!seen[kept[k]]) { seen[kept[k]] = 1; uniq.push(kept[k]); }
--    }
++    if (nativeInfo && typeof nativeInfo.subgroupMinSize === "number") {
++      out.subgroupMinSize = nativeInfo.subgroupMinSize;
+     }
 -    kept = uniq;
 -    var set = Object.create(null);
 -    for (var j = 0; j < kept.length; j++) { set[kept[j]] = 1; }
@@ -1913,9 +2339,7 @@
 -      get size() { return kept.length; },
 -      __darkstrFeats: true
 -    };
-+  } catch (_e) {
-+    return nativeFeatures;
-   }
+-  }
 -  var FUDGE_LIMIT_KEYS = {
 -    maxTextureDimension1D: 1, maxTextureDimension2D: 1, maxTextureDimension3D: 1,
 -    maxTextureArrayLayers: 1, maxBindGroups: 1,
@@ -1935,33 +2359,13 @@
 -    if (out < 1) { out = 1; }
 -    if (out > n) { out = n; }
 -    return out;
-+  if (!hidden) {
-+    featureViews.set(nativeFeatures, nativeFeatures);
-+    return nativeFeatures;
-   }
+-  }
 -  function wrapLimits(nativeLimits) {
 -    if (!nativeLimits) { return nativeLimits; }
 -    try {
 -      if (nativeLimits && nativeLimits.__darkstrLimits) {
 -        return nativeLimits;
-+  // Proxy over the real GPUSupportedFeatures: instanceof, toStringTag and
-+  // prototype stay native; the setlike members read a real Set (Set iterators,
-+  // native-looking bound functions; keys === values === @@iterator).
-+  var values = named(visible.values.bind(visible), "values");
-+  var own = {
-+    has: named(visible.has.bind(visible), "has"),
-+    values: values,
-+    keys: values,
-+    entries: named(visible.entries.bind(visible), "entries"),
-+    forEach: named(visible.forEach.bind(visible), "forEach")
-+  };
-+  var view = new Proxy(nativeFeatures, {
-+    get: function(target, prop) {
-+      if (prop === Symbol.iterator) { return values; }
-+      if (prop === "size") { return visible.size; }
-+      if (typeof prop === "string" && Object.prototype.hasOwnProperty.call(own, prop)) {
-+        return own[prop];
-       }
+-      }
 -      var limProto = Object.getPrototypeOf(nativeLimits);
 -      if (limProto === Object.prototype || limProto === null) {
 -        return nativeLimits;
@@ -1983,7 +2387,8 @@
 -      if (typeof sv === "number" || typeof sv === "bigint") {
 -        snapped[sk] = fudgeLimit(sk, Number(sv));
 -      }
-+      return Reflect.get(target, prop, target);
++    if (nativeInfo && typeof nativeInfo.subgroupMaxSize === "number") {
++      out.subgroupMaxSize = nativeInfo.subgroupMaxSize;
      }
 -    snapped.__darkstrLimits = true;
 -    return snapped;
@@ -2033,34 +2438,15 @@
 -    function ensureFeat() {
 -      if (!featCache) { featCache = wrapFeatures(device.features); }
 -      return featCache;
-+  });
-+  featureViews.set(nativeFeatures, view);
-+  return view;
-+}
-+function wrapInfo(nativeInfo) {
-+  // Plain object (a Proxy(GPUAdapterInfo) is Xray-transparent to Marionette).
-+  var out = {
-+    vendor: String(PERSONA_INFO.vendor || ""),
-+    architecture: String(PERSONA_INFO.architecture || ""),
-+    device: String(PERSONA_INFO.device || ""),
-+    description: String(PERSONA_INFO.description || "")
-+  };
-+  try {
-+    if (nativeInfo && typeof nativeInfo.isFallbackAdapter === "boolean") {
-+      out.isFallbackAdapter = nativeInfo.isFallbackAdapter;
-     }
+-    }
 -    function ensureLim() {
 -      if (!limCache) { limCache = wrapLimits(device.limits); }
 -      return limCache;
-+    if (nativeInfo && typeof nativeInfo.subgroupMinSize === "number") {
-+      out.subgroupMinSize = nativeInfo.subgroupMinSize;
-     }
+-    }
 -    function ensureInfo() {
 -      if (!infoCache) { infoCache = wrapInfo(device.adapterInfo); }
 -      return infoCache;
-+    if (nativeInfo && typeof nativeInfo.subgroupMaxSize === "number") {
-+      out.subgroupMaxSize = nativeInfo.subgroupMaxSize;
-     }
+-    }
 -    var overlaid = false;
 -    try {
 -      var f = ensureFeat();
@@ -2100,7 +2486,22 @@
 -        return raw;
 -      }
 -    });
--  }
++    }
++  } catch (_e) {}
++  return device;
++}
++var wrappedAdapters = new WeakMap();
++function wrapAdapter(adapter) {
++  if (!adapter) { return adapter; }
++  var known = wrappedAdapters.get(adapter);
++  if (known) { return known; }
++  var featCache = null;
++  var infoCache = null;
++  var requestDevice = null;
++  function getFeat() {
++    if (!featCache) { featCache = wrapFeatures(adapter.features); }
++    return featCache;
+   }
 -  function wrapAdapter(adapter) {
 -    if (!adapter) { return adapter; }
 -    try {
@@ -2119,7 +2520,7 @@
 -    function getFeat() {
 -      if (!featCache) { featCache = wrapFeatures(adapter.features); }
 -      return featCache;
-     }
+-    }
 -    function getLim() {
 -      if (!limCache) { limCache = wrapLimits(adapter.limits); }
 -      return limCache;
@@ -2136,21 +2537,6 @@
 -        if (key === "limits") { return getLim(); }
 -        if (key === "info") { return getInfo(); }
 -        if (key === "requestDevice") {
-+  } catch (_e) {}
-+  return device;
-+}
-+var wrappedAdapters = new WeakMap();
-+function wrapAdapter(adapter) {
-+  if (!adapter) { return adapter; }
-+  var known = wrappedAdapters.get(adapter);
-+  if (known) { return known; }
-+  var featCache = null;
-+  var infoCache = null;
-+  var requestDevice = null;
-+  function getFeat() {
-+    if (!featCache) { featCache = wrapFeatures(adapter.features); }
-+    return featCache;
-+  }
 +  function getInfo() {
 +    if (!infoCache) { infoCache = wrapInfo(adapter.info); }
 +    return infoCache;

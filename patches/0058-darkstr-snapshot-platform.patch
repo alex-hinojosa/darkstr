@@ -178,7 +178,7 @@
    }
 --- a/browser/components/DarkstrWorkerHooksChild.sys.mjs
 +++ b/browser/components/DarkstrWorkerHooksChild.sys.mjs
-@@ -351,6 +351,10 @@
+@@ -508,6 +508,10 @@
      }
      if (persona.timezone) {
        bag.setPropertyAsAString("timezone", String(persona.timezone));

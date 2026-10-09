@@ -26,6 +26,159 @@
 const TOPIC = "darkstr-worker-persona-resolve";
 const MSG_RESOLVE = "DarkstrWorkerHooks:Resolve";
 
+// 0057r4: Gecko's WebGL renderer sanitizer (dom/canvas/SanitizeRenderer.cpp,
+// Firefox 156) ported 1:1. A persona's RENDERER and UNMASKED_RENDERER_WEBGL are
+// what Gecko reports for that GPU's raw GL_RENDERER: the same bucket plus the
+// ", or similar" suffix. Byte-identical in DarkstrDepthHooksChild and
+// DarkstrWorkerHooksChild (tests/webgl-renderer-0057r4 checks).
+function geckoChooseDeviceReplacement(str) {
+  str = String(str);
+  if (str.indexOf("llvmpipe") === 0) return "llvmpipe";
+  if (str.indexOf("Apple") === 0) return "Apple M1";
+  let m;
+  const has = (part) => str.indexOf(part) !== -1;
+  // AMD
+  const RADEON_HD_3000 = "Radeon HD 3200 Graphics";
+  const RADEON_HD_5850 = "Radeon HD 5850";
+  const RADEON_R9_290 = "Radeon R9 200 Series";
+  if (has("REMBRANDT") || has("RENOIR") || has("Vega") || has("VII") || has("Fury")) {
+    return RADEON_R9_290;
+  }
+  m = /Radeon.*?((R[579X]|HD) )?([0-9][0-9][0-9]+)/.exec(str);
+  if (m) {
+    const modelNum = parseInt(m[3], 10);
+    if ((m[2] || "") === "HD") {
+      if (modelNum >= 5000) return RADEON_HD_5850;
+      return RADEON_HD_3000;
+    }
+    return RADEON_R9_290;
+  }
+  m = /FirePro.*?([VDW])[0-9][0-9][0-9]+/.exec(str);
+  if (m) return m[1] === "V" ? RADEON_HD_3000 : RADEON_R9_290;
+  if (has("ARUBA")) return RADEON_HD_5850;
+  if (has("AMD ") || has("FirePro") || has("Radeon")) return RADEON_HD_3000;
+  // NVIDIA
+  const GEFORCE_8800 = "GeForce 8800 GTX";
+  const GEFORCE_480 = "GeForce GTX 480";
+  const GEFORCE_980 = "GeForce GTX 980";
+  if (has("NVIDIA") || has("GeForce") || has("Quadro")) {
+    let ret = GEFORCE_8800;
+    if ((m = /GeForce.*?([0-9][0-9][0-9]+)/.exec(str))) {
+      const modelNum = parseInt(m[1], 10);
+      if (modelNum >= 8000) ret = GEFORCE_8800;
+      else if (modelNum >= 900) ret = GEFORCE_980;
+      else if (modelNum >= 400) ret = GEFORCE_480;
+      else ret = GEFORCE_8800;
+    } else if ((m = /Quadro.*?([KMPVT]?)[0-9][0-9][0-9]+/.exec(str))) {
+      if (has("RTX")) ret = GEFORCE_980;
+      else if (m[1]) ret = "MPVT".indexOf(m[1]) !== -1 ? GEFORCE_980 : GEFORCE_480;
+      else ret = GEFORCE_8800;
+    } else if ((m = /TITAN( [BZXVR])?/.exec(str))) {
+      const letter = m[1] ? m[1][1] : " ";
+      ret = letter === " " || letter === "B" || letter === "Z" ? GEFORCE_480 : GEFORCE_980;
+    }
+    if (str.indexOf("NVIDIA") === 0) ret = "NVIDIA " + ret;
+    return ret;
+  }
+  if ((m = /^NV(1?[0-9A-F][0-9A-F])$/.exec(str))) {
+    const modelNum = parseInt(m[1], 16);
+    if (modelNum >= 0x120) return GEFORCE_980;
+    if (modelNum >= 0xc0) return GEFORCE_480;
+    return GEFORCE_8800;
+  }
+  // Intel
+  if (has("Intel")) {
+    if (has("Intel(R) Arc(TM)")) return "Intel(R) Arc(TM) A750 Graphics";
+    if ((m = /Intel.*Graphics( P?([0-9][0-9][0-9]+))?/.exec(str))) {
+      if (!m[1]) return "Intel(R) HD Graphics";
+      const modelNum = parseInt(m[2], 10);
+      if (modelNum >= 5000) return "Intel(R) HD Graphics 400";
+      if (modelNum >= 1000) return "Intel(R) HD Graphics";
+      return "Intel(R) HD Graphics 400";
+    }
+    return "Intel 945GM";
+  }
+  if ((m = /Adreno.*?([A-Z]?[0-9]-?[0-9]+)/.exec(str))) {
+    const modelName = m[1];
+    if (modelName[0] === "A") return "Adreno (TM) A11";
+    if (modelName[0] === "X") return "Adreno (TM) X1-45";
+    const modelNum = parseInt(modelName, 10);
+    if (modelNum >= 600) return "Adreno (TM) 650";
+    if (modelNum >= 500) return "Adreno (TM) 540";
+    if (modelNum >= 400) return "Adreno (TM) 430";
+    if (modelNum >= 300) return "Adreno (TM) 330";
+    return "Adreno (TM) 225";
+  }
+  if ((m = /Mali.*?([0-9][0-9]+)/.exec(str))) {
+    const modelNum = parseInt(m[1], 10);
+    if (modelNum >= 800) return "Mali-T880";
+    if (modelNum >= 700) return "Mali-T760";
+    if (modelNum >= 600) return "Mali-T628";
+    if (modelNum >= 400) return "Mali-400 MP";
+    return "Mali-G51";
+  }
+  if (has("PowerVR")) return has("Rogue") ? "PowerVR Rogue G6200" : "PowerVR SGX 540";
+  if (has("Samsung Xclipse")) return "Samsung Xclipse 920";
+  if (has("Vivante")) return "Vivante GC1000";
+  if (has("VideoCore")) return "VideoCore IV HW";
+  if (has("Tegra")) return "NVIDIA Tegra";
+  if (has("Microsoft Basic Render Driver")) return str;
+  return null;
+}
+
+export function geckoSanitizeRenderer(rawRenderer) {
+  const raw = String(rawRenderer);
+  const GENERIC_RENDERER = "Generic Renderer";
+  const device = (() => {
+    let m;
+    if ((m = /^ANGLE [(]([^,]*), ([^,]*)( Direct3D[^,]*), .*[)]$/.exec(raw))) {
+      const r2 = geckoChooseDeviceReplacement(m[2]) || GENERIC_RENDERER;
+      return "ANGLE (" + m[1] + ", " + r2 + m[3] + ")";
+    }
+    if ((m = /^ANGLE [(]+(.*)[)]( on Vulkan) [0-9.]*[)]*$/.exec(raw))) {
+      const r2 = geckoChooseDeviceReplacement(m[1]) || GENERIC_RENDERER;
+      return "ANGLE (" + r2 + ")" + m[2];
+    }
+    if ((m = /^ANGLE [(]([^,]*), ANGLE Metal Renderer: ([^,]*), Version .*[)]$/.exec(raw))) {
+      const r2 = geckoChooseDeviceReplacement(m[2]) || GENERIC_RENDERER;
+      return "ANGLE (" + m[1] + ", ANGLE Metal Renderer: " + r2 + ")";
+    }
+    if (raw.indexOf("ANGLE") !== -1) return null;
+    if ((m = /^(.*) OpenGL Engine$/.exec(raw))) return geckoChooseDeviceReplacement(m[1]);
+    if ((m = /^(.*)(\/PCIe?\/SSE2)$/.exec(raw))) return geckoChooseDeviceReplacement(m[1]);
+    if ((m = /^(.*)( [(].*[)])$/.exec(raw))) return geckoChooseDeviceReplacement(m[1]);
+    return geckoChooseDeviceReplacement(raw);
+  })();
+  if (!device) return GENERIC_RENDERER;
+  return device + ", or similar";
+}
+
+/** webgl.sanitize-unmasked-renderer (Gecko default true). */
+export function sanitizeUnmaskedPref() {
+  try {
+    const prefs = globalThis.Services?.prefs;
+    if (!prefs?.getBoolPref) return true;
+    return prefs.getBoolPref("webgl.sanitize-unmasked-renderer", true) !== false;
+  } catch (_e) {
+    return true;
+  }
+}
+
+/**
+ * RENDERER (0x1F01) / UNMASKED_VENDOR_WEBGL (0x9245) / UNMASKED_RENDERER_WEBGL
+ * (0x9246) for a persona GPU, given what stock returned for the same call.
+ * Stock non-strings (no WEBGL_debug_renderer_info: null + INVALID_ENUM) and
+ * RFP constants ("Mozilla...") pass through; VENDOR (0x1F00) is never touched
+ * (stock "Mozilla").
+ */
+export function personaGlString(param, native, gpu, sanitizeUnmasked = true) {
+  if (typeof native !== "string" || native.indexOf("Mozilla") === 0) return native;
+  if (param === 0x9245) return String(gpu?.vendor || "Apple");
+  const raw = String(gpu?.renderer || "Apple M1");
+  if (param === 0x1f01) return geckoSanitizeRenderer(raw);
+  return sanitizeUnmasked ? geckoSanitizeRenderer(raw) : raw;
+}
+
 export function buildDepthOverrides(depth) {
   if (!depth || typeof depth.canvasSeed !== "number") {
     return "";
@@ -33,6 +186,9 @@ export function buildDepthOverrides(depth) {
   const seed = depth.canvasSeed >>> 0;
   const vendor = depth.gpu?.vendor || "Apple";
   const renderer = depth.gpu?.renderer || "Apple M1";
+  // 0057r4: RENDERER / UNMASKED_RENDERER_WEBGL as Gecko reports them.
+  const rendererMasked = geckoSanitizeRenderer(renderer);
+  const rendererUnmasked = sanitizeUnmaskedPref() ? rendererMasked : renderer;
   return `
 ;(function(){
   var __s=${seed};
@@ -65,9 +221,10 @@ export function buildDepthOverrides(depth) {
     var __props=["actualBoundingBoxLeft","actualBoundingBoxRight","actualBoundingBoxAscent","actualBoundingBoxDescent","fontBoundingBoxAscent","fontBoundingBoxDescent","emHeightAscent","emHeightDescent","hangingBaseline","alphabeticBaseline","ideographicBaseline"];
     Object.defineProperty(OffscreenCanvasRenderingContext2D.prototype,"measureText",{configurable:true,enumerable:true,writable:true,value:function(text){var m=_oMT.apply(this,arguments);if(!m)return m;var w=m.width,fw=__fw(w);if(fw===w)return m;var out={width:fw};for(var i=0;i<__props.length;i++){var k=__props[i];try{var v=m[k];if(typeof v==='number'){out[k]=(k==="actualBoundingBoxLeft"||k==="actualBoundingBoxRight")?__fw(v):v;}}catch(e){}}return out;}});
   }
-  var __gv=${JSON.stringify(vendor)},__gr=${JSON.stringify(renderer)};
-  if(typeof WebGLRenderingContext!=='undefined'){var _gp=WebGLRenderingContext.prototype.getParameter;WebGLRenderingContext.prototype.getParameter=function(p){if(p===0x9245)return __gv;if(p===0x9246)return __gr;return _gp.call(this,p);};}
-  if(typeof WebGL2RenderingContext!=='undefined'){var _gp2=WebGL2RenderingContext.prototype.getParameter;WebGL2RenderingContext.prototype.getParameter=function(p){if(p===0x9245)return __gv;if(p===0x9246)return __gr;return _gp2.call(this,p);};}
+  var __gv=${JSON.stringify(vendor)},__gr=${JSON.stringify(rendererUnmasked)},__grm=${JSON.stringify(rendererMasked)};
+  function __gs(p,v){if(typeof v!=='string'||v.indexOf('Mozilla')===0)return v;if(p===0x9245)return __gv;if(p===0x1F01)return __grm;return __gr;}
+  if(typeof WebGLRenderingContext!=='undefined'){var _gp=WebGLRenderingContext.prototype.getParameter;WebGLRenderingContext.prototype.getParameter=function(p){if(p===0x9245||p===0x9246||p===0x1F01)return __gs(p,_gp.call(this,p));return _gp.call(this,p);};}
+  if(typeof WebGL2RenderingContext!=='undefined'){var _gp2=WebGL2RenderingContext.prototype.getParameter;WebGL2RenderingContext.prototype.getParameter=function(p){if(p===0x9245||p===0x9246||p===0x1F01)return __gs(p,_gp2.call(this,p));return _gp2.call(this,p);};}
 })();`;
 }
 
