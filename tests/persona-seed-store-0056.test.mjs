@@ -297,3 +297,69 @@ test("a clear on a passive (off-mode) store with nothing matching never rewrites
   await CL.deleteBySite("a56.test", {}); // a real hit is removed even off
   assert.equal(fileJSON().e.length, 0);
 });
+
+// ------------------------------------------------- 0056r2 startup hold ---
+test("store.loading is true only while the file/key load runs", async () => {
+  wipe(); prefs.clear();
+  await restart();
+  S.seedFor("0", "a56.test");
+  await S.flush();
+  S._resetForTests();
+  assert.equal(S.loading, false);
+  S.activate();
+  assert.equal(S.loading, true);
+  await S.whenReady();
+  assert.equal(S.loading, false);
+});
+
+test("0056r2: top-level loads are held while the store loads, decided after ready (or timeout), never for private/fixed seed", async () => {
+  const { DarkstrNativePersona: NPM } = await import(pathToFileURL(join(F, "DarkstrNativePersona.sys.mjs")));
+  const realImport = globalThis.ChromeUtils.importESModule;
+  const timers = [];
+  let resolveReady;
+  const fakeStore = { loading: true, whenReady: () => new Promise((r) => { resolveReady = r; }) };
+  globalThis.ChromeUtils.importESModule = (u) =>
+    u.includes("Timer.sys.mjs")
+      ? { setTimeout: (fn, ms) => { timers.push({ fn, ms }); return timers.length; }, clearTimeout: (id) => { timers[id - 1].cleared = true; } }
+      : u.includes("DarkstrPersonaSeedStore") ? { DarkstrPersonaSeedStore: fakeStore } : realImport(u);
+  globalThis.Ci = Object.assign(globalThis.Ci || {}, { nsIContentPolicy: { TYPE_DOCUMENT: 6 } });
+  const mkChan = (pb = 0) => {
+    const c = { log: [], loadInfo: { externalContentPolicyType: 6, originAttributes: { privateBrowsingId: pb, userContextId: 0 } } };
+    c.suspend = () => c.log.push("suspend"); c.resume = () => c.log.push("resume");
+    return c;
+  };
+  const self = Object.create(NPM);
+  const applied = [];
+  self._applyChannelPersona = (ch) => { applied.push(ch); ch.log.push("apply"); };
+  self._rotationActive = () => true;
+  let fixed = false;
+  self._fixedSeedSet = () => fixed;
+  self._seedHoldStats = null;
+  try {
+    // held, then released by store ready: apply happens before resume
+    const c1 = mkChan();
+    assert.equal(self._holdForSeedStore(c1, {}), true);
+    assert.deepEqual(c1.log, ["suspend"]);
+    assert.equal(timers[0].ms, 2000);
+    resolveReady(); await new Promise((r) => setTimeout(r, 0));
+    assert.deepEqual(c1.log, ["suspend", "apply", "resume"]);
+    assert.ok(timers[0].cleared);
+    // timeout path: decided and resumed exactly once even if ready comes later
+    const c2 = mkChan();
+    assert.equal(self._holdForSeedStore(c2, {}), true);
+    timers[1].fn();
+    resolveReady(); await new Promise((r) => setTimeout(r, 0));
+    assert.deepEqual(c2.log, ["suspend", "apply", "resume"]);
+    assert.deepEqual(self._seedHoldStats, { held: 2, ready: 1, timeout: 1 });
+    // private browsing, fixed test seed, store ready, not a document: never held
+    assert.equal(self._holdForSeedStore(mkChan(1), {}), false);
+    fixed = true; assert.equal(self._holdForSeedStore(mkChan(), {}), false); fixed = false;
+    fakeStore.loading = false; assert.equal(self._holdForSeedStore(mkChan(), {}), false); fakeStore.loading = true;
+    const sub = mkChan(); sub.loadInfo.externalContentPolicyType = 2;
+    assert.equal(self._holdForSeedStore(sub, {}), false);
+    self._rotationActive = () => false; assert.equal(self._holdForSeedStore(mkChan(), {}), false);
+  } finally {
+    globalThis.ChromeUtils.importESModule = realImport;
+  }
+  assert.match(NP, /if \(this\._holdForSeedStore\(channel, plan\)\) \{\n\s+return;\n\s+\}\n\s+this\._applyChannelPersona\(channel\);/);
+});

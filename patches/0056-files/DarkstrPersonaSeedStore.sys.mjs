@@ -266,6 +266,15 @@ export var DarkstrPersonaSeedStore = {
     return this._loadPromise || Promise.resolve();
   },
 
+  /**
+   * 0056r2: true while the file and key are being loaded (startup). NativePersona
+   * holds top-level document loads until this is false (or a short timeout),
+   * so a kept site never gets a temporary seed on its first load.
+   */
+  get loading() {
+    return this._state === "loading";
+  },
+
   _observe() {
     if (this._observing) {
       return;

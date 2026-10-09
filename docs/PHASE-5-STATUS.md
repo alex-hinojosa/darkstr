@@ -513,8 +513,8 @@ All five 0043 Worker/SharedWorker WebGPU XOR gates passed on Proof tip `cc692641
 | Patch | [`patches/0056-darkstr-persona-seed-store.patch`](../patches/0056-darkstr-persona-seed-store.patch) + `patches/0056-files/` (new `DarkstrPersonaSeedStore`; NativePersona, CookieFirewall, DepthHooks, WorkerHooks(+Child), `DarkstrNavigatorHooks.cpp`, toolkit `ClearDataService`, `browser/components/moz.build`; `SHA256SUMS`, `BASE_SHA256SUMS`) |
 | Apply | `scripts/apply-0056-persona-seed-store-mini.sh` (C++ dom/base + chrome JS + toolkit JS; moz.build adds the module) |
 | Tests | `tests/persona-seed-store-0056.test.mjs` (store, keep rule, cleaners, atomic write, OSKeyStore failure; mocked Gecko); the 0048–0052 tests load the 0056 copies |
-| DMG | `~/AgentDocs/builds/darkstr-0056-72fa1796.dmg` (+ `.sha256`), sha256 `72fa17964b2e1f7f83bbaf2bd810a4599ee3ddb997ac4d0d7020415471a92b9c`; 0052 + 0053 + 0053r2 + 0055 r2 + 0056. Omni files match `patches/0056-files` (and 0053r2 ModeXor, 0055 Ffi) |
-| Evidence | `~/AgentDocs/proof/darkstr-0056-r2-20261009-090046/` (self-test `selftest/live-final`, negative control `selftest/live-negctl-0055`, `dmg-verify.log`, `stale-link-check.txt`) |
+| DMG | `~/AgentDocs/builds/darkstr-0056-137c3b27.dmg` (+ `.sha256`), sha256 `137c3b27ed3dd0238f8ec46c5a164ea57a900893553ef1d24088c058de20a925`: 0056r2 (startup hold). r1 was `darkstr-0056-72fa1796.dmg`. 0052 + 0053 + 0053r2 + 0055 r2 + 0056; omni files match `patches/0056-files` (and 0053r2 ModeXor, 0055 Ffi) |
+| Evidence | `~/AgentDocs/proof/darkstr-0056-r2-20261009-090046/` (self-test `selftest/live-final`, negative control `selftest/live-negctl-0055`, `dmg-verify.log`, `stale-link-check.txt`); r2 (startup hold): `~/AgentDocs/proof/darkstr-0056-r3-20261009-091625/` (`selftest/live-final`, `live-hold`, negative control `live-hold-negctl-0056r2`) |
 
 ### Design
 
@@ -572,7 +572,7 @@ All five 0043 Worker/SharedWorker WebGPU XOR gates passed on Proof tip `cc692641
 
 ### Live self-test (Mini, headless, sandbox-exec loopback only, own probe port 8356)
 
-All 9 scenarios PASS on the 0056 DMG app (`selftest/live-final`):
+All scenarios PASS on the 0056 DMG app (`selftest/live-final`; r3 adds `startup_hold`):
 
 - `keep_restart`: LibreWolf clear-on-shutdown on; A (persist-data-on-shutdown exception) keeps seed and page
   persona across a normal quit, B resets; file has only A, 0600 / dir 0700, entries `{c,h,s,t}`.
@@ -585,6 +585,9 @@ All 9 scenarios PASS on the 0056 DMG app (`selftest/live-final`):
 - `clear_all_range`: last-hour range clear drops today's entries; clear-all removes the file and the Keychain
   secret; the next store uses a new label.
 - `container_delete`: `ContextualIdentityService.remove` drops that container's entries only.
+- `startup_hold` (0056r2): with the store load forced to take 1.2 s, a kept site's load is held and gets the
+  stored persona (page and decision); a 300 ms cap against a 1.5 s load times out (counted) and the stored persona
+  is back on the next load; started with the site URL on the command line, the first load has the stored persona.
 - `ui_paths`: Forget About This Site resets only A; principal clear resets only B; Clear Recent History
   (cookies and site data, last hour) drops all of today's entries.
 
@@ -594,9 +597,15 @@ kill9 all FAIL on the behaviour checks (seeds per session, clears are no-ops).
 
 ### Residual
 
-- A document loading in the first milliseconds after startup, before the store
-  has decrypted its key, gets a temporary seed. Once loaded, the stored seed wins
-  for that site (caches flushed), so only that one document can differ.
+- **Startup (0056r2).** While the store is still loading (file read + Keychain
+  decrypt), a non-private top-level document load is held in
+  `http-on-modify-request` (channel suspended before it connects) and decided
+  once the store is ready, so a kept site gets its stored persona on its very
+  first load. The hold is capped by `darkstr.persona.seedStore.startupWaitMs`
+  (default 2000 ms, 0..10000; 0 = no hold). Only past that cap (e.g. a Keychain
+  prompt left open) does that one load get a temporary seed; the stored seed wins
+  for every later load. Private windows, the Proof test seed and off mode are
+  never held.
 - Range clears work at first-seen-day granularity. A site first seen before the
   range keeps its seed even if it was visited inside the range (seeds are not
   per-visit).

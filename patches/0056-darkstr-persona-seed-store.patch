@@ -1,6 +1,19 @@
 --- a/browser/components/DarkstrNativePersona.sys.mjs
 +++ b/browser/components/DarkstrNativePersona.sys.mjs
-@@ -128,6 +128,22 @@
+@@ -60,6 +60,12 @@
+ /** Content-safe bool mirror of mode===pollution (Fission sanitizes darkstr.mode string). */
+ const POLLUTION_ACTIVE_PREF = "darkstr.pollutionActive";
+ const STRICT_PREF = "darkstr.strictFirstDoc";
++/**
++ * 0056r2: longest hold (ms) for a top-level document load while the persisted
++ * seed store is still loading at startup. Default 2000, clamped to 0..10000.
++ */
++const SEED_WAIT_PREF = "darkstr.persona.seedStore.startupWaitMs";
++const SEED_WAIT_DEFAULT_MS = 2000;
+ const SNAPSHOT_PREF = "darkstr.persona.snapshot";
+ const SEED_PREF = "darkstr.persona.seed";
+ /**
+@@ -128,6 +134,22 @@
    },
  };
  const ACTOR_NAME = "DarkstrNativePersona";
@@ -23,7 +36,7 @@
  const MSG_INSTALL = "DarkstrNativePersona:Install";
  const MSG_REFRESH = "DarkstrNativePersona:Refresh";
  const NATIVE_DECISION = Object.freeze({ armed: false, site: null, snapshot: null });
-@@ -423,6 +439,12 @@
+@@ -423,6 +445,12 @@
        this._etldSnapshotCache.clear();
      }
      this._sessionBaseSeed = 0;
@@ -36,7 +49,7 @@
      this._removeProgressListener();
      if (this._actorRegistered) {
        try {
-@@ -568,7 +590,10 @@
+@@ -568,7 +596,10 @@
        // counted (SubsequentNav / chrome actor still gate apply separately).
        try {
          if (this._rotationActive()) {
@@ -48,7 +61,7 @@
            if (siteSnap) {
              this._applyPersonaMirrors(siteSnap);
            }
-@@ -708,18 +733,123 @@
+@@ -708,18 +739,123 @@
      return h || 1;
    },
  
@@ -177,7 +190,7 @@
      return seed;
    },
  
-@@ -752,7 +882,8 @@
+@@ -752,7 +888,8 @@
     * Resolve persona snapshot for a top-level site URI / BC.
     * Locked path → global plan.snapshot; rotate → sticky per eTLD+1.
     */
@@ -187,7 +200,7 @@
      const plan = this.getPlan();
      if (!plan?.pollutionActive || !plan?.nativeHooks) {
        return null;
-@@ -767,15 +898,16 @@
+@@ -767,15 +904,16 @@
      if (!this._etldSnapshotCache) {
        this._etldSnapshotCache = new Map();
      }
@@ -209,7 +222,7 @@
        this._writeEffectiveDiag(etld, seed);
      }
      return snap;
-@@ -785,7 +917,7 @@
+@@ -785,7 +923,7 @@
      try {
        const top = bc?.top || bc;
        const uri = top?.currentURI || top?.currentWindowGlobal?.documentURI;
@@ -218,7 +231,7 @@
      } catch (_e) {
        return null;
      }
-@@ -862,6 +994,10 @@
+@@ -862,6 +1000,10 @@
        nativeHooks &&
        !this._rotationLocked() &&
        this._rotationWanted();
@@ -229,7 +242,7 @@
      // Drop sticky maps when rotation is off/locked so Proof golden cannot see
      // a stale per-site seed from a prior Pollution rotate session.
      if (!rotateWanted) {
-@@ -1263,19 +1399,20 @@
+@@ -1263,19 +1405,20 @@
    },
  
    /** Decision for a top-level site URI + phase. */
@@ -255,7 +268,7 @@
    },
  
    _documentUri(wgp) {
-@@ -1322,7 +1459,11 @@
+@@ -1322,7 +1465,11 @@
        decision =
          topWc && topWc !== wgp
            ? this.documentDecision(topWc)
@@ -268,7 +281,7 @@
      } else if (bc) {
        const uri = this._documentUri(wgp);
        const scheme = String(uri?.scheme || "").toLowerCase();
-@@ -1337,9 +1478,10 @@
+@@ -1337,9 +1484,10 @@
        if (openerWc && openerWc !== wgp) {
          decision = this.documentDecision(openerWc);
        } else {
@@ -281,7 +294,7 @@
        }
      }
      this._docDecisions.set(wgp, decision);
-@@ -1361,7 +1503,8 @@
+@@ -1361,7 +1509,8 @@
     *  - Anything else (URL bar, bookmarks, GUI new tab, external): null, so
     *    strictFirstDoc is unchanged.
     */
@@ -291,7 +304,7 @@
      const plan = this.getPlan();
      if (!plan.applyNativeBase || !bc) {
        return null;
-@@ -1405,12 +1548,12 @@
+@@ -1405,12 +1554,12 @@
      const site = uri ? this._etldPlus1FromUri(uri) : null;
      if (rec.kind === "opener") {
        const d = rec.decision || NATIVE_DECISION;
@@ -307,7 +320,7 @@
    },
  
    /** Top-level documents of every open tab (chrome windows). */
-@@ -1435,17 +1578,18 @@
+@@ -1435,17 +1584,18 @@
     * native when the live ones are native; no live document: armed unless
     * strictFirstDoc.
     */
@@ -329,7 +342,7 @@
      }
      this._liveDeciding.add(excludeKey);
      try {
-@@ -1456,7 +1600,7 @@
+@@ -1456,7 +1606,7 @@
            continue;
          }
          const d = this.documentDecision(wgp);
@@ -338,7 +351,7 @@
            continue;
          }
          if (d.snapshot) {
-@@ -1465,9 +1609,9 @@
+@@ -1465,9 +1615,9 @@
          liveNative = true;
        }
        if (liveNative) {
@@ -350,7 +363,7 @@
      } finally {
        this._liveDeciding.delete(excludeKey);
      }
-@@ -1502,9 +1646,10 @@
+@@ -1502,9 +1652,10 @@
          return null;
        }
        const docUri = channel.URI || channel.originalURI;
@@ -363,7 +376,7 @@
        );
      }
      let wgp = null;
-@@ -1535,7 +1680,11 @@
+@@ -1535,7 +1686,11 @@
      if (top.currentWindowGlobal) {
        return this.documentDecision(top.currentWindowGlobal);
      }
@@ -376,7 +389,7 @@
    },
  
    shouldApplyForChannel(channel) {
-@@ -1598,37 +1747,43 @@
+@@ -1598,37 +1753,43 @@
     * requests agree. No live document (service worker wake-up): armed unless
     * strictFirstDoc. Returns { decision, browsingContext }.
     */
@@ -427,7 +440,7 @@
      }
      return { decision: d, browsingContext: null };
    },
-@@ -1661,7 +1816,11 @@
+@@ -1661,7 +1822,11 @@
        return this.documentDecision(wgp);
      }
      const top = abc.top || abc;
@@ -440,7 +453,7 @@
    },
  
    _windowlessDecisionForChannel(li) {
-@@ -1685,7 +1844,7 @@
+@@ -1685,7 +1850,7 @@
      if (!uri) {
        return null;
      }
@@ -449,7 +462,7 @@
    },
  
    /**
-@@ -1703,7 +1862,11 @@
+@@ -1703,7 +1868,11 @@
          return this.documentDecision(wgp).snapshot;
        }
        const top = bc.top || bc;
@@ -461,6 +474,111 @@
 +      ).snapshot;
      } catch (_e) {
        return null;
+     }
+@@ -1852,8 +2021,104 @@
+           channel.setRequestHeader(h, "", false);
+         } catch (_e) {}
+       }
++    }
++
++    if (!plan.applyNativeBase) {
++      return;
++    }
++    // 0056r2: no persona decision for a top-level document while the seed
++    // store is still loading: hold the channel (not yet connected; headers can
++    // still be set) and decide once the stored seeds are known.
++    if (this._holdForSeedStore(channel, plan)) {
++      return;
++    }
++    this._applyChannelPersona(channel);
++  },
++
++  _seedWaitMs() {
++    let ms = SEED_WAIT_DEFAULT_MS;
++    try {
++      ms = Services.prefs.getIntPref(SEED_WAIT_PREF, SEED_WAIT_DEFAULT_MS);
++    } catch (_e) {}
++    return Math.max(0, Math.min(10000, ms | 0));
++  },
++
++  /**
++   * 0056r2: true when the channel was suspended until the persisted seed store
++   * is ready (or the timeout passed); it is then decided and resumed. Only
++   * top-level documents, only while per-site rotation uses the store (no fixed
++   * seed, never in off mode) and only for contexts the store persists (never
++   * private browsing).
++   */
++  _holdForSeedStore(channel, plan) {
++    let li = null;
++    try {
++      li = channel.loadInfo;
++    } catch (_e) {}
++    if (!li || !this._isTopLevelDocumentChannel(li)) {
++      return false;
+     }
++    if (!this._rotationActive(plan) || this._fixedSeedSet()) {
++      return false;
++    }
++    if (this._ctxOfLoadInfo(li) === "p") {
++      return false;
++    }
++    let store = null;
++    try {
++      store = seedStore();
++    } catch (_e) {
++      return false;
++    }
++    if (!store?.loading) {
++      return false;
++    }
++    const waitMs = this._seedWaitMs();
++    if (!waitMs) {
++      return false;
++    }
++    try {
++      channel.suspend();
++    } catch (_e) {
++      return false;
++    }
++    const stats = (this._seedHoldStats ||= { held: 0, ready: 0, timeout: 0 });
++    stats.held++;
++    const { setTimeout, clearTimeout } = ChromeUtils.importESModule(
++      "resource://gre/modules/Timer.sys.mjs"
++    );
++    let done = false;
++    let timer = null;
++    const finish = why => {
++      if (done) {
++        return;
++      }
++      done = true;
++      if (timer) {
++        clearTimeout(timer);
++      }
++      stats[why === "timeout" ? "timeout" : "ready"]++;
++      try {
++        this._applyChannelPersona(channel);
++      } catch (e) {
++        console.error("darkstr 0056: held channel decision failed", e);
++      } finally {
++        try {
++          channel.resume();
++        } catch (_e) {}
++      }
++    };
++    timer = setTimeout(() => finish("timeout"), waitMs);
++    store.whenReady().then(
++      () => finish("ready"),
++      () => finish("ready")
++    );
++    return true;
++  },
+ 
++  /** Persona headers (UA, Accept-Language) for one request (0051 N2/N3). */
++  _applyChannelPersona(channel) {
++    const plan = this.getPlan();
+     if (!plan.applyNativeBase) {
+       return;
      }
 --- a/browser/components/DarkstrCookieFirewall.sys.mjs
 +++ b/browser/components/DarkstrCookieFirewall.sys.mjs
@@ -659,7 +777,7 @@
      "DarkstrWorkerHooksParent.sys.mjs",
 --- /dev/null
 +++ b/browser/components/DarkstrPersonaSeedStore.sys.mjs
-@@ -0,0 +1,841 @@
+@@ -0,0 +1,850 @@
 +/* This Source Code Form is subject to the terms of the Mozilla Public
 + * License, v. 2.0. If a copy of the MPL was not distributed with this
 + * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -926,6 +1044,15 @@
 +
 +  whenReady() {
 +    return this._loadPromise || Promise.resolve();
++  },
++
++  /**
++   * 0056r2: true while the file and key are being loaded (startup). NativePersona
++   * holds top-level document loads until this is false (or a short timeout),
++   * so a kept site never gets a temporary seed on its first load.
++   */
++  get loading() {
++    return this._state === "loading";
 +  },
 +
 +  _observe() {

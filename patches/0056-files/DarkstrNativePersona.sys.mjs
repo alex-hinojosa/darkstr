@@ -60,6 +60,12 @@ const HOOKS_PREF = "darkstr.nativePersonaHooks";
 /** Content-safe bool mirror of mode===pollution (Fission sanitizes darkstr.mode string). */
 const POLLUTION_ACTIVE_PREF = "darkstr.pollutionActive";
 const STRICT_PREF = "darkstr.strictFirstDoc";
+/**
+ * 0056r2: longest hold (ms) for a top-level document load while the persisted
+ * seed store is still loading at startup. Default 2000, clamped to 0..10000.
+ */
+const SEED_WAIT_PREF = "darkstr.persona.seedStore.startupWaitMs";
+const SEED_WAIT_DEFAULT_MS = 2000;
 const SNAPSHOT_PREF = "darkstr.persona.snapshot";
 const SEED_PREF = "darkstr.persona.seed";
 /**
@@ -2017,6 +2023,102 @@ export var DarkstrNativePersona = {
       }
     }
 
+    if (!plan.applyNativeBase) {
+      return;
+    }
+    // 0056r2: no persona decision for a top-level document while the seed
+    // store is still loading: hold the channel (not yet connected; headers can
+    // still be set) and decide once the stored seeds are known.
+    if (this._holdForSeedStore(channel, plan)) {
+      return;
+    }
+    this._applyChannelPersona(channel);
+  },
+
+  _seedWaitMs() {
+    let ms = SEED_WAIT_DEFAULT_MS;
+    try {
+      ms = Services.prefs.getIntPref(SEED_WAIT_PREF, SEED_WAIT_DEFAULT_MS);
+    } catch (_e) {}
+    return Math.max(0, Math.min(10000, ms | 0));
+  },
+
+  /**
+   * 0056r2: true when the channel was suspended until the persisted seed store
+   * is ready (or the timeout passed); it is then decided and resumed. Only
+   * top-level documents, only while per-site rotation uses the store (no fixed
+   * seed, never in off mode) and only for contexts the store persists (never
+   * private browsing).
+   */
+  _holdForSeedStore(channel, plan) {
+    let li = null;
+    try {
+      li = channel.loadInfo;
+    } catch (_e) {}
+    if (!li || !this._isTopLevelDocumentChannel(li)) {
+      return false;
+    }
+    if (!this._rotationActive(plan) || this._fixedSeedSet()) {
+      return false;
+    }
+    if (this._ctxOfLoadInfo(li) === "p") {
+      return false;
+    }
+    let store = null;
+    try {
+      store = seedStore();
+    } catch (_e) {
+      return false;
+    }
+    if (!store?.loading) {
+      return false;
+    }
+    const waitMs = this._seedWaitMs();
+    if (!waitMs) {
+      return false;
+    }
+    try {
+      channel.suspend();
+    } catch (_e) {
+      return false;
+    }
+    const stats = (this._seedHoldStats ||= { held: 0, ready: 0, timeout: 0 });
+    stats.held++;
+    const { setTimeout, clearTimeout } = ChromeUtils.importESModule(
+      "resource://gre/modules/Timer.sys.mjs"
+    );
+    let done = false;
+    let timer = null;
+    const finish = why => {
+      if (done) {
+        return;
+      }
+      done = true;
+      if (timer) {
+        clearTimeout(timer);
+      }
+      stats[why === "timeout" ? "timeout" : "ready"]++;
+      try {
+        this._applyChannelPersona(channel);
+      } catch (e) {
+        console.error("darkstr 0056: held channel decision failed", e);
+      } finally {
+        try {
+          channel.resume();
+        } catch (_e) {}
+      }
+    };
+    timer = setTimeout(() => finish("timeout"), waitMs);
+    store.whenReady().then(
+      () => finish("ready"),
+      () => finish("ready")
+    );
+    return true;
+  },
+
+  /** Persona headers (UA, Accept-Language) for one request (0051 N2/N3). */
+  _applyChannelPersona(channel) {
+    const plan = this.getPlan();
     if (!plan.applyNativeBase) {
       return;
     }
