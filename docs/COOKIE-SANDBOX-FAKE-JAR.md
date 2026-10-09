@@ -1,7 +1,7 @@
 # Cookie sandbox / firewall
 
 **Brand:** darkstr — not official LibreWolf.  
-**Status:** **0035 MVP MERGED** (Phase 5). **0042** (outbound `/echo` Cookie QI) MERGED. **0048** correctness (Rowan QA B1/B2/N1, omit, 3P partitioning, mirror staleness) in review — see [0048](#0048-correctness). Prior art: backlog one-pager (PR #34, 2026-09-16).
+**Status:** **0035 MVP MERGED** (Phase 5). **0042** (outbound `/echo` Cookie QI) MERGED. **0048** correctness (Rowan QA B1/B2/N1, omit, 3P partitioning, mirror staleness) in review; **0048r2** respin after Proof FAILED `f3f1e748` (F1 ordering, F2 A-B-A / foreign-ancestor partitioning, F3 native C++ gate, check 4 = reject unpartitioned 3P) — see [0048](#0048-correctness) and [0048r2](#0048r2-respin). Prior art: backlog one-pager (PR #34, 2026-09-16).
 
 ## Idea
 
@@ -50,7 +50,21 @@ Synthetic tokens are computed once at write time from (seed, top site, cookie si
 
 **Why not Gecko CookieService with a darkstr partition:** chrome JS can only `add()`/`getCookiesFromHost()` by OriginAttributes; the header path and `document.cookie` always use the channel/document OA, and added cookies persist to `cookies.sqlite` and session restore. A real (top, request) partition there needs C++ in `netwerk/cookie` + IPC — kept in JS for 0048.
 
-**Residuals (named, not fixed here):** `ServiceWorkerGlobalScope.cookieStore` is not sandboxed; own-property `document.cookie` descriptor / function `toString` shape is a persona-surface item for **0051**; allowlisted top sites use the real jar by design. Behavioural note: the sandbox keeps partitioned 3P cookies without a `Partitioned` attribute, where LibreWolf's real jar (`cookieBehavior.optInPartitioning`) rejects them.
+**Residuals (named, not fixed here):** own-property `document.cookie` descriptor / function `toString` shape is a persona-surface item for **0051**; allowlisted top sites use the real jar by design. (The 0048 note that the sandbox kept unpartitioned 3P cookies is superseded by 0048r2 check 4.)
+
+## 0048r2 respin
+
+Proof FAILED `f3f1e748` (PR #79) on three new findings; evidence `~/AgentDocs/proof/darkstr-0048-xor-20261008-174506/`. Additional patches: [`patches/0048r2-cookie-firewall-respin.patch`](../patches/0048r2-cookie-firewall-respin.patch) (JS, old 0048 → r2) and [`patches/0048r2-cookie-firewall-native-gate.patch`](../patches/0048r2-cookie-firewall-native-gate.patch) (C++). The apply helper detects baseline / 0048 v1 / r2 and the C++ gate state.
+
+| Finding | Fix |
+|---------|-----|
+| **F1** Set-Cookie from a `fetch()` response sometimes missing from `document.cookie` at resolve (~1.5 s late) | `http-on-examine-response` collects the deltas; the parent sends them with `sendQuery` to every live actor in the partition **plus the requesting document's actor**, and **suspends the channel** until all acks arrive (2 s safety timeout, counted in `_ackStats`). The child applies the delta to the process cache before it acks, so the cache is updated before the response body reaches the page. |
+| **F2** A-B-A: cross-site frame's credentialed no-cors fetch carried the top site's cookies (incl. HttpOnly); nested same-site frame saw top cookies | Gecko TCP model: partition key = (OA, scheme, top site, **foreign-ancestor bit**). Context kind is `1p` / `3p` / `3pf` (any cross-site frame in the ancestor chain ⇒ third party, A-in-B-in-A ⇒ `3pf`). Buckets: `u` (unpartitioned, 1p only), `p` (CHIPS partition), `pf` (foreign-ancestor partition). 1p reads `u`+`p`; 3p reads `p`; 3pf reads `pf`. A subresource request from a third-party context gets that context's partition and never top-site `u` cookies. SameSite is enforced against the initiator, its context, every ancestor and the top (cross-site if any differs). |
+| **Check 4** sandbox accepted unpartitioned 3P cookies | Match stock LibreWolf (`network.cookie.cookieBehavior.optInPartitioning=true`): a third-party Set-Cookie (HTTP or script) without `Partitioned` is rejected; `Partitioned` requires `Secure`. With optInPartitioning off, 3P cookies go to the partition, as in stock. |
+| **F3** page script reached the real cookie store via the native `Document.prototype.cookie` accessor (any realm) or `CookieStore.prototype.set` | C++ gate, opt-in: static pref `darkstr.cookieFirewall.contentGate` (default **false**; set only on the default branch by the parent while armed). When on, `CookieCommons::CheckGlobalAndRetrieveCookiePrincipals` (used by `Document::GetCookie`/`SetCookie` incl. `document.open` documents, and `CookieStore` get/set/delete in every realm) asks the content-process observer `darkstr-cookie-gate` per inner window. Only an explicit `passthrough` decision (allowlisted top site) reaches CookieServiceChild; every other answer, or no answer, fails closed (native getter returns `""`, setter and CookieStore are no-ops). Worker `cookieStore` fails closed whenever the gate is on. `CookieStoreNotifier` change events are suppressed for gated windows. The firewall's own hooks never call the native accessor. |
+
+**Residuals (r2):** worker/ServiceWorker `cookieStore` fails closed even on allowlisted sites while armed (no sandbox view there); chrome/extension Xray reads of `document.cookie` on a gated window return `""` while armed; the F1 ack has a 2 s timeout (counted, not hit in the harness), so a hung content process delays the response by at most 2 s.
+
 
 ## Why it might help
 
@@ -61,7 +75,7 @@ Synthetic tokens are computed once at write time from (seed, top site, cookie si
 ## Hard parts (residuals)
 
 1. **First-party login** — allowlist must be right or auth breaks.
-2. **CookieService race** — closed for HTTP: `nsHttpChannel::ProcessResponse` runs `http-on-examine-response` before `SetCookieHeaders`, so the strip wins (0048 harness: real profile jar empty for test hosts while armed).
+2. **CookieService race** — closed for HTTP (and for page script by the 0048r2 C++ gate): `nsHttpChannel::ProcessResponse` runs `http-on-examine-response` before `SetCookieHeaders`, so the strip wins (0048 harness: real profile jar empty for test hosts while armed).
 2b. **Outbound Cookie empty (0035 soft)** — fixed in **0042**: QI `nsIHttpChannel` before `setRequestHeader`; surface errors (was silent catch).
 3. **Detectability** — synthetic values that ignore `Set-Cookie` semantics are an FP signal (honesty: not anti-detect).
 4. **CHIPS / Storage Access API** — stock Firefox already partitions; disagreeing filters are worse than none.

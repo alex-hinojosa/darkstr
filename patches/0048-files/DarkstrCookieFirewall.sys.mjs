@@ -71,6 +71,31 @@
  * Allowlist: darkstr.cookieFirewall.allowlist CSV of top-level eTLD+1 → real
  * jar passthrough for that page and everything it loads.
  *
+ * 0048r2 (Proof F1–F3 + check 4):
+ *   - Buckets per top-level site follow Gecko Total Cookie Protection + CHIPS
+ *     exactly: "u" (unpartitioned, first-party), "p" (partition key
+ *     (scheme,top): CHIPS cookies of first parties and every cookie of a
+ *     cross-site frame) and "pf" (partition key (scheme,top,f): a document
+ *     same-site with top but under a cross-site ancestor, A-B-A). A
+ *     first-party context reads u+p, a cross-site context reads p, an A-B-A
+ *     context reads pf, so a cross-site frame never gets the top site's
+ *     first-party cookies (F2). Like stock (network.cookie.cookieBehavior.
+ *     optInPartitioning), a cross-site context may only set cookies that
+ *     carry the Partitioned attribute (check 4); Partitioned needs Secure.
+ *     SameSite is enforced against the initiator, the requesting document
+ *     and every ancestor up to the top.
+ *   - Ordering (F1): http-on-examine-response suspends the channel until every
+ *     content process that can see the new cookie has acked the delta
+ *     (sendQuery), so the response cannot reach the page before its
+ *     document.cookie / CookieStore mirror holds the cookie.
+ *   - Native gate (F3): while armed, the static pref
+ *     darkstr.cookieFirewall.contentGate (default-branch only, never
+ *     persisted) makes CookieCommons::CheckGlobalAndRetrieveCookiePrincipals
+ *     (document.cookie getter/setter from any realm, document.open'ed
+ *     documents, about:blank/srcdoc, window and worker CookieStore) and
+ *     CookieStoreNotifier refuse the real cookie store unless the content
+ *     child answered "passthrough" (allowlist) for that inner window.
+ *
  * Soft residual (0042): outbound Cookie on content fetch was empty under 0035
  * because http-on-modify-request subject was used without QI to nsIHttpChannel
  * and setRequestHeader failures were swallowed. Pin: QI + surface set errors.
@@ -101,6 +126,11 @@ const SEED_PREF = "darkstr.persona.seed";
 const ROTATE_PER_SITE_PREF = "darkstr.persona.rotatePerSite";
 
 const LAX_BY_DEFAULT_PREF = "network.cookie.sameSite.laxByDefault";
+const OPT_IN_PARTITIONING_PREF = "network.cookie.cookieBehavior.optInPartitioning";
+/** 0048r2 F3: C++ gate (StaticPrefList.yaml, default false). Default branch only. */
+const CONTENT_GATE_PREF = "darkstr.cookieFirewall.contentGate";
+/** 0048r2 F1: longest a response waits for content caches to ack a delta. */
+const DELTA_ACK_TIMEOUT_MS = 2000;
 const NONE_REQUIRES_SECURE_PREF = "network.cookie.sameSite.noneRequiresSecure";
 
 const ACTOR_NAME = "DarkstrCookieFirewall";
@@ -275,6 +305,7 @@ function parseSetCookie(line) {
     secure: false,
     httpOnly: false,
     sameSite: "unset",
+    partitioned: false,
   };
   for (const part of parts) {
     const p = part.trim();
@@ -313,6 +344,9 @@ function parseSetCookie(line) {
         break;
       case "httponly":
         attrs.httpOnly = true;
+        break;
+      case "partitioned":
+        attrs.partitioned = true;
         break;
       case "samesite": {
         const v = val.toLowerCase();
@@ -366,6 +400,10 @@ function buildRecord(parsed, ctx, env = {}) {
   }
   if (attrs.secure && !ctx.secure) {
     return { ok: false, reason: "secure-from-insecure" };
+  }
+  if (attrs.partitioned && !attrs.secure) {
+    // CHIPS: Partitioned requires Secure (Gecko rejects it otherwise).
+    return { ok: false, reason: "partitioned-requires-secure" };
   }
   let cookieHost = host;
   let hostOnly = true;
@@ -426,6 +464,7 @@ function buildRecord(parsed, ctx, env = {}) {
     secure: !!attrs.secure,
     httpOnly: !!attrs.httpOnly,
     sameSite,
+    partitioned: !!attrs.partitioned,
     expiry,
     creation: 0,
   };
@@ -575,6 +614,94 @@ function sanitizeForChild(rec) {
   return { ...rec, stub: false };
 }
 
+// ---- 0048r2: Gecko TCP / CHIPS bucket model -------------------------------
+//
+// jarKey  = "<oa>|<scheme>://<top eTLD+1>"         (the top-level site)
+// bucket  = jarKey            unpartitioned first-party jar ("u")
+//         | jarKey + "|p"     partition key (scheme,top)
+//         | jarKey + "|pf"    partition key (scheme,top,f) — A-B-A
+// kind    = "1p"  document same-site with top, no cross-site ancestor
+//         | "3p"  document cross-site with top
+//         | "3pf" document same-site with top under a cross-site ancestor
+
+const KIND_1P = "1p";
+const KIND_3P = "3p";
+const KIND_3PF = "3pf";
+
+/**
+ * Classify a context from eTLD+1s. `self` is the document (or the request
+ * target of a subdocument load); `ancestors` are the bases of every ancestor
+ * document up to and including the top.
+ */
+function classifyContext(selfBase, ancestorBases, topBase) {
+  const self = String(selfBase || "");
+  const top = String(topBase || "");
+  if (self !== top) {
+    return KIND_3P;
+  }
+  for (const a of ancestorBases || []) {
+    if (a && a !== top) {
+      return KIND_3PF;
+    }
+  }
+  return KIND_1P;
+}
+
+/** Buckets a context of `kind` reads, most specific last. */
+function readBucketsFor(jarKey, kind) {
+  if (kind === KIND_3PF) {
+    return [jarKey + "|pf"];
+  }
+  if (kind === KIND_3P) {
+    return [jarKey + "|p"];
+  }
+  return [jarKey, jarKey + "|p"];
+}
+
+/**
+ * Bucket a cookie set from a context of `kind` lands in, or null when stock
+ * Gecko rejects it (cross-site context, no Partitioned attribute, with
+ * network.cookie.cookieBehavior.optInPartitioning — LibreWolf default).
+ */
+function writeBucketFor(jarKey, kind, partitioned, optInPartitioning = true) {
+  if (kind === KIND_1P) {
+    return partitioned ? jarKey + "|p" : jarKey;
+  }
+  const part = kind === KIND_3PF ? jarKey + "|pf" : jarKey + "|p";
+  if (partitioned || !optInPartitioning) {
+    return part;
+  }
+  return null;
+}
+
+/** Tag mixed into synthetic values so the same cookie differs per bucket. */
+function bucketTag(bucketKey) {
+  const s = String(bucketKey || "");
+  if (s.endsWith("|pf")) {
+    return "|pf";
+  }
+  if (s.endsWith("|p")) {
+    return "|p";
+  }
+  return "";
+}
+
+/** Read-only union of several cookie maps (for matchFor*). */
+function unionMaps(maps) {
+  const list = (maps || []).filter(Boolean);
+  return {
+    values() {
+      const out = [];
+      for (const m of list) {
+        for (const r of m.values()) {
+          out.push(r);
+        }
+      }
+      return out;
+    },
+  };
+}
+
 function parsePartitionKey(pk) {
   const s = String(pk || "");
   if (!s) {
@@ -590,7 +717,11 @@ function parsePartitionKey(pk) {
   if (fields.length < 2 || !fields[0] || !fields[1]) {
     return null;
   }
-  return { scheme: fields[0].toLowerCase(), host: normalizeHost(fields[1]) };
+  return {
+    scheme: fields[0].toLowerCase(),
+    host: normalizeHost(fields[1]),
+    foreignAncestor: fields.slice(2).includes("f"),
+  };
 }
 
 export const DarkstrCookieCore = Object.freeze({
@@ -616,6 +747,14 @@ export const DarkstrCookieCore = Object.freeze({
   sanitizeForChild,
   hostMatchesRecord,
   parsePartitionKey,
+  classifyContext,
+  readBucketsFor,
+  writeBucketFor,
+  bucketTag,
+  unionMaps,
+  KIND_1P,
+  KIND_3P,
+  KIND_3PF,
   MAX_COOKIES_PER_HOST,
 });
 
@@ -644,6 +783,8 @@ export var DarkstrCookieFirewall = {
   _jar: null,
   /** Live parent actors (one per WindowGlobal) that installed hooks. */
   _liveActors: null,
+  /** F1 diag: responses held for content acks / acks that timed out. */
+  _ackStats: { held: 0, timeouts: 0 },
 
   init() {
     if (this._inited) {
@@ -846,10 +987,28 @@ export var DarkstrCookieFirewall = {
     try {
       Services.prefs.setBoolPref(ARMED_PREF, this._armed);
     } catch (_e) {}
+    this._setContentGate(this._armed);
     if (!this._armed && this._jar) {
       // Idle: drop sandbox so a later arm starts clean. Real jar untouched.
       this._jar.clear();
     }
+  },
+
+  /**
+   * 0048r2 F3: flip the C++ cookie gate. Default branch only, so it is never
+   * written to prefs.js (a disarmed profile starts with the static default
+   * false) and every content process receives it through the normal pref
+   * broadcast. A stray user value is cleared so defaults stay inert.
+   */
+  _setContentGate(on) {
+    try {
+      if (Services.prefs.prefHasUserValue?.(CONTENT_GATE_PREF)) {
+        Services.prefs.clearUserPref(CONTENT_GATE_PREF);
+      }
+    } catch (_e) {}
+    try {
+      Services.prefs.getDefaultBranch("").setBoolPref(CONTENT_GATE_PREF, !!on);
+    } catch (_e) {}
   },
 
   /** Ask every live document to (re)install or uninstall its hooks. */
@@ -898,10 +1057,15 @@ export var DarkstrCookieFirewall = {
     return out;
   },
 
-  _env() {
+  _env(oa) {
+    const pb = Number(oa?.privateBrowsingId || 0) > 0;
     return {
       laxByDefault: readBoolPref(LAX_BY_DEFAULT_PREF, false),
       noneRequiresSecure: readBoolPref(NONE_REQUIRES_SECURE_PREF, true),
+      // Stock: unpartitioned cookies from a cross-site context are rejected.
+      optInPartitioning:
+        readBoolPref(OPT_IN_PARTITIONING_PREF, false) ||
+        (pb && readBoolPref(OPT_IN_PARTITIONING_PREF + "_pbmode", false)),
       isPublicSuffix: (d) => this._isPublicSuffix(d),
     };
   },
@@ -1078,6 +1242,21 @@ export var DarkstrCookieFirewall = {
     }
   },
 
+  /** eTLD+1 of every document from `bc` up to the top (http(s) only). */
+  _ancestorBases(bc) {
+    const out = [];
+    for (let c = bc; c; c = c.parent) {
+      let s = null;
+      try {
+        s = this._siteFromPrincipal(c.currentWindowGlobal?.documentPrincipal);
+      } catch (_e) {}
+      if (s) {
+        out.push(s.base);
+      }
+    }
+    return out;
+  },
+
   /**
    * Document context for a WindowGlobalParent (child install, document.cookie
    * writes). Uses the document's own principal and the top-level document's
@@ -1112,13 +1291,11 @@ export var DarkstrCookieFirewall = {
     if (!top) {
       return out;
     }
-    crossSite = doc.base !== top.base;
-    for (let c = bc?.parent; c && !crossSite; c = c.parent) {
-      const s = this._siteFromPrincipal(c.currentWindowGlobal?.documentPrincipal);
-      if (s && s.base !== top.base) {
-        crossSite = true;
-      }
-    }
+    const ancestors = this._ancestorBases(bc?.parent);
+    const kind = classifyContext(doc.base, ancestors, top.base);
+    // SameSite for script: any cross-site frame in the chain (Gecko
+    // site-for-cookies) makes Lax/Strict cookies invisible.
+    crossSite = kind !== KIND_1P;
     const decision = this.decisionForEtld(top.base, p);
     out.decision = decision;
     out.etld = top.base;
@@ -1128,30 +1305,43 @@ export var DarkstrCookieFirewall = {
     out.docPath = doc.path;
     out.secure = isSecureOrigin(doc.scheme, doc.host);
     out.crossSite = crossSite;
+    out.kind = kind;
     if (decision !== "sandbox") {
       return out;
     }
     const oaKey = this._oaKey(docPrincipal.originAttributes);
     out.jarKey = this._jarKey(oaKey, top);
-    out.cacheKey = `${out.jarKey}#${doc.host}`;
+    out.readKeys = readBucketsFor(out.jarKey, kind);
+    out.cacheKeys = out.readKeys.map((k) => `${k}#${doc.host}`);
+    // Legacy single key (diag / Proof scripts): the bucket a plain cookie
+    // set by this document lands in, else its partition.
+    out.cacheKey = out.cacheKeys[0];
     out.seed = this._effectiveSeedForEtld(top.base) >>> 0;
-    const env = this._env();
+    const env = this._env(docPrincipal.originAttributes);
     out.laxByDefault = env.laxByDefault;
     out.noneRequiresSecure = env.noneRequiresSecure;
+    out.optInPartitioning = env.optInPartitioning;
     this._writeDiag(top.base, out.seed, decision, out.jarKey);
     return out;
   },
 
-  /** Records visible to a content process for one document host. */
+  /**
+   * Records visible to a content process for one document host, per bucket
+   * the document reads: { "<bucketKey>#<host>": [records] }.
+   */
   snapshotForContext(ctx) {
-    const bucket = this._bucket(ctx.jarKey, false);
     const now = Date.now();
-    this._purgeExpired(bucket, now);
-    const out = [];
-    for (const rec of bucket?.values() || []) {
-      if (hostMatchesRecord(ctx.docHost, rec)) {
-        out.push(sanitizeForChild(rec));
+    const out = {};
+    for (const key of ctx.readKeys || []) {
+      const bucket = this._bucket(key, false);
+      this._purgeExpired(bucket, now);
+      const recs = [];
+      for (const rec of bucket?.values() || []) {
+        if (hostMatchesRecord(ctx.docHost, rec)) {
+          recs.push(sanitizeForChild(rec));
+        }
       }
+      out[`${key}#${ctx.docHost}`] = recs;
     }
     return out;
   },
@@ -1194,57 +1384,110 @@ export var DarkstrCookieFirewall = {
       actor._darkstrCtx = ctx;
       this._liveActors.add(actor);
     }
-    return { ...ctx, records: this.snapshotForContext(ctx) };
+    const buckets = this.snapshotForContext(ctx);
+    return { ...ctx, buckets, records: Object.values(buckets).flat() };
   },
 
   forgetActor(actor) {
     this._liveActors?.delete(actor);
   },
 
-  /** Push one change to every live document whose host can see the cookie. */
-  _pushDelta(jarKey, rec, deleted) {
-    const clean = sanitizeForChild(rec);
-    for (const actor of [...(this._liveActors || [])]) {
-      const c = actor._darkstrCtx;
-      if (!c || c.jarKey !== jarKey) {
+  /**
+   * Deliver changes to every live document whose bucket + host can see them.
+   * One message per actor. With `ack`, uses sendQuery and returns the ack
+   * promises (F1: the HTTP response waits on them); otherwise async.
+   * changes: [{ bucketKey, rec, deleted }]
+   */
+  _flushDeltas(changes, opts = {}) {
+    const acks = [];
+    if (!changes?.length) {
+      return acks;
+    }
+    const targets = new Set(this._liveActors || []);
+    for (const a of opts.extraActors || []) {
+      targets.add(a);
+    }
+    for (const actor of targets) {
+      const c = actor?._darkstrCtx;
+      if (!c?.readKeys) {
         continue;
       }
-      if (!hostMatchesRecord(c.docHost, rec)) {
+      const byKey = new Map();
+      for (const ch of changes) {
+        if (!c.readKeys.includes(ch.bucketKey) || !hostMatchesRecord(c.docHost, ch.rec)) {
+          continue;
+        }
+        const cacheKey = `${ch.bucketKey}#${c.docHost}`;
+        let d = byKey.get(cacheKey);
+        if (!d) {
+          d = { cacheKey, upserts: [], deletes: [] };
+          byKey.set(cacheKey, d);
+        }
+        if (ch.deleted) {
+          d.deletes.push(cookieKey(ch.rec));
+        } else {
+          d.upserts.push(sanitizeForChild(ch.rec));
+        }
+      }
+      if (!byKey.size) {
         continue;
       }
+      const data = { batch: [...byKey.values()] };
       try {
-        actor.sendAsyncMessage(MSG_DELTA, {
-          cacheKey: c.cacheKey,
-          upserts: deleted ? [] : [clean],
-          deletes: deleted ? [cookieKey(rec)] : [],
-        });
+        if (opts.ack && typeof actor.sendQuery === "function") {
+          acks.push(Promise.resolve(actor.sendQuery(MSG_DELTA, data)).catch(() => null));
+        } else {
+          actor.sendAsyncMessage(MSG_DELTA, data);
+        }
       } catch (_e) {
-        this._liveActors.delete(actor);
+        this._liveActors?.delete(actor);
       }
     }
+    return acks;
   },
 
-  _store(jarKey, built, opts) {
-    const bucket = this._bucket(jarKey, true);
+  /** Back-compat single change push (async). */
+  _pushDelta(bucketKey, rec, deleted) {
+    return this._flushDeltas([{ bucketKey, rec, deleted }]);
+  },
+
+  /**
+   * Apply to a bucket. Changes go to `sink` when given (caller flushes),
+   * otherwise they are pushed asynchronously at once.
+   */
+  _store(bucketKey, built, opts, sink = null) {
+    const bucket = this._bucket(bucketKey, true);
     const before = built?.ok ? bucket.get(cookieKey(built.record)) : null;
     const res = applyRecord(bucket, built, { ...opts, seq: ++this._seq });
     if (!res.changed) {
       return res;
     }
+    const changes = [];
     if (res.deletedKey) {
-      this._pushDelta(jarKey, before || built.record, true);
+      changes.push({ bucketKey, rec: before || built.record, deleted: true });
     } else {
-      this._pushDelta(jarKey, res.record, false);
+      changes.push({ bucketKey, rec: res.record, deleted: false });
       for (const k of res.evicted || []) {
         const [name, host, path] = k.split("\u0000");
-        this._pushDelta(jarKey, { name, host, path, hostOnly: false }, true);
+        changes.push({ bucketKey, rec: { name, host, path, hostOnly: false }, deleted: true });
       }
+    }
+    if (sink) {
+      sink.push(...changes);
+    } else {
+      this._flushDeltas(changes);
     }
     return res;
   },
 
-  _syntheticFor(ctxSeed, topBase, rec) {
-    return syntheticValue(ctxSeed, topBase, this._baseOfHost(rec.host), rec.name);
+  /** Synthetic token; `bucketKey` keeps u-bucket tokens unchanged vs 0048. */
+  _syntheticFor(ctxSeed, topBase, rec, bucketKey = "") {
+    return syntheticValue(
+      ctxSeed,
+      String(topBase || "") + bucketTag(bucketKey),
+      this._baseOfHost(rec.host),
+      rec.name
+    );
   },
 
   /** Child: document.cookie / CookieStore write (raw cookie string). */
@@ -1271,10 +1514,19 @@ export var DarkstrCookieFirewall = {
     if (!built.ok) {
       return { ok: false, reason: built.reason };
     }
-    if (plan.mode === "synthetic" && !built.deletion) {
-      built.record.value = this._syntheticFor(ctx.seed, ctx.topBase, built.record);
+    const bucketKey = writeBucketFor(
+      ctx.jarKey,
+      ctx.kind,
+      built.record.partitioned,
+      ctx.optInPartitioning
+    );
+    if (!bucketKey) {
+      return { ok: false, reason: "third-party-unpartitioned" };
     }
-    const res = this._store(ctx.jarKey, built, {
+    if (plan.mode === "synthetic" && !built.deletion) {
+      built.record.value = this._syntheticFor(ctx.seed, ctx.topBase, built.record, bucketKey);
+    }
+    const res = this._store(bucketKey, built, {
       fromHttp: false,
       secureOrigin: ctx.secure,
       now,
@@ -1288,9 +1540,8 @@ export var DarkstrCookieFirewall = {
     if (ctx.decision !== "sandbox") {
       return { policy: ctx, cookie: null };
     }
-    const bucket = this._bucket(ctx.jarKey, false);
     const recs = matchForScript(
-      bucket,
+      unionMaps(ctx.readKeys.map((k) => this._bucket(k, false))),
       {
         host: ctx.docHost,
         path: ctx.docPath,
@@ -1338,8 +1589,21 @@ export var DarkstrCookieFirewall = {
   },
 
   /**
-   * HTTP context of a channel: request site, top-level site (partition),
-   * cross-site flag, credentials mode.
+   * HTTP context of a channel (0048r2): request site, top-level site, the
+   * Gecko partition the request uses (kind → buckets), SameSite cross-site
+   * flag against initiator + context chain, credentials mode.
+   *
+   *   top-level document  → 1p; cross-site iff the initiator is
+   *   subdocument         → kind of the new document (target vs the chain of
+   *                          embedders; loadInfo.browsingContext is the parent)
+   *   subresource         → context document (loadingPrincipal) + its
+   *                          ancestors: 1p context & target same-site with top
+   *                          → 1p; 1p context & cross-site target → 3p
+   *                          (partition of top); 3p / 3pf context → its own
+   *                          partition, whatever the target (no top-level
+   *                          cookies from a cross-site context — F2)
+   *   no browsing context → cookieJarSettings.partitionKey (+ ",f") and the
+   *                          loading principal (service / shared workers)
    */
   _channelContext(channel, plan) {
     let li = null;
@@ -1358,6 +1622,7 @@ export var DarkstrCookieFirewall = {
       type = li.externalContentPolicyType;
     } catch (_e) {}
     const isTopDoc = type === Ci.nsIContentPolicy.TYPE_DOCUMENT;
+    const isSubDoc = type === Ci.nsIContentPolicy.TYPE_SUBDOCUMENT;
     let bc = null;
     try {
       bc = li.browsingContext;
@@ -1374,50 +1639,85 @@ export var DarkstrCookieFirewall = {
         }
       } catch (_e) {}
     }
+    let initiator = null;
+    try {
+      initiator = this._siteFromPrincipal(li.triggeringPrincipal);
+    } catch (_e) {}
     let top = null;
-    let crossSite = false;
+    let kind = KIND_1P;
+    // Sites whose cross-siteness with the target makes the request
+    // cross-site for SameSite (Gecko site-for-cookies + initiator).
+    const chain = [];
+    if (initiator) {
+      chain.push(initiator.base);
+    }
     if (isTopDoc) {
       top = req;
-      try {
-        const t = this._siteFromPrincipal(li.triggeringPrincipal);
-        crossSite = !!t && t.base !== req.base;
-      } catch (_e) {}
     } else {
       try {
-        top = this._siteFromPrincipal(
-          bc?.top?.currentWindowGlobal?.documentPrincipal
-        );
+        top = this._siteFromPrincipal(bc?.top?.currentWindowGlobal?.documentPrincipal);
       } catch (_e) {}
-      if (!top) {
+      let pk = null;
+      try {
+        pk = parsePartitionKey(li.cookieJarSettings?.partitionKey);
+      } catch (_e) {}
+      if (!top && pk?.host) {
+        top = {
+          scheme: pk.scheme || req.scheme,
+          host: pk.host,
+          base: this._baseOfHost(pk.host),
+        };
+      }
+      let context = null;
+      try {
+        context = this._siteFromPrincipal(li.loadingPrincipal);
+      } catch (_e) {}
+      if (!context && bc) {
         try {
-          const pk = parsePartitionKey(li.cookieJarSettings?.partitionKey);
-          if (pk?.host) {
-            top = {
-              scheme: pk.scheme || req.scheme,
-              host: pk.host,
-              base: this._baseOfHost(pk.host),
-            };
+          context = this._siteFromPrincipal(bc.currentWindowGlobal?.documentPrincipal);
+        } catch (_e) {}
+      }
+      if (!context && !bc) {
+        context = initiator;
+      }
+      if (!top) {
+        top = context || req;
+      }
+      if (isSubDoc) {
+        // New document `req` embedded by bc's document (and its ancestors).
+        const ancestors = bc ? this._ancestorBases(bc) : context ? [context.base] : [];
+        if (!ancestors.length || ancestors[ancestors.length - 1] !== top.base) {
+          ancestors.push(top.base);
+        }
+        kind = classifyContext(req.base, ancestors, top.base);
+        chain.push(...ancestors);
+      } else {
+        let ctxKind;
+        if (bc) {
+          const ancestors = this._ancestorBases(bc.parent);
+          if (!ancestors.length || ancestors[ancestors.length - 1] !== top.base) {
+            ancestors.push(top.base);
           }
-        } catch (_e) {}
-      }
-      if (!top) {
-        try {
-          top =
-            this._siteFromPrincipal(li.loadingPrincipal) ||
-            this._siteFromPrincipal(li.triggeringPrincipal);
-        } catch (_e) {}
-      }
-      if (!top) {
-        top = req;
-      }
-      crossSite = req.base !== top.base;
-      for (let c = bc; c && !crossSite; c = c.parent) {
-        const s = this._siteFromPrincipal(c.currentWindowGlobal?.documentPrincipal);
-        if (s && s.base !== top.base) {
-          crossSite = true;
+          ctxKind = classifyContext((context || top).base, ancestors, top.base);
+          chain.push(...ancestors);
+        } else if (pk?.foreignAncestor) {
+          ctxKind = KIND_3PF;
+          chain.push(top.base);
+        } else {
+          ctxKind = (context || top).base === top.base ? KIND_1P : KIND_3P;
+          chain.push(top.base);
+        }
+        if (context) {
+          chain.push(context.base);
+        }
+        if (ctxKind === KIND_1P) {
+          kind = req.base === top.base ? KIND_1P : KIND_3P;
+        } else {
+          kind = ctxKind;
         }
       }
     }
+    const crossSite = chain.some((b) => b && b !== req.base);
     const decision = this.decisionForEtld(top.base, plan);
     let oa = null;
     try {
@@ -1431,17 +1731,104 @@ export var DarkstrCookieFirewall = {
     try {
       anonymous = !!(channel.loadFlags & Ci.nsIRequest.LOAD_ANONYMOUS);
     } catch (_e) {}
+    const jarKey = this._jarKey(this._oaKey(oa), top);
     return {
       decision,
       req,
       top,
+      kind,
       crossSite,
       topLevelNav: isTopDoc,
       safeMethod: method === "GET" || method === "HEAD",
       secure: isSecureOrigin(req.scheme, req.host),
       anonymous,
-      jarKey: this._jarKey(this._oaKey(oa), top),
+      oa,
+      bc,
+      isDocumentLoad: isTopDoc || isSubDoc,
+      jarKey,
+      readKeys: readBucketsFor(jarKey, kind),
     };
+  },
+
+  /**
+   * Live actor of the document that issued a subresource request, with a
+   * context, so the F1 ack also covers a document whose install raced
+   * actor registration.
+   */
+  _requesterActor(ctx) {
+    if (!ctx?.bc || ctx.isDocumentLoad) {
+      return null;
+    }
+    try {
+      const wgp = ctx.bc.currentWindowGlobal;
+      if (!wgp) {
+        return null;
+      }
+      const actor = wgp.getActor(ACTOR_NAME);
+      if (!actor) {
+        return null;
+      }
+      if (!actor._darkstrCtx) {
+        const dctx = this.documentContext(wgp);
+        if (dctx.decision !== "sandbox") {
+          return null;
+        }
+        actor._darkstrCtx = dctx;
+        this._liveActors?.add(actor);
+      }
+      return actor;
+    } catch (_e) {
+      return null;
+    }
+  },
+
+  /**
+   * F1: hold the response (examine-* observers run before the channel
+   * delivers OnStartRequest to the content process) until every content
+   * cache that can see the change acked it, or DELTA_ACK_TIMEOUT_MS.
+   */
+  _holdUntilAcked(channel, acks) {
+    if (!acks?.length) {
+      return false;
+    }
+    let suspended = false;
+    try {
+      channel.suspend();
+      suspended = true;
+    } catch (_e) {
+      return false;
+    }
+    let done = false;
+    let timer = null;
+    this._ackStats.held++;
+    const resume = (timedOut) => {
+      if (done) {
+        return;
+      }
+      done = true;
+      if (timedOut === true) {
+        this._ackStats.timeouts++;
+      }
+      try {
+        timer?.cancel?.();
+      } catch (_e) {}
+      if (suspended) {
+        try {
+          channel.resume();
+        } catch (_e) {}
+      }
+    };
+    try {
+      if (typeof Cc !== "undefined" && Ci.nsITimer) {
+        timer = Cc["@mozilla.org/timer;1"].createInstance(Ci.nsITimer);
+        timer.initWithCallback(() => resume(true), DELTA_ACK_TIMEOUT_MS, Ci.nsITimer.TYPE_ONE_SHOT);
+      } else {
+        timer = { t: setTimeout(() => resume(true), DELTA_ACK_TIMEOUT_MS) };
+        timer.cancel = () => clearTimeout(timer.t);
+      }
+    } catch (_e) {}
+    Promise.allSettled(acks).then(() => resume(false), () => resume(false));
+    return true;
   },
 
   _onHttp(subject, topic) {
@@ -1473,7 +1860,7 @@ export var DarkstrCookieFirewall = {
       this._writeDiag(ctx.top.base, 0, ctx.decision, null);
       return;
     }
-    const env = this._env();
+    const env = this._env(ctx.oa);
 
     if (topic === "http-on-modify-request") {
       if (ctx.anonymous) {
@@ -1483,12 +1870,15 @@ export var DarkstrCookieFirewall = {
         } catch (_e) {}
         return;
       }
-      const bucket = this._bucket(ctx.jarKey, false);
       const now = Date.now();
-      this._purgeExpired(bucket, now);
+      const buckets = ctx.readKeys.map((k) => {
+        const b = this._bucket(k, false);
+        this._purgeExpired(b, now);
+        return b;
+      });
       const cookie = serializeCookies(
         matchForRequest(
-          bucket,
+          unionMaps(buckets),
           {
             host: ctx.req.host,
             path: ctx.req.path,
@@ -1501,7 +1891,7 @@ export var DarkstrCookieFirewall = {
           env
         )
       );
-      this._writeDiag(ctx.top.base, undefined, "sandbox", ctx.jarKey);
+      this._writeDiag(ctx.top.base, undefined, "sandbox", ctx.readKeys.join(","));
       try {
         Services.prefs.setStringPref(LAST_COOKIE_OUT_PREF, cookie.slice(0, 500));
       } catch (_e) {}
@@ -1557,6 +1947,7 @@ export var DarkstrCookieFirewall = {
     }
     const now = Date.now();
     const seed = plan.mode === "synthetic" ? this._effectiveSeedForEtld(ctx.top.base) : 0;
+    const sink = [];
     for (const line of String(raw).split(/\r?\n/)) {
       if (!line.trim()) {
         continue;
@@ -1577,10 +1968,28 @@ export var DarkstrCookieFirewall = {
       if (!built.ok) {
         continue;
       }
-      if (plan.mode === "synthetic" && !built.deletion) {
-        built.record.value = this._syntheticFor(seed, ctx.top.base, built.record);
+      const bucketKey = writeBucketFor(
+        ctx.jarKey,
+        ctx.kind,
+        built.record.partitioned,
+        env.optInPartitioning
+      );
+      if (!bucketKey) {
+        // Stock (optInPartitioning): third-party cookie without Partitioned.
+        continue;
       }
-      this._store(ctx.jarKey, built, { fromHttp: true, secureOrigin: ctx.secure, now });
+      if (plan.mode === "synthetic" && !built.deletion) {
+        built.record.value = this._syntheticFor(seed, ctx.top.base, built.record, bucketKey);
+      }
+      this._store(bucketKey, built, { fromHttp: true, secureOrigin: ctx.secure, now }, sink);
+    }
+    if (sink.length) {
+      const requester = this._requesterActor(ctx);
+      const acks = this._flushDeltas(sink, {
+        ack: true,
+        extraActors: requester ? [requester] : [],
+      });
+      this._holdUntilAcked(channel, acks);
     }
     this._writeDiag(ctx.top.base, seed, "sandbox", ctx.jarKey);
   },

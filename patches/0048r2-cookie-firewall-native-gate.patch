@@ -1,0 +1,179 @@
+diff --git a/dom/cookiestore/CookieStoreNotifier.cpp b/dom/cookiestore/CookieStoreNotifier.cpp
+--- a/dom/cookiestore/CookieStoreNotifier.cpp
++++ b/dom/cookiestore/CookieStoreNotifier.cpp
+@@ -7,6 +7,7 @@
+ #include "CookieChangeEvent.h"
+ #include "CookieStore.h"
+ #include "mozilla/dom/Document.h"
++#include "mozilla/StaticPrefs_darkstr.h"
+ #include "mozilla/dom/WorkerPrivate.h"
+ #include "mozilla/net/Cookie.h"
+ #include "mozilla/net/CookieCommons.h"
+@@ -174,6 +175,16 @@ void CookieStoreNotifier::DispatchEvent(
+                                         bool aDeletedEvent) {
+   MOZ_ASSERT(NS_IsMainThread());
+ 
++  // darkstr 0048r2 (F3): no real-store change events while the cookie
++  // firewall is armed for this document.
++  if (mCookieStore && StaticPrefs::darkstr_cookieFirewall_contentGate()) {
++    nsCOMPtr<nsPIDOMWindowInner> gateWindow = mCookieStore->GetOwnerWindow();
++    if (!gateWindow || net::CookieCommons::DarkstrContentGateBlocks(
++                           gateWindow->GetExtantDoc(), nullptr)) {
++      return;
++    }
++  }
++
+   if (!mCookieStore) {
+     return;
+   }
+diff --git a/modules/libpref/init/StaticPrefList.yaml b/modules/libpref/init/StaticPrefList.yaml
+--- a/modules/libpref/init/StaticPrefList.yaml
++++ b/modules/libpref/init/StaticPrefList.yaml
+@@ -2516,6 +2516,22 @@
+   mirror: always
+ 
+ #---------------------------------------------------------------------------
++# Prefs starting with "darkstr."
++#---------------------------------------------------------------------------
++
++# darkstr 0048r2 (cookie firewall, Proof F3). Set on the DEFAULT branch by
++# DarkstrCookieFirewall.sys.mjs while the firewall is armed (never persisted
++# to prefs.js); false = stock Gecko. When true, the native document.cookie
++# getter/setter (any realm), CookieStore (window and worker) and
++# CookieStoreNotifier refuse the real cookie store for http(s) content unless
++# the content-process cookie-firewall child answers "passthrough" for the
++# document's inner window (allowlisted top site). Fails closed.
++- name: darkstr.cookieFirewall.contentGate
++  type: RelaxedAtomicBool
++  value: false
++  mirror: always
++
++#---------------------------------------------------------------------------
+ # Prefs starting with "datareporting."
+ #---------------------------------------------------------------------------
+ 
+diff --git a/modules/libpref/moz.build b/modules/libpref/moz.build
+--- a/modules/libpref/moz.build
++++ b/modules/libpref/moz.build
+@@ -35,6 +35,8 @@ pref_groups = [
+     "clipboard",
+     "content",
+     "converter",
++    # darkstr 0048r2: cookie firewall native gate (StaticPrefs_darkstr.h).
++    "darkstr",
+     "datareporting",
+     "device",
+     "devtools",
+diff --git a/netwerk/cookie/CookieCommons.cpp b/netwerk/cookie/CookieCommons.cpp
+--- a/netwerk/cookie/CookieCommons.cpp
++++ b/netwerk/cookie/CookieCommons.cpp
+@@ -11,6 +11,8 @@
+ #include "ThirdPartyUtil.h"
+ #include "mozIThirdPartyUtil.h"
+ #include "mozilla/ContentBlockingNotifier.h"
++#include "mozilla/Services.h"
++#include "mozilla/StaticPrefs_darkstr.h"
+ #include "mozilla/StaticPrefs_network.h"
+ #include "mozilla/StorageAccess.h"
+ #include "mozilla/dom/CanonicalBrowsingContext.h"
+@@ -23,7 +25,9 @@
+ #include "nsContentUtils.h"
+ #include "nsICookiePermission.h"
+ #include "nsICookieService.h"
++#include "nsHashPropertyBag.h"
+ #include "nsIEffectiveTLDService.h"
++#include "nsIObserverService.h"
+ #include "nsIGlobalObject.h"
+ #include "nsIHttpChannel.h"
+ #include "nsIRedirectHistoryEntry.h"
+@@ -856,6 +860,42 @@ void CookieCommons::ComposeCookieString(
+ }
+ 
+ // static
++bool CookieCommons::DarkstrContentGateBlocks(Document* aDocument,
++                                             nsIPrincipal* aPrincipal) {
++  if (!StaticPrefs::darkstr_cookieFirewall_contentGate()) {
++    return false;
++  }
++  if (!NS_IsMainThread()) {
++    return true;
++  }
++  nsIPrincipal* principal =
++      aPrincipal ? aPrincipal : (aDocument ? aDocument->NodePrincipal() : nullptr);
++  // The firewall only owns http(s) web content; other schemes keep stock
++  // behaviour (and mostly have no cookie access anyway).
++  if (principal && !principal->SchemeIs("http") &&
++      !principal->SchemeIs("https")) {
++    return false;
++  }
++  if (!aDocument || !nsContentUtils::IsSafeToRunScript()) {
++    return true;
++  }
++  nsCOMPtr<nsIObserverService> os = mozilla::services::GetObserverService();
++  if (!os) {
++    return true;
++  }
++  RefPtr<nsHashPropertyBag> bag = new nsHashPropertyBag();
++  (void)bag->SetPropertyAsUint64(u"innerWindowID"_ns,
++                                 aDocument->InnerWindowID());
++  os->NotifyObservers(static_cast<nsIWritablePropertyBag2*>(bag),
++                      "darkstr-cookie-gate", nullptr);
++  nsAutoString decision;
++  if (NS_FAILED(bag->GetPropertyAsAString(u"decision"_ns, decision))) {
++    return true;
++  }
++  return !decision.EqualsLiteral("passthrough");
++}
++
++// static
+ CookieCommons::SecurityChecksResult
+ CookieCommons::CheckGlobalAndRetrieveCookiePrincipals(
+     Document* aDocument, nsIPrincipal** aCookiePrincipal,
+@@ -876,6 +916,13 @@ CookieCommons::CheckGlobalAndRetrieveCoo
+       return SecurityChecksResult::eDoNotContinue;
+     }
+ 
++    // darkstr 0048r2 (F3): while the cookie firewall is armed, worker
++    // CookieStore never reaches the real store (fail closed, including
++    // allowlisted sites — workers have no per-window firewall answer).
++    if (StaticPrefs::darkstr_cookieFirewall_contentGate()) {
++      return SecurityChecksResult::eDoNotContinue;
++    }
++
+     cookiePrincipal = workerPrivate->GetPrincipal();
+     if (NS_WARN_IF(!cookiePrincipal) || cookiePrincipal->GetIsNullPrincipal()) {
+       return SecurityChecksResult::eSecurityError;
+@@ -924,6 +971,14 @@ CookieCommons::CheckGlobalAndRetrieveCoo
+       return SecurityChecksResult::eDoNotContinue;
+     }
+ 
++    // darkstr 0048r2 (F3): document.cookie (native getter/setter from any
++    // realm, document.open'ed, about:blank/srcdoc documents) and window
++    // CookieStore stay off the real store while the firewall is armed; the
++    // page sees its sandbox jar through the firewall's own hooks instead.
++    if (DarkstrContentGateBlocks(aDocument, cookiePrincipal)) {
++      return SecurityChecksResult::eDoNotContinue;
++    }
++
+     // GTests do not create an inner window and because of these a few security
+     // checks will block this method.
+     if (!StaticPrefs::dom_cookie_testing_enabled()) {
+diff --git a/netwerk/cookie/CookieCommons.h b/netwerk/cookie/CookieCommons.h
+--- a/netwerk/cookie/CookieCommons.h
++++ b/netwerk/cookie/CookieCommons.h
+@@ -173,6 +173,15 @@ class CookieCommons final {
+       mozilla::dom::Document* aDocument, nsIPrincipal** aCookiePrincipal,
+       nsIPrincipal** aCookiePartitionedPrincipal);
+ 
++  // darkstr 0048r2 (cookie firewall, Proof F3): true when the pref
++  // darkstr.cookieFirewall.contentGate is on and the real cookie store must
++  // stay closed for this document (http(s) principal whose inner window is
++  // not answered "passthrough" by the content-process firewall child via the
++  // "darkstr-cookie-gate" observer topic). Fails closed: no document, script
++  // unsafe, no observer answer → true. Always false while the pref is off.
++  static bool DarkstrContentGateBlocks(mozilla::dom::Document* aDocument,
++                                       nsIPrincipal* aPrincipal);
++
+   // Return a reduced expiry attribute value if needed.
+   static int64_t MaybeCapExpiry(int64_t aCurrentTimeInMSec,
+                                 int64_t aExpiryInMSec);
