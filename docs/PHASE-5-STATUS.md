@@ -521,11 +521,18 @@ All five 0043 Worker/SharedWorker WebGPU XOR gates passed on Proof tip `cc692641
 - **Store.** `<profile>/darkstr/persona-seeds.json` (dir 0700, file 0600). Only the
   parent process writes it: tmp file, chmod 0600, then rename (never written in
   place), debounced 500 ms after a new seed, and flushed at `profileBeforeChange`.
-  Format `{v, l, k, e: [{c, h, s, t}]}`:
-  - `c`: context (`userContextId`; `"0"` = no container);
-  - `h`: HMAC-SHA256(K, eTLD+1);
-  - `s`: u32 seed;
-  - `t`: first-seen day (UTC).
+  Format v2 (0056r3) `{v: 2, l, k, e: [{c, h, s}]}`:
+  - `c`: HMAC-SHA256(K, `"ctx:" + userContextId`) (`"0"` = no container);
+  - `h`: HMAC-SHA256(K, `userContextId + "|" + eTLD+1`): per context, so the
+    same site in two containers is not linkable from the file alone;
+  - `s`: u32 seed.
+
+  No timestamps. The store resolves `c` back to a container by recomputing it for
+  known contexts (default, contexts seen this session, and 1..max(last
+  `userContextId`, 32), capped at 4096), so container deletion still finds its
+  entries. A v1 file (`c` plaintext, `h` = HMAC(K, eTLD+1), `t`) is migrated
+  once: v1 seeds are adopted as each (context, site) is next used, and the first
+  save writes v2 with the remaining v1 entries wiped.
 
   K is a random 32-byte key. On disk it exists only encrypted by an OSKeyStore
   (macOS Keychain) secret under a random per-store label (`l`, `k`). **No site
@@ -558,14 +565,21 @@ All five 0043 Worker/SharedWorker WebGPU XOR gates passed on Proof tip `cc692641
   removal via CLEAR_ALL):
   - **site / host / principal:** the eTLD+1 (so a subdomain host clears its
     site), scoped by the origin-attributes pattern;
-  - **range:** entries whose first-seen day falls inside the range (day
-    granularity, rounded towards clearing);
+  - **range (0056r3):** any time range resets **all** non-private seeds in all
+    contexts (session, file and unmigrated v1). The key is kept;
+  - **Clear-Site-Data** (`"cookies"`/`"storage"`) on a subdomain resets the
+    whole eTLD+1, in the originating context only (accepted; seeds are per
+    eTLD+1 and per context);
   - **origin attributes:** container deletion;
   - **all:** file and OSKeyStore secret deleted, so the next store gets a new
     key and label (key rotation).
 
   It flushes the in-memory copies (NativePersona seed / snapshot / worker-site
-  caches, DepthHooks `lastSeeds`). Open documents keep their persona until they
+  caches, DepthHooks `lastSeeds`) with the same `(ctx, site)` predicate for every
+  clear kind. 0056r3 fix: the range predicate took 3 arguments and the listener's
+  throw was swallowed, so a range clear rewrote the file but left NativePersona's
+  caches stale (Proof #87, `clear.json` step f). A listener error is now logged to
+  the console and counted (`debugState().stats.flushErrors`, `lastFlushError`). Open documents keep their persona until they
   navigate (0051 per-document rule). A clear in off mode can remove entries from
   an existing file but never creates one, and it rewrites only when something
   matched.
@@ -575,7 +589,7 @@ All five 0043 Worker/SharedWorker WebGPU XOR gates passed on Proof tip `cc692641
 All scenarios PASS on the 0056 DMG app (`selftest/live-final`; r3 adds `startup_hold`):
 
 - `keep_restart`: LibreWolf clear-on-shutdown on; A (persist-data-on-shutdown exception) keeps seed and page
-  persona across a normal quit, B resets; file has only A, 0600 / dir 0700, entries `{c,h,s,t}`.
+  persona across a normal quit, B resets; file has only A, 0600 / dir 0700, entries `{c,h,s,t}` (r3: v2 `{c,h,s}`).
 - `clear_one`: `deleteDataFromSite(A)` resets only A; `deleteDataFromHost(www.B)` resets only B; holds after restart.
 - `contexts`: same site in a normal tab, container 1 and a private window -> three seeds; file has contexts
   `0` and `1` only; normal and container survive restart, private does not.
@@ -606,9 +620,11 @@ kill9 all FAIL on the behaviour checks (seeds per session, clears are no-ops).
   prompt left open) does that one load get a temporary seed; the stored seed wins
   for every later load. Private windows, the Proof test seed and off mode are
   never held.
-- Range clears work at first-seen-day granularity. A site first seen before the
-  range keeps its seed even if it was visited inside the range (seeds are not
-  per-visit).
+- Range clears (0056r3) are coarse by design: any range resets every
+  non-private persona, since seeds are not per-visit.
+- Container resolution probes contexts up to 4096. An entry whose container
+  cannot be resolved is still cleared by a range clear or clear-all, and is
+  dropped at load under clear-on-shutdown when its site can't be matched.
 - The Keychain item is per profile (random label). Deleting the profile folder
   leaves it in the login keychain until a clear-all.
 

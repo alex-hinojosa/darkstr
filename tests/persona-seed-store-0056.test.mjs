@@ -90,6 +90,7 @@ function lwDefaults() {
   prefs.set("privacy.sanitize.sanitizeOnShutdown", true);
   prefs.set("privacy.clearOnShutdown_v2.cookiesAndStorage", true);
 }
+const hm = (m) => createHmac("sha256", Buffer.from(S._key)).update(m).digest("hex");
 function wipe() { fs.clear(); dirs.clear(); ops.length = 0; keystore.secrets.clear(); keystore.calls.length = 0; keystore.fail = false; perms.length = 0; S._resetForTests(); }
 
 test("HMAC-SHA256 matches RFC 2104 (node:crypto)", () => {
@@ -121,12 +122,12 @@ test("keep list: only persist-data-on-shutdown sites are written (LibreWolf clea
   const b = S.seedFor("0", "b56.test");
   await S.flush();
   const j = fileJSON();
-  assert.equal(j.v, 1);
+  assert.equal(j.v, 2);
   assert.equal(j.e.length, 1);
-  assert.deepEqual(Object.keys(j.e[0]).sort(), ["c", "h", "s", "t"]);
-  assert.equal(j.e[0].c, "0");
+  assert.deepEqual(Object.keys(j.e[0]).sort(), ["c", "h", "s"], "0056r3: no first-seen time");
+  assert.equal(j.e[0].c, hm("ctx:0"), "context is an HMAC, not plaintext");
   assert.equal(j.e[0].s, a);
-  assert.equal(j.e[0].h, createHmac("sha256", Buffer.from(S._key)).update("a56.test").digest("hex"));
+  assert.equal(j.e[0].h, hm("0|a56.test"), "site hash is per context");
   assert.ok(!/a56\.test|b56\.test|\.test\b/.test(fileText()), "no site names in the file");
   assert.equal(fs.get(FILE).mode, 0o600);
   assert.equal(dirs.get("/prof/darkstr"), 0o700);
@@ -149,8 +150,11 @@ test("container and private personas differ; private never written", async () =>
   assert.equal(new Set([n, c, p]).size, 3);
   await S.flush();
   const j = fileJSON();
-  assert.deepEqual(j.e.map((e) => e.c).sort(), ["0", "2"]);
-  assert.ok(!j.e.some((e) => e.c === "p"));
+  assert.deepEqual(j.e.map((e) => e.c).sort(), [hm("ctx:0"), hm("ctx:2")].sort());
+  assert.ok(!j.e.some((e) => e.c === "p" || /^\d+$/.test(e.c)), "no plaintext container numbers");
+  // 0056r3: the same site is not linkable across contexts from the file alone
+  assert.equal(new Set(j.e.map((e) => e.h)).size, 2);
+  assert.ok(!j.e.some((e) => e.h === hm("a56.test")));
   await restart();
   assert.equal(S.seedFor("2", "a56.test"), c);
   assert.notEqual(S.seedFor("p", "a56.test"), p, "private is memory-only");
@@ -165,7 +169,8 @@ test("cookie ACCESS_SESSION wins over everything", async () => {
   S.seedFor("0", "a56.test"); S.seedFor("0", "c56.test");
   await S.flush();
   assert.equal(fileJSON().e.length, 1);
-  assert.notEqual(fileJSON().e[0].h, createHmac("sha256", Buffer.from(S._key)).update("a56.test").digest("hex"));
+  assert.notEqual(fileJSON().e[0].h, hm("0|a56.test"));
+  assert.equal(fileJSON().e[0].h, hm("0|c56.test"));
 });
 
 test("site clear (incl. subdomain host) resets only that site; pattern scopes contexts", async () => {
@@ -191,26 +196,112 @@ test("container deletion (origin-attributes pattern) and principal clear", async
   const a0 = S.seedFor("0", "a56.test"); S.seedFor("4", "a56.test"); S.seedFor("4", "b56.test");
   await S.flush();
   await CL.deleteByOriginAttributes('{"userContextId":4}');
-  assert.deepEqual(fileJSON().e.map((e) => e.c), ["0"]);
+  assert.deepEqual(fileJSON().e.map((e) => e.c), [hm("ctx:0")]);
   await CL.deleteByPrincipal({ host: "a56.test", originAttributes: { userContextId: 0 } });
   assert.equal(fileJSON().e.length, 0);
   assert.notEqual(S.seedFor("0", "a56.test"), a0);
 });
 
-test("range clear by first-seen day", async () => {
+test("0056r3: any time-range clear resets every non-private seed in every context (key kept)", async () => {
   wipe(); prefs.clear();
   await restart();
-  S.seedFor("0", "a56.test"); S.seedFor("0", "b56.test");
+  const a0 = S.seedFor("0", "a56.test"), b3 = S.seedFor("3", "b56.test"), p = S.seedFor("p", "a56.test");
   await S.flush();
-  // backdate b56 to 10 days ago (as if first seen then)
-  const today = M.dayOf(Date.now());
-  for (const e of S._disk.values()) if (e.h === createHmac("sha256", Buffer.from(S._key)).update("b56.test").digest("hex")) e.t = today - 10;
-  for (const r of S._session.values()) if (r.site === "b56.test") r.t = today - 10;
+  const label = fileJSON().l;
+  const seen = [];
+  const listener = (pred) => { seen.push(pred); };
+  S.addFlushListener(listener);
   const nowUs = Date.now() * 1000;
-  await CL.deleteByRange(nowUs - 3600e6, nowUs); // "last hour" -> today's first-seen entries
-  const left = fileJSON().e;
-  assert.equal(left.length, 1);
-  assert.equal(left[0].t, today - 10);
+  await CL.deleteByRange(nowUs - 3600e6, nowUs); // "last hour"
+  S.removeFlushListener(listener);
+  assert.equal(fileJSON().e.length, 0);
+  assert.equal(fileJSON().l, label, "range clear keeps the key (only clear-all rotates)");
+  assert.notEqual(S.seedFor("0", "a56.test"), a0);
+  assert.notEqual(S.seedFor("3", "b56.test"), b3);
+  assert.equal(S.seedFor("p", "a56.test"), p, "private untouched by a range clear");
+  // listeners get a (ctx, site) predicate that works with two arguments
+  const pred = seen.at(-1);
+  assert.equal(typeof pred, "function");
+  assert.equal(pred("0", "a56.test"), true);
+  assert.equal(pred("7", "zz.test"), true);
+  assert.equal(pred("p", "a56.test"), false);
+  assert.equal(S.debugState().stats.flushErrors, 0);
+});
+
+test("0056r3 regression (Proof #87 check 2f): range clear flushes NativePersona's caches", async () => {
+  // NativePersona._flushSeedCopies, lifted from the shipped source, wired as a real listener.
+  const NPsrc = readFileSync(join(F, "DarkstrNativePersona.sys.mjs"), "utf8");
+  const at = NPsrc.indexOf("  _flushSeedCopies(pred) {");
+  const body = NPsrc.slice(at, NPsrc.indexOf("\n  },\n", at) + 4);
+  let dhFlushes = 0;
+  const fake = new Function("ChromeUtils", `return { ${body}, _etldSeedMap: new Map(), _etldSnapshotCache: new Map(), _workerSiteDecisions: new Map() };`)(
+    { importESModule: () => ({ DarkstrDepthHooks: { flushSeedCopies() { dhFlushes++; } } }) });
+  wipe(); prefs.clear();
+  await restart();
+  S.seedFor("0", "a56.test"); S.seedFor("1", "b56.test"); S.seedFor("p", "c56.test");
+  for (const k of ["0|a56.test", "1|b56.test", "p|c56.test"]) { fake._etldSeedMap.set(k, 1); fake._etldSnapshotCache.set(k, {}); }
+  const listener = (pred) => fake._flushSeedCopies(pred);
+  S.addFlushListener(listener);
+  try {
+    await CL.deleteByRange(0, Date.now() * 1000);
+  } finally { S.removeFlushListener(listener); }
+  assert.equal(S.debugState().stats.flushErrors, 0, S.debugState().lastFlushError);
+  assert.deepEqual([...fake._etldSnapshotCache.keys()], ["p|c56.test"], "every non-private snapshot dropped");
+  assert.deepEqual([...fake._etldSeedMap.keys()], ["p|c56.test"]);
+  assert.ok(dhFlushes >= 1, "DepthHooks copies flushed too");
+});
+
+test("0056r3: a failing flush listener is logged and counted, never silent", async () => {
+  wipe(); prefs.clear();
+  await restart();
+  S.seedFor("0", "a56.test");
+  const bad = () => { throw new Error("boom-0056r3"); };
+  S.addFlushListener(bad);
+  const origErr = console.error; console.error = () => {};
+  try { await CL.deleteBySite("a56.test", {}); } finally { console.error = origErr; S.removeFlushListener(bad); }
+  assert.equal(S.debugState().stats.flushErrors, 1);
+  assert.match(S.debugState().lastFlushError, /boom-0056r3/);
+});
+
+test("0056r3: v1 files migrate on use, then the rest is wiped once", async () => {
+  wipe(); prefs.clear();
+  await restart();
+  S.seedFor("0", "z56.test"); await S.flush(); // creates key + label
+  const key = S._key, label = fileJSON().l, cipher = fileJSON().k;
+  const v1h = (site) => createHmac("sha256", Buffer.from(key)).update(site).digest("hex");
+  fs.set(FILE, { bytes: Buffer.from(JSON.stringify({ v: 1, l: label, k: cipher, e: [
+    { c: "0", h: v1h("a56.test"), s: 111, t: 20000 }, { c: "2", h: v1h("a56.test"), s: 222, t: 20000 }, { c: "0", h: v1h("b56.test"), s: 333, t: 20000 }] })), mode: 0o600 });
+  await restart();
+  assert.equal(S.debugState().legacy, 3);
+  assert.equal(S.seedFor("0", "a56.test"), 111, "v1 seed adopted");
+  assert.equal(S.seedFor("2", "a56.test"), 222);
+  await S.flush();
+  const j = fileJSON();
+  assert.equal(j.v, 2);
+  assert.equal(j.l, label);
+  assert.deepEqual(j.e.map((e) => e.s).sort(), [111, 222]);
+  assert.ok(j.e.every((e) => Object.keys(e).sort().join() === "c,h,s" && e.c.length === 64));
+  assert.equal(S.debugState().stats.migratedV1, 2);
+  await restart();
+  assert.equal(S.seedFor("0", "a56.test"), 111);
+  assert.notEqual(S.seedFor("0", "b56.test"), 333, "unused v1 entries are gone after the first v2 write");
+});
+
+test("0056r3: container deletion and site clears find hashed contexts", async () => {
+  wipe(); prefs.clear();
+  await restart();
+  const a0 = S.seedFor("0", "a56.test"), a5 = S.seedFor("5", "a56.test"), b5 = S.seedFor("5", "b56.test");
+  await S.flush();
+  await restart(); // fresh session: contexts only known from the file
+  await CL.deleteBySite("a56.test", {}); // all contexts
+  assert.equal(fileJSON().e.length, 1);
+  assert.equal(fileJSON().e[0].c, hm("ctx:5"));
+  assert.equal(S.seedFor("5", "b56.test"), b5);
+  await restart();
+  await CL.deleteByOriginAttributes('{"userContextId":5}');
+  assert.equal(fileJSON().e.length, 0);
+  assert.notEqual(S.seedFor("0", "a56.test"), a0);
+  assert.notEqual(S.seedFor("5", "a56.test"), a5);
 });
 
 test("clear all deletes file and OSKeyStore secret; next store gets a new key", async () => {
@@ -291,7 +382,7 @@ test("a clear on a passive (off-mode) store with nothing matching never rewrites
   const before = fileText();
   S._resetForTests(); ops.length = 0; // new session, never armed
   await CL.deleteBySite("zz56.test", {});
-  await CL.deleteByRange(0, 1000); // 1970
+  await CL.deleteByOriginAttributes('{"userContextId":9}');
   assert.equal(fileText(), before);
   assert.ok(!ops.some((o) => o[0] === "write" || o[0] === "move"), JSON.stringify(ops));
   await CL.deleteBySite("a56.test", {}); // a real hit is removed even off

@@ -7,13 +7,20 @@
  *
  * - File: <profile>/darkstr/persona-seeds.json (dir 0700, file 0600). Written
  *   only by the parent process, atomically (tmp file, chmod, rename).
- * - Format: { v: 1, l: <OSKeyStore label>, k: <K encrypted by OSKeyStore>,
- *   e: [{ c, h, s, t }] }
- *     c  context: userContextId as a string ("0" = no container). Private
- *        browsing ("p") is never written.
- *     h  HMAC-SHA256(K, eTLD+1), hex. Site names are never written.
+ * - Format v2 (0056r3): { v: 2, l: <OSKeyStore label>, k: <K encrypted by
+ *   OSKeyStore>, e: [{ c, h, s }] }
+ *     c  HMAC-SHA256(K, "ctx:" + userContextId), hex ("0" = no container).
+ *        Private browsing is never written.
+ *     h  HMAC-SHA256(K, userContextId + "|" + eTLD+1), hex: per context, so
+ *        the file alone does not link one site's entries across containers.
  *     s  u32 persona seed.
- *     t  first-seen day (UTC days since the epoch).
+ *   No timestamps (a time-range clear resets every non-private seed, so no
+ *   activity times are kept). Site names and container numbers are never
+ *   written. The context of an entry is recovered by recomputing c for the
+ *   known userContextIds (0 .. ContextualIdentityService's last id).
+ *   v1 files (plaintext c, h = HMAC(K, eTLD+1), first-seen t) are migrated
+ *   lazily during the first v2 session (a v1 entry is adopted when its site is
+ *   used) and wiped from disk at the first v2 write.
  *   K is a random 32-byte HMAC key, kept on disk only encrypted with an
  *   OSKeyStore secret (macOS Keychain) under a random per-store label.
  *   OSKeyStore unavailable -> session-only (nothing written, file untouched).
@@ -29,9 +36,14 @@
  * - Clearing: DarkstrPersonaSeedCleaner (ClearDataService,
  *   CLEAR_FINGERPRINTING_PROTECTION_STATE): site (incl. subdomain hosts, the
  *   seed is per eTLD+1), principal, origin-attributes pattern (container
- *   deletion), range (first-seen day), all (file + OSKeyStore secret
- *   deleted -> next store gets a new key and label). In-memory copies in
- *   NativePersona / DepthHooks are flushed through the listeners.
+ *   deletion), any time range (0056r3: every non-private seed in every
+ *   context -- over-forgets on purpose, no activity times stored), all (file
+ *   + OSKeyStore secret deleted -> next store gets a new key and label).
+ *   Clear-Site-Data from a subdomain resets the whole eTLD+1, in the
+ *   response's own context only (personas are per eTLD+1 and per context).
+ *   In-memory copies in NativePersona / DepthHooks are flushed through the
+ *   listeners with a (ctx, site) predicate; a failing listener is logged and
+ *   counted in debugState() (flushErrors / lastFlushError), never ignored.
  * - Off mode never calls in here (NativePersona only activates the store
  *   while per-site rotation runs without darkstr.persona.seed). Cleaners may
  *   remove from an existing file in any mode, they never create one.
@@ -41,10 +53,13 @@ import { setTimeout, clearTimeout } from "resource://gre/modules/Timer.sys.mjs";
 
 const STORE_DIR = "darkstr";
 const STORE_FILE = "persona-seeds.json";
-const FORMAT_VERSION = 1;
+const FORMAT_VERSION = 2;
+/** 0056 r1/r2 format (plaintext context, per-site hash, first-seen day). */
+const LEGACY_VERSION = 1;
+/** Upper bound for userContextIds probed when resolving a context hash. */
+const MAX_CTX_PROBE = 4096;
 const LABEL_PREFIX = "darkstr-persona-seeds-";
 const SAVE_DELAY_MS = 500;
-const DAY_MS = 86400000;
 /** Test/ops switch: false = behave as if OSKeyStore were unavailable. */
 const KEYSTORE_PREF = "darkstr.persona.seedStore.osKeyStore";
 const SANITIZE_ON_SHUTDOWN_PREF = "privacy.sanitize.sanitizeOnShutdown";
@@ -108,10 +123,6 @@ export function hmacSha256Hex(key, message) {
   return toHex(sha256(k.map(x => x ^ 0x5c).concat(inner)));
 }
 
-export function dayOf(ms) {
-  return Math.floor(Number(ms) / DAY_MS);
-}
-
 /** "p" for private browsing, else the userContextId as a string. */
 export function contextKeyFromOA(oa) {
   try {
@@ -122,6 +133,29 @@ export function contextKeyFromOA(oa) {
   } catch (_e) {
     return "0";
   }
+}
+
+/**
+ * 0056r3: the single non-private context a pattern pins (userContextId set,
+ * not private), else null.
+ */
+export function contextOnlyFromPattern(pattern) {
+  let p = pattern;
+  if (typeof p === "string") {
+    try {
+      p = p ? JSON.parse(p) : {};
+    } catch (_e) {
+      p = {};
+    }
+  }
+  p = p || {};
+  if (p.userContextId === undefined || p.userContextId === null) {
+    return null;
+  }
+  if (Number(p.privateBrowsingId) > 0) {
+    return null;
+  }
+  return String(Number(p.userContextId) >>> 0);
 }
 
 /** Contexts an origin-attributes pattern selects: null = all. */
@@ -177,10 +211,15 @@ export var DarkstrPersonaSeedStore = {
   /** True once NativePersona armed the store (clear-only loads stay passive). */
   _activated: false,
   _loadPromise: null,
-  /** Session map: "ctx|site" -> { seed, t, ctx, site } (memory only). */
+  /** Session map: "ctx|site" -> { seed, ctx, site } (memory only). */
   _session: new Map(),
-  /** Disk entries: "ctx|h" -> { c, h, s, t }. */
+  /** Disk entries: "c|h" -> { c, h, s } (c, h: HMACs, see the header). */
   _disk: new Map(),
+  /** v1 entries still to adopt this session: "ctx|HMAC(K, site)" -> seed. */
+  _legacy: new Map(),
+  /** Context hash -> userContextId string (cache, per key). */
+  _ctxByHash: new Map(),
+  _lastFlushError: "",
   _key: null,
   _label: "",
   _keyCipher: "",
@@ -193,7 +232,14 @@ export var DarkstrPersonaSeedStore = {
   _shutdownBlocker: null,
   _observing: false,
   /** Ops counters for diagnostics / tests (memory only). */
-  _stats: { reads: 0, writes: 0, keyGens: 0, keyDeletes: 0 },
+  _stats: {
+    reads: 0,
+    writes: 0,
+    keyGens: 0,
+    keyDeletes: 0,
+    flushErrors: 0,
+    migratedV1: 0,
+  },
 
   get path() {
     return PathUtils.join(PathUtils.profileDir, STORE_DIR, STORE_FILE);
@@ -212,11 +258,22 @@ export var DarkstrPersonaSeedStore = {
     this._listeners.delete(fn);
   },
 
+  /**
+   * pred(ctx, site) -> bool, or null for everything. Listeners must drop every
+   * in-memory copy the predicate selects. 0056r3: a failure is never silent:
+   * it is logged and counted (debugState().stats.flushErrors / lastFlushError).
+   */
   _notifyFlush(pred) {
     for (const fn of this._listeners) {
       try {
         fn(pred);
       } catch (e) {
+        this._stats.flushErrors++;
+        try {
+          this._lastFlushError = String(e?.stack || e?.message || e).slice(0, 500);
+        } catch (_e) {
+          this._lastFlushError = "unknown error";
+        }
         console.error("darkstr 0056: seed flush listener failed", e);
       }
     }
@@ -319,7 +376,8 @@ export var DarkstrPersonaSeedStore = {
       console.error("darkstr 0056: persona-seeds.json unreadable", e);
       data = { v: -1 };
     }
-    if (data && data.v === FORMAT_VERSION && data.l && data.k) {
+    const legacy = !!(data && data.v === LEGACY_VERSION && data.l && data.k);
+    if (data && (data.v === FORMAT_VERSION || legacy) && data.l && data.k) {
       if (!this._keyStoreAllowed()) {
         this._state = "session-only";
         return;
@@ -342,19 +400,26 @@ export var DarkstrPersonaSeedStore = {
           this._keyCipher = data.k;
           for (const e of Array.isArray(data.e) ? data.e : []) {
             if (
-              e &&
-              typeof e.c === "string" &&
-              e.c !== "p" &&
-              /^[0-9a-f]{64}$/.test(String(e.h)) &&
-              Number.isFinite(Number(e.s))
+              !e ||
+              typeof e.c !== "string" ||
+              e.c === "p" ||
+              !/^[0-9a-f]{64}$/.test(String(e.h)) ||
+              !Number.isFinite(Number(e.s))
             ) {
-              this._disk.set(`${e.c}|${e.h}`, {
-                c: e.c,
-                h: String(e.h),
-                s: Number(e.s) >>> 0 || 1,
-                t: Number(e.t) | 0,
-              });
+              continue;
             }
+            const seed = Number(e.s) >>> 0 || 1;
+            if (legacy) {
+              // v1: plaintext context, h = HMAC(K, site). Adopted on use.
+              this._legacy.set(`${e.c}|${String(e.h)}`, seed);
+            } else if (/^[0-9a-f]{64}$/.test(e.c)) {
+              this._disk.set(`${e.c}|${e.h}`, { c: e.c, h: String(e.h), s: seed });
+            }
+          }
+          if (legacy) {
+            // Rewrite as v2 at the next save (v1 entries leave the disk then;
+            // the ones used this session are re-added in v2 form).
+            this._dirty = true;
           }
         } catch (e) {
           console.error("darkstr 0056: persona seed key decrypt failed", e);
@@ -364,7 +429,12 @@ export var DarkstrPersonaSeedStore = {
       }
       // Secret gone (e.g. Keychain item removed): entries are unlinkable;
       // the next save writes a fresh store with a new key.
-    } else if (data && data.v !== undefined && data.v !== FORMAT_VERSION) {
+    } else if (
+      data &&
+      data.v !== undefined &&
+      data.v !== FORMAT_VERSION &&
+      data.v !== LEGACY_VERSION
+    ) {
       this._readOnlyError = true;
     }
     this._state = "ready";
@@ -376,6 +446,9 @@ export var DarkstrPersonaSeedStore = {
     // Keep rule may have changed since the last session (exception removed,
     // crash before shutdown clearing): rewrite if anything is dropped.
     if (this._disk.size && this._applyKeepRuleToDisk()) {
+      this._scheduleSave();
+    }
+    if (this._dirty) {
       this._scheduleSave();
     }
   },
@@ -390,10 +463,9 @@ export var DarkstrPersonaSeedStore = {
       if (rec.ctx === "p" || !this._key) {
         continue;
       }
-      const d = this._disk.get(`${rec.ctx}|${this._hash(rec.site)}`);
-      if (d && d.s !== rec.seed) {
-        rec.seed = d.s;
-        rec.t = d.t;
+      const stored = this._storedSeed(rec.ctx, rec.site);
+      if (stored && stored !== rec.seed) {
+        rec.seed = stored;
         changed.push(k);
       }
     }
@@ -406,8 +478,98 @@ export var DarkstrPersonaSeedStore = {
     }
   },
 
+  /** v1 site hash (legacy lookups only). */
   _hash(site) {
     return this._key ? hmacSha256Hex(this._key, site) : "";
+  },
+
+  /** v2 context hash: HMAC(K, "ctx:" + userContextId). */
+  _ctxHash(ctx) {
+    if (!this._key) {
+      return "";
+    }
+    const c = String(ctx);
+    const h = hmacSha256Hex(this._key, "ctx:" + c);
+    this._ctxByHash.set(h, c);
+    return h;
+  },
+
+  /** v2 site hash: HMAC(K, userContextId + "|" + eTLD+1). */
+  _siteHash(ctx, site) {
+    return this._key ? hmacSha256Hex(this._key, `${ctx}|${site}`) : "";
+  },
+
+  _diskKey(ctx, site) {
+    return `${this._ctxHash(ctx)}|${this._siteHash(ctx, site)}`;
+  },
+
+  /** userContextIds that may own disk entries ("0", containers, session). */
+  _candidateContexts() {
+    const out = new Set(["0"]);
+    for (const r of this._session.values()) {
+      if (r.ctx !== "p") {
+        out.add(r.ctx);
+      }
+    }
+    let last = 0;
+    try {
+      const { ContextualIdentityService: CIS } = ChromeUtils.importESModule(
+        "resource://gre/modules/ContextualIdentityService.sys.mjs"
+      );
+      try {
+        CIS.ensureDataReady?.();
+      } catch (_e) {}
+      last = Number(CIS._lastUserContextId) >>> 0;
+      for (const i of CIS.getPublicIdentities?.() || []) {
+        last = Math.max(last, Number(i.userContextId) >>> 0);
+      }
+    } catch (_e) {}
+    last = Math.min(Math.max(last, 32), MAX_CTX_PROBE);
+    for (let i = 1; i <= last; i++) {
+      out.add(String(i));
+    }
+    return out;
+  },
+
+  /** Context of a disk entry (null when no known userContextId matches). */
+  _resolveCtx(cHash) {
+    if (this._ctxByHash.has(cHash)) {
+      return this._ctxByHash.get(cHash);
+    }
+    for (const c of this._candidateContexts()) {
+      if (this._ctxHash(c) === cHash) {
+        return c;
+      }
+    }
+    return null;
+  },
+
+  /**
+   * Stored seed for (ctx, site): v2 entry, else a v1 entry adopted now (moved
+   * into the v2 map). 0 when none.
+   */
+  _storedSeed(ctx, site) {
+    if (!this._key || ctx === "p") {
+      return 0;
+    }
+    const d = this._disk.get(this._diskKey(ctx, site));
+    if (d) {
+      return d.s;
+    }
+    if (this._legacy.size) {
+      const lk = `${ctx}|${this._hash(site)}`;
+      const seed = this._legacy.get(lk);
+      if (seed) {
+        this._legacy.delete(lk);
+        this._stats.migratedV1++;
+        const c = this._ctxHash(ctx);
+        const h = this._siteHash(ctx, site);
+        this._disk.set(`${c}|${h}`, { c, h, s: seed });
+        this._dirty = true;
+        return seed;
+      }
+    }
+    return 0;
   },
 
   /** Permission sets for the keep rule (base domains). */
@@ -467,11 +629,31 @@ export var DarkstrPersonaSeedStore = {
       return false;
     }
     const clears = this._clearsOnShutdown();
-    const keepH = new Set([...sets.keep].map(s => this._hash(s)));
-    const sessH = new Set([...sets.session].map(s => this._hash(s)));
+    const perCtx = new Map();
+    const hashesFor = ctx => {
+      let v = perCtx.get(ctx);
+      if (!v) {
+        v = {
+          keep: new Set([...sets.keep].map(s => this._siteHash(ctx, s))),
+          session: new Set([...sets.session].map(s => this._siteHash(ctx, s))),
+        };
+        perCtx.set(ctx, v);
+      }
+      return v;
+    };
     let dropped = false;
     for (const [k, e] of this._disk) {
-      if (sessH.has(e.h) || (clears && !keepH.has(e.h))) {
+      const ctx = this._resolveCtx(e.c);
+      if (ctx === null) {
+        // Unknown context: cannot prove it is kept.
+        if (clears) {
+          this._disk.delete(k);
+          dropped = true;
+        }
+        continue;
+      }
+      const hs = hashesFor(ctx);
+      if (hs.session.has(e.h) || (clears && !hs.keep.has(e.h))) {
         this._disk.delete(k);
         dropped = true;
       }
@@ -494,13 +676,13 @@ export var DarkstrPersonaSeedStore = {
     }
     let rec = null;
     if (c !== "p" && this._state === "ready" && this._key) {
-      const d = this._disk.get(`${c}|${this._hash(s)}`);
-      if (d) {
-        rec = { seed: d.s, t: d.t, ctx: c, site: s };
+      const stored = this._storedSeed(c, s);
+      if (stored) {
+        rec = { seed: stored, ctx: c, site: s };
       }
     }
     if (!rec) {
-      rec = { seed: randomU32(), t: dayOf(Date.now()), ctx: c, site: s };
+      rec = { seed: randomU32(), ctx: c, site: s };
     }
     this._session.set(key, rec);
     if (c !== "p" && this._state === "ready") {
@@ -550,10 +732,11 @@ export var DarkstrPersonaSeedStore = {
       if (!this.keepsSite(rec.ctx, rec.site, sets)) {
         continue;
       }
-      const h = this._hash(rec.site);
-      const k = `${rec.ctx}|${h}`;
+      const c = this._ctxHash(rec.ctx);
+      const h = this._siteHash(rec.ctx, rec.site);
+      const k = `${c}|${h}`;
       if (!this._disk.has(k)) {
-        this._disk.set(k, { c: rec.ctx, h, s: rec.seed >>> 0, t: rec.t | 0 });
+        this._disk.set(k, { c, h, s: rec.seed >>> 0 });
       }
     }
     this._applyKeepRuleToDisk(sets);
@@ -605,6 +788,7 @@ export var DarkstrPersonaSeedStore = {
     if (!exists && !entries.length) {
       return;
     }
+    // v1 entries never go back to disk (adopted ones are in _disk already).
     await this._writeAtomic({
       v: FORMAT_VERSION,
       l: this._label,
@@ -656,10 +840,11 @@ export var DarkstrPersonaSeedStore = {
     await this._loadPromise;
   },
 
+  /** pred(ctx, site): the same predicate the flush listeners get. */
   _dropSession(pred) {
     let any = false;
     for (const [k, rec] of this._session) {
-      if (pred(rec.ctx, rec.site, rec)) {
+      if (pred(rec.ctx, rec.site)) {
         this._session.delete(k);
         any = true;
       }
@@ -682,7 +867,22 @@ export var DarkstrPersonaSeedStore = {
     await this.flush();
   },
 
-  async clearSite(site, ctxFilter) {
+  /**
+   * Context of a disk entry for a clear: `only` (a pinned userContextId) or
+   * the resolved context; null = not selected / unknown.
+   */
+  _entryCtx(e, only) {
+    if (only !== null && only !== undefined) {
+      return e.c === this._ctxHash(only) ? String(only) : null;
+    }
+    return this._resolveCtx(e.c);
+  },
+
+  /**
+   * site: host or eTLD+1 (cleared as its eTLD+1). ctxFilter(ctx) selects
+   * contexts; `only` = the one userContextId it pins (null = any).
+   */
+  async clearSite(site, ctxFilter, only = null) {
     const s = siteFromHost(site);
     if (!s) {
       return;
@@ -691,45 +891,62 @@ export var DarkstrPersonaSeedStore = {
     this._dropSession((ctx, st) => st === s && accept(ctx));
     await this._ensureLoadedForClear();
     if (this._key) {
-      const h = this._hash(s);
       let changed = false;
       for (const [k, e] of this._disk) {
-        if (e.h === h && accept(e.c)) {
+        const ctx = this._entryCtx(e, only);
+        if (ctx !== null && accept(ctx) && e.h === this._siteHash(ctx, s)) {
           this._disk.delete(k);
           changed = true;
+        }
+      }
+      const oldH = this._legacy.size ? this._hash(s) : "";
+      for (const k of [...this._legacy.keys()]) {
+        const i = k.indexOf("|");
+        if (k.slice(i + 1) === oldH && accept(k.slice(0, i))) {
+          this._legacy.delete(k);
         }
       }
       await this._rewriteAfterClear(changed);
     }
   },
 
-  async clearContexts(ctxFilter) {
+  async clearContexts(ctxFilter, only = null) {
     this._dropSession(ctx => ctxFilter(ctx));
     await this._ensureLoadedForClear();
     let changed = false;
     for (const [k, e] of this._disk) {
-      if (ctxFilter(e.c)) {
+      const ctx = this._entryCtx(e, only);
+      // Unpinned patterns select contexts independently of the id (all
+      // non-private), so an unresolved entry is judged as a non-private one.
+      const hit =
+        only !== null && only !== undefined
+          ? ctx !== null
+          : ctxFilter(ctx === null ? "0" : ctx);
+      if (hit) {
         this._disk.delete(k);
         changed = true;
+      }
+    }
+    for (const k of [...this._legacy.keys()]) {
+      if (ctxFilter(k.slice(0, k.indexOf("|")))) {
+        this._legacy.delete(k);
       }
     }
     await this._rewriteAfterClear(changed);
   },
 
-  /** from/to: PRTime (microseconds). Entries whose first-seen day overlaps. */
-  async clearRange(fromUs, toUs) {
-    const fromDay = dayOf(Number(fromUs) / 1000);
-    const toDay = dayOf(Number(toUs) / 1000);
-    const hit = t => t >= fromDay && t <= toDay;
-    this._dropSession((_c, _s, rec) => hit(rec.t));
+  /**
+   * 0056r3: any time range (Clear Recent History) resets every non-private
+   * seed in every context (no activity times are stored, so a range cannot be
+   * matched; over-forgetting is the safe direction). The key is kept (only
+   * clear-all rotates it). In-memory copies are flushed like a site clear.
+   */
+  async clearRange(_fromUs, _toUs) {
+    this._dropSession(ctx => ctx !== "p");
     await this._ensureLoadedForClear();
-    let changed = false;
-    for (const [k, e] of this._disk) {
-      if (hit(e.t)) {
-        this._disk.delete(k);
-        changed = true;
-      }
-    }
+    const changed = this._disk.size > 0 || this._legacy.size > 0;
+    this._disk.clear();
+    this._legacy.clear();
     await this._rewriteAfterClear(changed);
   },
 
@@ -748,6 +965,8 @@ export var DarkstrPersonaSeedStore = {
     this._dirty = false;
     this._session.clear();
     this._disk.clear();
+    this._legacy.clear();
+    this._ctxByHash.clear();
     this._notifyFlush(null);
     let label = this._label;
     if (!label) {
@@ -772,6 +991,7 @@ export var DarkstrPersonaSeedStore = {
     this._label = "";
     this._keyCipher = "";
     this._readOnlyError = false;
+    this._ctxByHash.clear();
     if (this._state === "session-only" || this._state === "ready") {
       // Next eligible seed creates a new store (new key and label).
       this._state = this._keyStoreAllowed() ? "ready" : "session-only";
@@ -786,8 +1006,10 @@ export var DarkstrPersonaSeedStore = {
       sessionPrivate: [...this._session.values()].filter(r => r.ctx === "p")
         .length,
       disk: this._disk.size,
+      legacy: this._legacy.size,
       hasKey: !!this._key,
       label: this._label,
+      lastFlushError: this._lastFlushError,
       stats: { ...this._stats },
     };
   },
@@ -799,11 +1021,17 @@ export var DarkstrPersonaSeedStore = {
     this._loadPromise = null;
     this._session.clear();
     this._disk.clear();
+    this._legacy.clear();
+    this._ctxByHash.clear();
     this._key = null;
     this._label = "";
     this._keyCipher = "";
     this._readOnlyError = false;
     this._dirty = false;
+    this._lastFlushError = "";
+    for (const k of Object.keys(this._stats)) {
+      this._stats[k] = 0;
+    }
   },
 };
 
@@ -821,20 +1049,26 @@ export var DarkstrPersonaSeedCleaner = {
       return;
     }
     const ctx = contextKeyFromOA(aPrincipal.originAttributes);
-    await DarkstrPersonaSeedStore.clearSite(host, c => c === ctx);
+    await DarkstrPersonaSeedStore.clearSite(
+      host,
+      c => c === ctx,
+      ctx === "p" ? null : ctx
+    );
   },
 
   async deleteBySite(aSchemelessSite, aOriginAttributesPattern) {
     await DarkstrPersonaSeedStore.clearSite(
       aSchemelessSite,
-      contextFilterFromPattern(aOriginAttributesPattern)
+      contextFilterFromPattern(aOriginAttributesPattern),
+      contextOnlyFromPattern(aOriginAttributesPattern)
     );
   },
 
   async deleteByHost(aHost, aOriginAttributesPattern) {
     await DarkstrPersonaSeedStore.clearSite(
       aHost,
-      contextFilterFromPattern(aOriginAttributesPattern)
+      contextFilterFromPattern(aOriginAttributesPattern),
+      contextOnlyFromPattern(aOriginAttributesPattern)
     );
   },
 
@@ -844,7 +1078,8 @@ export var DarkstrPersonaSeedCleaner = {
 
   async deleteByOriginAttributes(aOriginAttributesString) {
     await DarkstrPersonaSeedStore.clearContexts(
-      contextFilterFromPattern(aOriginAttributesString)
+      contextFilterFromPattern(aOriginAttributesString),
+      contextOnlyFromPattern(aOriginAttributesString)
     );
   },
 };
