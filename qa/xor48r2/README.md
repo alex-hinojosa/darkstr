@@ -31,6 +31,13 @@ Imported from Proof's PASS run of PR #79 (`~/AgentDocs/proof/darkstr-0048r2-xor-
 - **F1: armed F1 PASS needs the hook gate.** `grade48f1.grade_f1()`: in armed configs every iteration's hook state must be in {own, proto} **and** carry a census (`hookGate`). An all-`native` census or a dropped census FAILs. Unarmed configs still require {native, none}.
 - Negative self-tests: `ProofF2MissingCensus`, `ProofF1HookGate` in `selftest_xor48r2.py`, plus static asserts in `tests/qa-xor48r2-harness.test.mjs`.
 
+### Negative control (r3, Mini, 2026-10-09 03:34–03:50 CDT)
+- The r1 0048 `f3f1e748` control DMG is gone. Rebuilt cheaply: the 0055 r1 app (cookie firewall == 0052/0053) with one omni.ja edit, `DarkstrCookieFirewall._holdUntilAcked` returning at once (**F1 hold disabled**). No rebuild was needed.
+- Run: `XOR_LAN=auto XOR_F1=40 XOR_F1_LAN_ONLY=1`, A_iso, browser under `noext.sb`. 400 iterations on `http://10.0.0.18:<port>`, 0 non-loopback lsof samples.
+- Result: **positive PASS, negative control also PASS** (0 misses in every column, `proto` + census on every doc). On this machine the stress does **not** detect a missing hold, because the content caches already have the delta before the page reads it. The real-LAN option proves the LAN origin is exercised **inside** the sandbox. It does **not** prove hold coverage.
+- Hold coverage needs a timing amplifier (a test-only delay in the content ack or the cache apply) plus recording `_ackStats.held` in the raw. Not done here.
+- Evidence: `/Users/alexander/AgentDocs/proof/darkstr-pr83-r3-20261009-032745/` (`apps/`, `f1lan-pos/`, `f1lan-negctl-nohold/`, `run-r3.sh`).
+
 ## Run (macOS; build mounted read-only and copied out of the DMG; never /Applications)
 ```sh
 export XOR_BIN=/path/to/darkstr.app/Contents/MacOS/librewolf XOR_SB=$PWD/qa/xor48r2/noext.sb
