@@ -41,12 +41,15 @@ function bag() {
 }
 
 test("0058c: pin files match SHA256SUMS; base is the shipped 0058b copy; patch + apply script", () => {
-  const [h, n] = read("patches/0058c-files/SHA256SUMS").trim().split(/\s+/);
-  assert.equal(n, "DarkstrWorkerHooksChild.sys.mjs");
-  assert.equal(sha("patches/0058c-files/DarkstrWorkerHooksChild.sys.mjs"), h);
-  const [bh, bn] = read("patches/0058c-files/BASE_SHA256SUMS").trim().split(/\s+/);
-  assert.equal(bn, "browser/components/DarkstrWorkerHooksChild.sys.mjs");
-  assert.equal(bh, sha("patches/0058b-files/DarkstrWorkerHooksChild.sys.mjs"));
+  for (const line of read("patches/0058c-files/SHA256SUMS").trim().split("\n")) {
+    const [h, n] = line.trim().split(/\s+/);
+    assert.equal(sha(`patches/0058c-files/${n}`), h, n);
+  }
+  const base = Object.fromEntries(read("patches/0058c-files/BASE_SHA256SUMS").trim().split("\n").map((l) => l.trim().split(/\s+/).reverse()));
+  assert.deepEqual(base, {
+    "browser/components/DarkstrWorkerHooksChild.sys.mjs": sha("patches/0058b-files/DarkstrWorkerHooksChild.sys.mjs"),
+    "browser/components/DarkstrDepthHooks.sys.mjs": sha("patches/0057-files/DarkstrDepthHooks.sys.mjs"),
+  });
   const sh = read("scripts/apply-0058c-webgpu-gate-os-mini.sh");
   assert.match(sh, /0058c-darkstr-webgpu-gate-os\.patch/);
   assert.match(sh, /obj-aarch64-apple-darwin25\.6\.0/);
