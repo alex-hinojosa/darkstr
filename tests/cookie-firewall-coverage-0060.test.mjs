@@ -1021,3 +1021,30 @@ test("0060: firewall off (default prefs) = stock: no answers, cleaners no-op, no
     assert.equal(prefs.has("darkstr.cookieFirewall." + flag), false, "no diagnostics in prefs");
   }
 });
+
+
+// ---- no plaintext: persona site diagnostics too ----------------------------------
+test("0060: persona lastEtld / lastDecision reach prefs.js only as digests (diagPrefs on); memory keeps them", () => {
+  const src = readFileSync(join(F60, "DarkstrNativePersona.sys.mjs"), "utf8");
+  const a = src.indexOf("const DIAG_PREFS_PREF = "), b = src.indexOf('const ACTOR_NAME = "DarkstrNativePersona";');
+  assert.ok(a > 0 && b > a);
+  const body = src.slice(a, b).replace("export function redactDiag", "function redactDiag");
+  const written = new Map();
+  const Svc = { prefs: { getBoolPref: (k, d) => (k === "darkstr.debug.diagPrefs" ? true : d),
+    setStringPref: (k, v) => written.set(k, v), setIntPref: (k, v) => written.set(k, v), setBoolPref: (k, v) => written.set(k, v) } };
+  const mk = new Function("Services", 'const LAST_ETLD_PREF = "darkstr.persona.lastEtld"; const LAST_DECISION_PREF = "darkstr.persona.lastDecision";\n' + body + "\nreturn { diagPrefs, redactDiag };");
+  const { diagPrefs, redactDiag } = mk(Svc);
+  const dec = JSON.stringify({ site: "secret-site.test", armed: true });
+  diagPrefs.setStringPref("darkstr.persona.lastEtld", "secret-site.test");
+  diagPrefs.setStringPref("darkstr.persona.lastDecision", dec);
+  diagPrefs.setIntPref("darkstr.persona.effectiveSeed", 7);
+  assert.match(written.get("darkstr.persona.lastEtld"), /^redacted:[0-9a-f]{8}:16$/);
+  assert.equal(written.get("darkstr.persona.lastDecision"), redactDiag(dec));
+  assert.ok(![...written.values()].some((v) => String(v).includes("secret-site")), "no site name in prefs");
+  assert.equal(written.get("darkstr.persona.effectiveSeed"), 7, "non-site diagnostics unchanged");
+  const snap = diagPrefs.snapshot();
+  assert.equal(snap["darkstr.persona.lastEtld"], "secret-site.test", "getDiagnostics keeps the readable value");
+  assert.equal(snap["darkstr.persona.lastDecision"], dec);
+  // the 0052 facade text itself is untouched (identical-facade invariant)
+  assert.match(src, /const diagPrefs = \{\n  _write\(setter, name, value\) \{\n    gDiag\.set\(name, value\);/);
+});

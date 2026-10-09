@@ -1232,3 +1232,43 @@
      progress.step = "principals-host-cookie";
      hosts.forEach(host => {
        // Cookies and permissions are handled by origin/host. Doesn't matter if we
+--- a/browser/components/DarkstrNativePersona.sys.mjs
++++ b/browser/components/DarkstrNativePersona.sys.mjs
+@@ -139,6 +139,37 @@
+     return Object.fromEntries(gDiag);
+   },
+ };
++/**
++ * 0060 (no plaintext, 0052 rule): the diagnostics that carry a site name
++ * (lastEtld, lastDecision.site) reach prefs.js only as a keyed digest
++ * "redacted:<32-bit digest>:<length>", keyed per session so it cannot be
++ * looked up across runs. getDiagnostics() keeps the readable value (memory,
++ * chrome only). Same scheme as DarkstrCookieFirewall.redactDiag.
++ */
++const REDACTED_DIAG_PREFS = new Set([LAST_ETLD_PREF, LAST_DECISION_PREF]);
++const DIAG_DIGEST_KEY = Math.floor(Math.random() * 0x100000000) >>> 0 || 1;
++export function redactDiag(value) {
++  const t = String(value ?? "");
++  if (!t) {
++    return "";
++  }
++  let h = (DIAG_DIGEST_KEY ^ 0x811c9dc5) >>> 0;
++  for (let i = 0; i < t.length; i++) {
++    h = Math.imul(h ^ t.charCodeAt(i), 0x01000193) >>> 0;
++  }
++  h = Math.imul(h ^ (h >>> 15), 0x2c1b3c6d) >>> 0;
++  return `redacted:${("00000000" + h.toString(16)).slice(-8)}:${t.length}`;
++}
++const diagFacadeWrite = diagPrefs._write;
++diagPrefs._write = function (setter, name, value) {
++  if (!REDACTED_DIAG_PREFS.has(name)) {
++    diagFacadeWrite.call(this, setter, name, value);
++    return;
++  }
++  // prefs.js (when diagPrefs is on) gets the digest; memory the value.
++  diagFacadeWrite.call(this, setter, name, redactDiag(value));
++  gDiag.set(name, value);
++};
+ const ACTOR_NAME = "DarkstrNativePersona";
+ /** 0056: persisted per-site seeds (parent-only store; loaded on first use). */
+ const SEED_STORE_URI = "moz-src:///browser/components/DarkstrPersonaSeedStore.sys.mjs";

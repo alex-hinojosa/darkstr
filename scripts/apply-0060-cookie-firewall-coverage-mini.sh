@@ -14,8 +14,9 @@
 #    jar's hosts, so the shutdown sanitizer's per-principal pass (persist-data-on-shutdown
 #    exceptions) reaches sandboxed cookies exactly as it reaches real ones.
 #  - One pipeline (_admit / _purge / _seedFor) with a documented 0061 hook (setPipelineHook).
-#  - No plaintext: site / cookie-value diagnostics reach prefs.js only as keyed digests.
-# Applies on main (789f66c: ... 0056 / 0057c / 0058b). C++ + chrome JS.
+#  - No plaintext: site / cookie-value diagnostics (cookie firewall, and NativePersona's lastEtld /
+#    lastDecision) reach prefs.js only as keyed digests, even with darkstr.debug.diagPrefs on.
+# Applies on main (2c8da76 / 789f66c: ... 0056 / 0057c / 0058b). C++ + chrome JS.
 # usage: scripts/apply-0060-cookie-firewall-coverage-mini.sh   (needs DARKSTR_GECKO_ROOT)
 # Atlas: never mv under /Volumes/Mesh.
 set -euo pipefail
@@ -29,6 +30,7 @@ MAP=(
  "CookieCommons.cpp:netwerk/cookie/CookieCommons.cpp"
  "CookieStoreParent.cpp:dom/cookiestore/CookieStoreParent.cpp"
  "PrincipalsCollector.sys.mjs:toolkit/components/cleardata/PrincipalsCollector.sys.mjs"
+ "DarkstrNativePersona.sys.mjs:browser/components/DarkstrNativePersona.sys.mjs"
 )
 (cd "$F" && shasum -a 256 -c SHA256SUMS)
 already=1
@@ -37,7 +39,7 @@ if [[ $already == 1 ]]; then
   echo "0060 already applied — tree matches patches/0060-files"
 else
   (cd "$R" && shasum -a 256 -c "$F/BASE_SHA256SUMS") \
-    || { echo "error: tree is not the main (789f66c) baseline 0060 was cut against" >&2; exit 1; }
+    || { echo "error: tree is not the main (2c8da76) baseline 0060 was cut against" >&2; exit 1; }
   (cd "$R" && patch -p1 --forward --batch < "$PATCH")
 fi
 for e in "${MAP[@]}"; do
@@ -51,6 +53,7 @@ if grep -Fq 'messageManagerGroups: ["browsers"]' "$C"; then echo "error: actor s
 grep -Fq 'cleaners: [CookieCleaner, DarkstrCookieFirewallCleaner]' "$R/toolkit/components/cleardata/ClearDataService.sys.mjs"
 grep -Fq '"darkstr-cookie-store"' "$R/dom/cookiestore/CookieStoreParent.cpp"
 grep -Fq 'DarkstrCookieFirewall.sandboxCookieHosts()' "$R/toolkit/components/cleardata/PrincipalsCollector.sys.mjs"
+grep -Fq 'const REDACTED_DIAG_PREFS = new Set([LAST_ETLD_PREF, LAST_DECISION_PREF]);' "$R/browser/components/DarkstrNativePersona.sys.mjs"
 grep -Fq 'darkstr 0060 (was 0048r2 F3' "$R/netwerk/cookie/CookieCommons.cpp"
 echo "0060 applied. Build (objdir pinned; never a bare mach build):"
 echo "  cd \$DARKSTR_GECKO_ROOT && MOZ_OBJDIR=\$DARKSTR_GECKO_ROOT/obj-aarch64-apple-darwin25.6.0 ./mach build && MOZ_OBJDIR=\$DARKSTR_GECKO_ROOT/obj-aarch64-apple-darwin25.6.0 ./mach package"
