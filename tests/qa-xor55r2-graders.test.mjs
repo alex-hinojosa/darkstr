@@ -44,3 +44,14 @@ test("provenance lists the four r2adapt sources", () => {
   const p = read("PROVENANCE.sha256");
   for (const f of ["grade49x.py", "grade51x.py", "grade51pop.py", "mk.py"]) assert.match(p, new RegExp(`^[0-9a-f]{64}  ${f}$`, "m"));
 });
+
+test("0058r2 (Proof #92): no grader decides or labels persona presence by UA", () => {
+  for (const f of ["grade49x.py", "grade51x.py", "grade51pop.py"]) {
+    const src = readFileSync(join(QA, f), "utf8");
+    const code = src.split("\n").filter((l) => !l.trimStart().startsWith("#")).join("\n");
+    assert.doesNotMatch(code, /UA != real|not real 156|userAgent'\] != REAL_UA|ua != REAL_UA|ouA != REAL_UA/, f);
+    for (const l of code.split("\n").filter((x) => /armed|applied/.test(x) && /chk\(/.test(x) && !/default|not armed/.test(x)))
+      assert.doesNotMatch(l, /REAL_UA/, `${f}: ${l.trim()}`);
+  }
+  assert.match(readFileSync(join(QA, "grade51pop.py"), "utf8"), /keeps opener armed bit \(persona tuple != native: languages\/cores\/TZ\)/);
+});
