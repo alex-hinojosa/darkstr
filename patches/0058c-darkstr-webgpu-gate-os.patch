@@ -183,7 +183,7 @@
  function normalizeGpu(raw) {
    if (!raw || typeof raw !== "object") {
      return null;
-@@ -483,6 +594,8 @@
+@@ -487,6 +598,8 @@
      if (!plan.armed || (!plan.seeds && !plan.perSite)) {
        return null;
      }
@@ -192,7 +192,7 @@
      // SubsequentNav arm: reuse NativePersona first-doc gate when available.
      // When 0030 rotatePerSite is active, ALWAYS derive depth seeds (incl.
      // webgpuSeed) from eTLD-effective persona seed — same SoT as sticky
-@@ -511,6 +624,7 @@
+@@ -515,6 +628,7 @@
          if (!snap) {
            return null;
          }
@@ -200,7 +200,7 @@
  
          let rotating = false;
          try {
-@@ -563,7 +677,11 @@
+@@ -567,7 +681,11 @@
              return null;
            }
            if (seed) {
@@ -213,7 +213,7 @@
              if (derived) {
                const out = {
                  canvasSeed: derived.canvasSeed >>> 0,
-@@ -571,10 +689,12 @@
+@@ -575,10 +693,12 @@
                  fontSeed: derived.fontSeed >>> 0,
                  speechSeed: derived.speechSeed >>> 0,
                  webgpuSeed: derived.webgpuSeed >>> 0,
@@ -230,7 +230,7 @@
                };
                this._writeLastSeeds(out);
                return out;
-@@ -595,7 +715,11 @@
+@@ -599,7 +719,11 @@
              fontSeed: snapFont,
              speechSeed: snapSpeech,
              webgpuSeed: readWebGpuSeed(snap, snapSpeech, snapAudio),
@@ -243,7 +243,7 @@
            };
            this._writeLastSeeds(out);
            return out;
-@@ -625,10 +749,11 @@
+@@ -629,10 +753,11 @@
        webgpuSeed:
          (plan.seeds.webgpuSeed >>> 0) ||
          deriveWebGpuSeed(speechSeedOut, plan.seeds.audioSeed),
@@ -259,7 +259,7 @@
      };
      this._writeLastSeeds(out);
      return out;
-@@ -636,64 +761,60 @@
+@@ -640,64 +765,60 @@
  
    _readDepthSeeds() {
      // Prefer cached persona snapshot (same JSON bridge as NativePersona).
@@ -371,7 +371,7 @@
    },
  
    /**
-@@ -730,14 +851,16 @@
+@@ -734,14 +855,16 @@
      return 0;
    },
  

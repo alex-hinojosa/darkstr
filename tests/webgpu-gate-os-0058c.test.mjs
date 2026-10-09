@@ -48,7 +48,8 @@ test("0058c: pin files match SHA256SUMS; base is the shipped 0058b copy; patch +
   const base = Object.fromEntries(read("patches/0058c-files/BASE_SHA256SUMS").trim().split("\n").map((l) => l.trim().split(/\s+/).reverse()));
   assert.deepEqual(base, {
     "browser/components/DarkstrWorkerHooksChild.sys.mjs": sha("patches/0058b-files/DarkstrWorkerHooksChild.sys.mjs"),
-    "browser/components/DarkstrDepthHooks.sys.mjs": sha("patches/0057-files/DarkstrDepthHooks.sys.mjs"),
+    // r2: cut on 0059's copy (0059 shipped first; tests/stack-consistency)
+    "browser/components/DarkstrDepthHooks.sys.mjs": sha("patches/0059-files/DarkstrDepthHooks.sys.mjs"),
   });
   const sh = read("scripts/apply-0058c-webgpu-gate-os-mini.sh");
   assert.match(sh, /0058c-darkstr-webgpu-gate-os\.patch/);

@@ -45,9 +45,12 @@ const UA = {
 const APPLE = { vendor: "Apple", renderer: "Apple M2" };
 const MACINTEL = { vendor: "Intel Inc.", renderer: "Intel(R) Iris(R) Plus Graphics" };
 
-test("0058c gpu: pin carries DarkstrDepthHooks against the shipped 0057 copy; apply script checks it", () => {
+test("0058c gpu: pin carries DarkstrDepthHooks against the shipped 0059 copy (keeps 0059's change); apply script checks it", () => {
   const base = read("patches/0058c-files/BASE_SHA256SUMS");
   assert.match(base, /  browser\/components\/DarkstrDepthHooks\.sys\.mjs$/m);
+  // r2: 0059 shipped first, so 0058c's copy must keep 0059's actor change (no `matches`).
+  assert.doesNotMatch(DH, /matches: \["\*:\/\/\*\/\*", "file:\/\/\*"\]/);
+  assert.match(DH, /\/\/ 0059 \(Fable B7\): no `matches`/);
   const sh = read("scripts/apply-0058c-webgpu-gate-os-mini.sh");
   assert.match(sh, /"DarkstrDepthHooks\.sys\.mjs:browser\/components\/DarkstrDepthHooks\.sys\.mjs"/);
   assert.match(sh, /export function personaGpu\(snap, gpu, seed, \{ useOwn = true \} = \{\}\)/);

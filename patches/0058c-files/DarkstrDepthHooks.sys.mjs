@@ -431,7 +431,11 @@ export var DarkstrDepthHooks = {
         },
         allFrames: true,
         messageManagerGroups: ["browsers"],
-        matches: ["*://*/*", "file://*"],
+        // 0059 (Fable B7): no `matches` -- opaque-origin frames (data:,
+        // about:srcdoc, blob: from an opaque origin) need their top-level
+        // site's depth noise too. The child admits exactly the old
+        // http(s)/file documents plus opaque ones (depthDocumentEligible)
+        // before any IPC.
         // Required for Fission webIsolated / web content processes.
         safeForUntrustedWebProcess: true,
       });
