@@ -1465,3 +1465,34 @@ Proof's 0055r2 note: a pasted Win32 lock (`locked42`, no `appVersion`) reported 
   - Negative control on the 0057r2 app: 12 failures, appVersion "5.0 (Macintosh)" and a Mac oscpu, which reproduces Proof's note.
   - 0057 regression on the 0057b app: armed PASS (alt-path mismatch 0 px, no canvas permission), fixed_seed PASS, off_mode with the permission granted PASS.
 - Evidence: `~/AgentDocs/proof/darkstr-0058-20261009-103755/`.
+
+## 0058: first-page policy (Fable B4) — persona decision per site, not per tab
+
+Spec (Alex): each site gets one persona that stays the same on that site, so the first page of every new tab gets it too.
+
+- `strictNextNavArmed()` is armed for every document while Pollution + hooks are active. The per-tab `strictFirstDoc`
+  native hold is gone; `darkstr.strictFirstDoc` is no longer read (plan reports `strictFirstDoc: false`).
+- First loads at startup use the 0056 seed-store hold (`_holdForSeedStore`). `_noteTopLevelDocument` no longer resolves a
+  snapshot while the store is loading, because that would hand out a session-random seed.
+- Depth coherence: a NativePersona plan change now re-runs `DarkstrDepthHooks.refreshPlan()`. DepthHooks' own pref observer
+  could run first, read the stale NativePersona plan and stay disarmed. Persona documents then had no depth noise and
+  showed the native canvas hash; this was reproduced live after switching Native-Compatible back off.
+- Native-Compatible and off mode stay fully native (HTTP, JS, workers, no depth).
+- Files: `patches/0058fp-files/`, `patches/0058fp-darkstr-first-page-policy.patch`, `scripts/apply-0058fp-first-page-policy-mini.sh`,
+  `tests/first-page-policy-0058fp.test.mjs`. (`patches/0058-files` is 0057b.) Old per-tab expectations in
+  persona-surface-0051 / worker-coherence-0049 were rewritten to the per-site spec.
+- Live, Fable's S1 harness (her fp.html / worker.js / server.py verbatim; own hosts afp.test / bfp.test, own port 8458,
+  sandbox loopback only, fresh profile per app), on darkstr-0058-1dedfabc.dmg:
+  - 18 documents, **167/167** checks. All 8 first documents of a tab pass: after a cold start, in new tabs, after the
+    restart, and after Native-Compatible off. They show the site persona over HTTP (document, subresource, worker script,
+    worker fetch; UA and Accept-Language), JS, the dedicated worker, popup and iframe, with depth noise (canvas, audio)
+    equal to the site's later pages.
+  - Every persona canvas hash differs from the native (Native-Compatible) hash on the same site.
+  - Negative control (0057r2 app): 149/167; all 6 first documents in a tab that had no earlier load are native and carry
+    the native canvas hash 13ac8c13… (Fable's a7 vs a8).
+- 0057c live on the same build: `browser.contentblocking.category` is back to strict after leaving Pollution without a
+  restart (`rematched:strict+own`), and the ETP flag is untouched.
+- Known, not 0058 (also on 0057r2): a site with a persist-data-on-shutdown exception did not keep its persona across the
+  restart. Its store entry is on disk after the flush (disk 1) and gone at the next start (disk 0, same key and label),
+  so shutdown clearing drops it. Follow-up on the 0056 store keep rule vs LibreWolf's shutdown sanitizing.
+- Evidence: `~/AgentDocs/proof/darkstr-0058fp-20261009-105055/`.
