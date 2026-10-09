@@ -88,3 +88,14 @@ Proof FAILED `f3f1e748` (PR #79) on three new findings; evidence `~/AgentDocs/pr
 - Native-Compatible privacy-pane UI (PM)
 - Approach A FFI / full dual-jar C++ CookieService
 - Claiming Cloudflare / anti-detect bypass
+
+## 0060 coverage + pipeline
+
+- **Who gets an answer:**
+  - Every frame, in any message-manager group (tabs, extension pages).
+  - Service-worker CookieStore, via `CookieStoreParent` → observer `darkstr-cookie-store` → `cookieStoreRequest()`.
+  - A frame tree under an extension page is owned by its outermost http(s) document.
+- **Clearing:** `DarkstrCookieFirewallCleaner` (ClearDataService, `CLEAR_COOKIES`) uses Gecko's OriginAttributesPattern matching. A partitioned principal clears only its partition. `PrincipalsCollector` lists sandboxed hosts so the shutdown sanitizer's per-principal pass reaches them.
+- **One pipeline:** `_admit()` (HTTP Set-Cookie, document.cookie / window CookieStore, worker CookieStore), `_purge()` (expiry, cleaners, disarm, mode switch), `_seedFor()`.
+- **0061 hook:** `DarkstrCookieFirewall.setPipelineHook({ seedFor({topBase, oa, source}) → u32, valueFor({seed, topBase, record, bucketKey, source, mode}) → string })`. Both are optional; `null` restores the default. Rotating a partition is `_purge(<that bucket>)`. The parent is authoritative: content caches take the stored value from the broadcast delta, so a hook only runs in the parent. 0060 ships no hook.
+- **No plaintext:** site- and value-bearing diagnostics reach prefs.js only as session-keyed digests. `getDiagnostics()` keeps readable values in memory.
