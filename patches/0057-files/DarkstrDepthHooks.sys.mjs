@@ -105,6 +105,9 @@ const diagPrefs = {
 };
 
 // Host-OS filtered Firefox-family GPU pairs (thin subset of profiles.js).
+// 0057r4: renderers are the RAW GL_RENDERER Firefox gets on that OS (Windows:
+// ANGLE Direct3D11); page / worker hooks report them through Gecko's
+// sanitizer like stock ("..., or similar").
 const GPU_BY_OS = {
   macos: [
     { vendor: "Apple", renderer: "Apple M1" },
@@ -112,9 +115,9 @@ const GPU_BY_OS = {
     { vendor: "Intel Inc.", renderer: "Intel(R) Iris(R) Plus Graphics" },
   ],
   windows: [
-    { vendor: "Google Inc. (Intel)", renderer: "ANGLE (Intel, Intel(R) UHD Graphics 630, OpenGL 4.5)" },
-    { vendor: "Google Inc. (NVIDIA)", renderer: "ANGLE (NVIDIA, NVIDIA GeForce RTX 3060, OpenGL 4.5)" },
-    { vendor: "Google Inc. (AMD)", renderer: "ANGLE (AMD, AMD Radeon RX 580, OpenGL 4.5)" },
+    { vendor: "Google Inc. (Intel)", renderer: "ANGLE (Intel, Intel(R) UHD Graphics 630 Direct3D11 vs_5_0 ps_5_0, D3D11)" },
+    { vendor: "Google Inc. (NVIDIA)", renderer: "ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 Direct3D11 vs_5_0 ps_5_0, D3D11)" },
+    { vendor: "Google Inc. (AMD)", renderer: "ANGLE (AMD, AMD Radeon RX 580 Direct3D11 vs_5_0 ps_5_0, D3D11)" },
   ],
   linux: [
     { vendor: "Intel", renderer: "Mesa Intel(R) UHD Graphics 630 (CFL GT2)" },

@@ -599,6 +599,40 @@ Live results (no `canvas` permission anywhere):
   - WebGPU canvas `toDataURL` == `copyTextureToBuffer` readback;
   - compute readback exact.
 
+### 0057r4: WebGL renderer strings as Gecko reports them (Proof #88 r3 item 5a)
+
+**Proof FAIL (live by default, no WebGPU needed).** Under an Intel persona, `RENDERER` (masked) was the native `"Apple M1, or similar"` while `UNMASKED_RENDERER_WEBGL` was the raw persona string `"Intel(R) Iris(R) Plus Graphics"`. Real Firefox never reports an unmasked renderer without its sanitizer: no ", or similar" suffix, no bucket. It was present since the first depth pin (r1 and r2 data show it too).
+
+**How Gecko 156 answers (dom/canvas/ClientWebGLContext.cpp, SanitizeRenderer.cpp), RFP / FPP / baseline FPP off as under Pollution:**
+- `VENDOR` = "Mozilla".
+- `RENDERER` = `SanitizeRenderer(raw GL_RENDERER)`.
+- `UNMASKED_RENDERER_WEBGL` = `SanitizeRenderer(raw)` (`webgl.sanitize-unmasked-renderer`, default true).
+- `UNMASKED_VENDOR_WEBGL` = the raw GL vendor (sanitized only under the RFP target).
+- Without `WEBGL_debug_renderer_info`, the UNMASKED_* calls return null and raise INVALID_ENUM.
+
+**Fix.**
+- `geckoSanitizeRenderer` is a 1:1 port of SanitizeRenderer / ChooseDeviceReplacement. It is byte-identical in DarkstrDepthHooksChild and DarkstrWorkerHooksChild (and the 0058 re-ship), so the page and every worker kind agree.
+- The page and worker `getParameter` hooks call the native getter first. A non-string (missing extension) or an RFP constant ("Mozilla...") passes through unchanged; otherwise the hook returns the persona's string as Gecko would:
+  - RENDERER is always sanitized;
+  - UNMASKED_RENDERER is sanitized while the pref is on;
+  - UNMASKED_VENDOR is the persona's raw vendor;
+  - VENDOR is never touched.
+- WebGL1 and WebGL2 prototypes are both hooked, so OffscreenCanvas WebGL in the page and in dedicated / shared / service workers is covered.
+
+| Persona GPU (raw) | RENDERER = UNMASKED_RENDERER | UNMASKED_VENDOR |
+|---|---|---|
+| Apple M1 / Apple M2 | `Apple M1, or similar` | `Apple` |
+| Intel(R) Iris(R) Plus Graphics (Gen11, 2020 13" MacBook Pro / Air) | `Intel(R) HD Graphics, or similar` | `Intel Inc.` |
+| ANGLE (Intel, Intel(R) UHD Graphics 630 Direct3D11 vs_5_0 ps_5_0, D3D11) | `ANGLE (Intel, Intel(R) HD Graphics 400 Direct3D11 vs_5_0 ps_5_0), or similar` | `Google Inc. (Intel)` |
+| ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 Direct3D11 …) | `ANGLE (NVIDIA, NVIDIA GeForce GTX 980 Direct3D11 vs_5_0 ps_5_0), or similar` | `Google Inc. (NVIDIA)` |
+| ANGLE (AMD, AMD Radeon RX 580 Direct3D11 …) | `ANGLE (AMD, Radeon R9 200 Series Direct3D11 vs_5_0 ps_5_0), or similar` | `Google Inc. (AMD)` |
+| Mesa Intel(R) UHD Graphics 630 (CFL GT2) | `Intel(R) HD Graphics 400, or similar` | `Intel` |
+| NVIDIA GeForce RTX 3060/PCIe/SSE2 | `NVIDIA GeForce GTX 980, or similar` | `NVIDIA Corporation` |
+| AMD Radeon RX 580 (radeonsi, …) | `Radeon R9 200 Series, or similar` | `AMD` |
+
+- The Windows pool used Chrome-style `ANGLE (…, OpenGL 4.5)` strings, which Gecko's sanitizer turns into "Generic Renderer". They are now the ANGLE Direct3D11 raw strings Firefox on Windows sees, with the same cap buckets.
+- Tests: `tests/webgl-renderer-0057r4.test.mjs`. It covers the bucket table, every pool entry, pass-through of stock null / "Mozilla", the worker prelude for WebGL1 and WebGL2, the page hook order, and byte-identity across copies.
+
 ### Residual / for Proof
 
 - **(Fixed in 0057r2, see above.) Engine canvas noise under Pollution = baseline FPP.** ModeXor sets RFP and FPP to false, but `privacy.baselineFingerprintingProtection` stays true (Firefox default). Its canvas randomization adds per-session engine noise on top of darkstr's layer, so `toDataURL`/`toBlob`/`convertToBlob` vs `getImageData` and GL sub-rect/`toDataURL` disagree (`engine_rfp`: 94/2944 URL pixels).
