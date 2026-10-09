@@ -1658,3 +1658,29 @@ Spec (Alex): each site gets one persona that stays the same on that site, so the
 - Fable S1 (`run58fp.sh` / `grade58fp.py`): **PASS**, 19 documents, 0 fails. The known-issue line flips: A keeps its persona after the restart (**True**; it was False on 0058r2, the 0056 late-keep bug).
 - Private windows, part of the armed suite (`selftest-pbm2`, `tools/runS1armed.sh`): **71/71**, 0 px in every window and scope. The pbmode prefs are owned under Pollution and restored exactly on exit.
 - Evidence: `~/AgentDocs/proof/darkstr-0058r3-20261009-121711/`.
+
+## 0058b: WebGPU persona gate (stacked on 0058 first-page policy)
+
+**Problem.** On an Apple-silicon host with `dom.webgpu.enabled` on (a user opt-in; darkstr never sets it), a non-Apple persona (Intel Mac) would expose a WebGPU adapter that can only be Apple's. Proof #88 r3 items 5b–5d.
+
+**Fix.**
+- For a **non-Apple persona** on an Apple-silicon host, WebGPU is hidden completely in the page and in dedicated, nested, shared and service workers. The result is indistinguishable from stock Gecko with `dom.webgpu.enabled=false`: no `navigator.gpu`, no `GPU*` globals, and the same `Navigator` / `WorkerNavigator` prototype shape.
+  - Gate (C++): `Instance::PrefEnabled(cx, obj)` = `PrefEnabled() && !DarkstrNavigatorHooks::WebGpuHiddenFor(obj)`. Being a WebIDL `Func=` gate, it hides the interface objects themselves, not just values.
+  - Main thread: a synchronous gate topic `darkstr-webgpu-gate-resolve`, resolved per inner window from that document's own persona decision.
+  - Workers: the persona bag carries `hideWebGpu`.
+- **Apple personas** get passthrough: the 0038 / 0043 hooks return the native objects untouched. `GPUAdapterInfo` therefore has native's shape and values by construction.
+- Items 5b–5d are covered by hiding: an Intel persona never shows an adapter. Apple personas show the real adapter, which is Apple.
+- **Fix F (found by the self-test):** the page gate read the *previous* document's depth decision (an off-by-one between documents). `resolveWorker` (which also answers the page gate's per-inner-window resolve) now passes that document's own WindowGlobalParent into `depthSeedsForBrowsingContext(bc, docWgp)`.
+- Off mode and Homogeneous: hands off (stock behaviour).
+- Tests: `tests/webgpu-persona-gate-0058b.test.mjs` (10 tests). Full npm is green.
+
+**DMG `darkstr-0058b-318ac5b0.dmg`** (0058r3 stack + 0058b). dmgverify: 6/6 omni files MATCH, and XUL carries the gate topic.
+- Headless gate self-test (`selftest/run58b.sh`, port 8463; 12 sites with a fresh persona each, plus stock-off and stock-on controls): **556/556 PASS**.
+  - The 4 Intel personas match stock-off in page, dedicated, nested, shared and service scopes.
+  - The 8 Apple personas match stock-on.
+- Evidence: `~/AgentDocs/proof/darkstr-0058b-20261009-113947/`.
+
+**Headed items for Proof** (headless has no adapter; `requestAdapter()` returns null):
+1. Apple persona, real display, `dom.webgpu.enabled=true`: `requestAdapter()` info (vendor / architecture / device / description, plus `isFallbackAdapter`, features, limits) must equal a native profile's, field for field.
+2. Intel persona, same setup: `navigator.gpu` and all `GPU*` globals absent in the page and in all worker kinds. The page diff against stock with `dom.webgpu.enabled=false` must be empty.
+3. Mixed tabs: an Intel-persona site and an Apple-persona site open at the same time; each keeps its own gate across reloads and navigations (fix F).

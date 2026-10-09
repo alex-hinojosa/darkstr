@@ -27,7 +27,7 @@ const FILES = join(root, "patches/0049-files");
 const FILES51 = join(root, "patches/0051-files");
 const FILES52 = join(root, "patches/0052-files");
 // Newest shipped copy of a module (later pins supersede earlier ones).
-const NEWER = ["0058fp-files", "0058-files", "0057c-files", "0057-files", "0056-files", "0055-files", "0053r2-files", "0053-files", "0052-files"].map((d) => join(root, "patches", d));
+const NEWER = ["0058b-files", "0058fp-files", "0058-files", "0057c-files", "0057-files", "0056-files", "0055-files", "0053r2-files", "0053-files", "0052-files"].map((d) => join(root, "patches", d));
 const newest = (f, fallbackDir) => {
   for (const d of NEWER) {
     if (existsSync(join(d, f))) return join(d, f);
@@ -570,7 +570,9 @@ test("one persona generator: no Firefox 135 list / Mac OS X 14.0 / worker genera
   assert.doesNotMatch(js, /registerWindowActor/);
   const reg = registered.process.find(([n]) => n === "DarkstrWorkerPersona");
   assert.ok(reg, "process actor registered");
-  assert.deepEqual(reg[1].child.observers, [TOPIC]);
+  // 0058b adds the WebGPU gate topic (one sync decision per inner window).
+  const gate = /export const WEBGPU_GATE_TOPIC = "([^"]+)"/.exec(js);
+  assert.deepEqual(reg[1].child.observers, gate ? [TOPIC, gate[1]] : [TOPIC]);
   assert.equal(reg[1].includeParent, false);
 });
 

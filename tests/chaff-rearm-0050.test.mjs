@@ -23,7 +23,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
-const SHIPPED = ["0058fp-files", "0058-files", "0057c-files", "0057-files", "0056-files", "0055-files", "0053r2-files", "0053-files", "0052-files", "0050-files"]
+const SHIPPED = ["0058b-files", "0058fp-files", "0058-files", "0057c-files", "0057-files", "0056-files", "0055-files", "0053r2-files", "0053-files", "0052-files", "0050-files"]
   .map((d) => join(root, "patches", d, "DarkstrChaffScheduler.sys.mjs"))
   .find((f) => existsSync(f));
 const SOURCE = readFileSync(SHIPPED, "utf8");
