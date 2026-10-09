@@ -622,14 +622,14 @@ right after the interval fire).
 | Pin | **0049** (Rowan QA B3, B4, B5 + no-seed arming, blob: location, relative importScripts, wrapped constructor) |
 | Branch | `builder/0049-worker-coherence` — **stacked on `builder/0051-persona-surface` @ `7d5bfac`** (PR #80, itself on #79); targets `main` |
 | Patch | [`patches/0049-darkstr-worker-coherence.patch`](../patches/0049-darkstr-worker-coherence.patch) |
-| Apply SoT | [`patches/0049-files/`](../patches/0049-files/) (4 modules + `DarkstrNavigatorHooks.{cpp,h}` + `WorkerNavigator.cpp` + `WorkerPrivate.cpp` + `SHA256SUMS`) |
+| Apply SoT | [`patches/0049-files/`](../patches/0049-files/) (4 modules + `DarkstrNavigatorHooks.{cpp,h}` + `WorkerNavigator.cpp` + `WorkerPrivate.cpp` + `ScriptLoader.cpp` (0049r2) + `SHA256SUMS`) |
 | Mini helper | [`scripts/apply-0049-worker-coherence-mini.sh`](../scripts/apply-0049-worker-coherence-mini.sh) (needs 0051 applied; C++ → libxul relink) |
 | Tests | [`tests/worker-coherence-0049.test.mjs`](../tests/worker-coherence-0049.test.mjs) |
 | Defaults | unchanged — hooks default-off (C++ never calls chrome then), strictFirstDoc on |
 | Evidence | `~/AgentDocs/proof/darkstr-0049-workers-20261008/` |
 | Merge | after #79 and #80, and only after Proof PASS |
 | Proof (#81 @ `5bc541e`, DMG `baae735f`) | **FAILED** — F1: about:blank popup's dedicated worker (`new w.Worker()` from the opener) had a native navigator / script load but its importScripts / fetch / sync XHR went out with the opener site's persona (rv:140, persona Accept-Language). Evidence `~/AgentDocs/proof/darkstr-0049-xor-20261008-193806/` |
-| Respin (0049r2) | Merged 0051r2 (popup inherits the opener decision), then: every request a dedicated (or nested) worker makes resolves through `loadInfo.associatedBrowsingContext` → that window's `documentDecision` — the same document `ResolveWorkerPersona` used for the worker's navigator/timezone and its script load (innerWindowID). Previously those requests had no window/BC and fell into the windowless site rule ("any live armed doc of the site"), so a worker of a native document (popup, or a first document next to an armed same-site tab) sent armed headers. Shared/Service workers (no associated BC) keep the site rule. Evidence `~/AgentDocs/proof/darkstr-0049r2-workers-20261008/` |
+| Respin (0049r2) | Merged 0051r2 (popup inherits the opener decision), then: every request a dedicated (or nested) worker makes resolves through `loadInfo.associatedBrowsingContext` → that window's `documentDecision` — the same document `ResolveWorkerPersona` used for the worker's navigator/timezone and its script load (innerWindowID). Previously those requests had no window/BC and fell into the windowless site rule ("any live armed doc of the site"), so a worker of a native document (popup, or a first document next to an armed same-site tab) sent armed headers. Shared/Service workers (no associated BC) keep the site rule. Gecko leaves one dedicated-worker request unlabelled — a nested worker's main script (`ChannelGetterRunnable`) — so `dom/workers/ScriptLoader.cpp` now copies the parent worker's `AssociatedBrowsingContextID` onto it, only while `DarkstrNavigatorHooks::PollutionNativeHooksActive()` (default: stock; C++ → libxul relink). Evidence `~/AgentDocs/proof/darkstr-0049r2-workers-20261008/` |
 
 ### Approach — native, no script wrapping
 
