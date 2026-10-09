@@ -34,10 +34,11 @@ class HookState(unittest.TestCase):
         self.assertFalse(hook_ok(st, True))
         self.assertTrue(hook_ok(st, False))
 
-    def test_legacy_raw_without_census_keeps_old_semantics(self):
-        self.assertEqual(hook_state(None, None), 'none')
-        self.assertTrue(hook_ok('none', False))
-        self.assertFalse(hook_ok('none', True))  # old grader: None != 'get cookie'
+    def test_raw_without_census_is_unknown_and_fails_both(self):
+        # #83 follow-up (d): no census at all -> 'unknown' (was 'none', which passed unhooked checks)
+        self.assertEqual(hook_state(None, None), 'unknown')
+        self.assertFalse(hook_ok('unknown', False)); self.assertFalse(hook_ok('unknown', True))
+        self.assertFalse(hook_ok('none', False))  # 'none' retired
 
     def test_unknown_mixed_other(self):
         self.assertEqual(hook_state(None, CENSUS_ARMED, frame_url_is('about:nothing')), 'unknown')
@@ -62,8 +63,10 @@ class ProofF2MissingCensus(unittest.TestCase):
             self.assertEqual(st, 'unknown', c)
             self.assertFalse(hook_ok(st, True)); self.assertFalse(hook_ok(st, False))
 
-    def test_legacy_run_without_census_unchanged(self):
-        self.assertEqual(hook_state(None, None, top_doc, census_run=False), 'none')
+    def test_run_without_any_census_is_unknown(self):
+        st = hook_state(None, None, top_doc, census_run=False)
+        self.assertEqual(st, 'unknown')
+        self.assertFalse(hook_ok(st, True)); self.assertFalse(hook_ok(st, False))
 
     def test_default_check_needs_a_census(self):
         self.assertFalse(no_firewall_sandbox({'N1': {'n1': {'hook': None}}}))                       # no census: FAIL (was `else True`)

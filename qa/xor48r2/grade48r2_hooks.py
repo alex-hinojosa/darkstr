@@ -8,17 +8,18 @@ import json
 # errors as stock), so hk() == None for hooked AND native documents. The harness therefore attaches a chrome census
 # (`__census`: frames of the tab with `sandboxed` = actor in DarkstrCookieFirewall._liveActors) to every page step.
 HOOKED = ('own', 'proto')
-UNHOOKED = ('native', 'none')
+UNHOOKED = ('native',)  # 'none' retired (#83 follow-up d): no census is 'unknown', never unhooked
 def hook_state(own, census=None, pick=None, census_run=False):
     """own: hk() result for the document; census: the step's __census list; pick(entry) selects the document's frame(s);
     census_run: the run recorded a census (has_census(cases)).
-    -> 'own' | 'proto' | 'native' | 'none' (no own accessor, no census, run without census: legacy raw, treated as
-       unhooked) | 'unknown' | 'mixed' | 'other:<x>'
-    Proof #83 F2: in a run that recorded a census, a step whose census is missing or an {'err': ...} is 'unknown'
-    (fails hooked AND unhooked checks), never 'none'."""
+    -> 'own' | 'proto' | 'native' | 'unknown' | 'mixed' | 'other:<x>'
+    Proof #83 F2: a step whose census is missing or an {'err': ...} is 'unknown' (fails hooked AND unhooked checks).
+    #83 follow-up (d): that holds even when NO census was recorded anywhere in the run (census_run False): such a
+    run is labelled 'unknown', not 'none' -- it fails either way, the label just says why. census_run is kept for
+    call compatibility and no longer changes the result."""
     if own == 'get cookie': return 'own'
     if own is not None: return 'other:' + str(own)
-    if not isinstance(census, list): return 'unknown' if census_run else 'none'
+    if not isinstance(census, list): return 'unknown'
     hits = [c for c in census if (pick or top_doc)(c)]
     if not hits: return 'unknown'
     sb = [bool(c.get('sandboxed')) for c in hits]
