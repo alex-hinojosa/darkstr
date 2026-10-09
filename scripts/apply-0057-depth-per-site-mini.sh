@@ -16,6 +16,9 @@
 #  - 0057r3: OffscreenCanvas convertToBlob exports a noisy clone drawn from the canvas (WebGL too; page +
 #    worker); WebGPU native features / limits / device (Intel persona hides Apple-only formats), persona
 #    AdapterInfo, WebGPU canvases unfarbled (canvas export == buffer readback).
+#  - 0057r4: WebGL RENDERER and UNMASKED_RENDERER_WEBGL report the persona GPU through a 1:1 port of
+#    Gecko's SanitizeRenderer (same bucket, ", or similar"), after the native call (page, OffscreenCanvas,
+#    dedicated / shared / service workers, WebGL1 + WebGL2); Windows pool = ANGLE Direct3D11 raw strings.
 # Needs 0052 + 0053 + 0053r2 + 0055r2 + 0056r3 applied. Chrome JS only (no C++).
 # usage: scripts/apply-0057-depth-per-site-mini.sh   (needs DARKSTR_GECKO_ROOT)
 # Atlas: never mv under /Volumes/Mesh.
@@ -52,5 +55,7 @@ grep -Fq 'DarkstrDepthHooks:GetSeedsSync' "$R/browser/components/DarkstrDepthHoo
 grep -Fq 'this.manager' "$R/browser/components/DarkstrDepthHooksParent.sys.mjs"
 grep -Fq '_storeSeedForEtld' "$R/browser/components/DarkstrNativePersona.sys.mjs"
 grep -Fq 'privacy.baselineFingerprintingProtection' "$R/browser/components/DarkstrModeXor.sys.mjs"
+grep -Fq 'personaGlString(' "$R/browser/components/DarkstrDepthHooksChild.sys.mjs"
+grep -Fq 'geckoSanitizeRenderer(renderer)' "$R/browser/components/DarkstrWorkerHooksChild.sys.mjs"
 echo "0057 applied. Build (objdir pinned; never a bare mach build):"
 echo "  cd \$DARKSTR_GECKO_ROOT && MOZ_OBJDIR=\$DARKSTR_GECKO_ROOT/obj-aarch64-apple-darwin25.6.0 ./mach build && MOZ_OBJDIR=\$DARKSTR_GECKO_ROOT/obj-aarch64-apple-darwin25.6.0 ./mach package"
