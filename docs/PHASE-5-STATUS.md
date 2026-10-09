@@ -1684,3 +1684,48 @@ Spec (Alex): each site gets one persona that stays the same on that site, so the
 1. Apple persona, real display, `dom.webgpu.enabled=true`: `requestAdapter()` info (vendor / architecture / device / description, plus `isFallbackAdapter`, features, limits) must equal a native profile's, field for field.
 2. Intel persona, same setup: `navigator.gpu` and all `GPU*` globals absent in the page and in all worker kinds. The page diff against stock with `dom.webgpu.enabled=false` must be empty.
 3. Mixed tabs: an Intel-persona site and an Apple-persona site open at the same time; each keeps its own gate across reloads and navigations (fix F).
+
+## 0058c: follow-ups to Proof's stack PASS (`darkstr-stack-xor-20261009-122626`)
+
+### 1. The WebGPU gate keys on the persona's OS and GPU vendor (Proof #95 note)
+- **Gap (0058b):** `webGpuHiddenFor` looked only at the depth GPU, and a missing vendor defaulted to Apple. On an Apple-silicon host, a Windows or Linux persona (seeded, or a pasted snapshot with no or an Apple GPU) would pass the Apple adapter through.
+- **Fix (`patches/0058c-files/DarkstrWorkerHooksChild.sys.mjs`, chrome JS only):** new `isMacPersona(persona)`.
+  - The UA's OS token decides first, as 0058's `osOfSnapshot` does; then `navigator.platform`; with no OS information, the host's (Mac).
+  - iOS / iPadOS ("like Mac OS X"), Windows, Linux, Android and ChromeOS are not macOS.
+- On an Apple-silicon host, WebGPU is exposed only to a macOS persona with an Apple GPU.
+  - Every other persona decision gets the 0058b hidden shape: stock `dom.webgpu.enabled=false`, in the page and in all worker kinds, because the window gate and the worker bag share the same function.
+  - Native / off decisions and other hosts are unchanged.
+- Tests: `tests/webgpu-gate-os-0058c.test.mjs` covers the full OS × GPU matrix, pasted snapshots without a platform field, a UA contradicting the platform, iOS, and the window and worker bags.
+- **DMG `darkstr-0058c-84d876e7.dmg`** (main 789f66c + 0058c). dmgverify: 6/6 omni files MATCH.
+- Live gate self-test (`darkstr-0058c-*/selftest`, port 8467, headless, `dom.webgpu.enabled=true`; 8 seeded sites, plus pasted Windows / Linux / Mac snapshots and Windows / Linux without a platform field, 2 sites each; stock-off / stock-on references):
+  - **0058c: 837/837 PASS.** Every Windows / Linux snapshot document has the stock-off shape in the page and in dedicated / nested / shared / service workers. The Mac snapshot and seeded Apple personas get stock-on; seeded Intel personas get stock-off.
+  - **Negative control on main's DMG (`darkstr-0058b-318ac5b0`, = 789f66c): FAIL 597/837.** All 240 failures are the Windows / Linux snapshot documents: WebGPU fully exposed (41 `GPU*` globals) behind a Windows / Linux UA.
+- Residual (not this pin): a pasted Windows / Linux snapshot still reports an Apple WebGL GPU (UNMASKED_VENDOR "Apple"), because the depth GPU follows the host. Making a pasted snapshot's WebGL GPU OS-plausible would be its own pin.
+
+### 2. A user-set `privacy.fingerprintingProtection.pbmode=false` reverts at restart: LibreWolf, not darkstr (documented, no code change)
+- **Cause:**
+  - `librewolf.cfg:61` is `pref("browser.contentblocking.category", "strict")`. Autoconfig `pref()` writes the **user** value at every start.
+  - Firefox's `ContentBlockingPrefs.init()` → `updateCBCategory()` → `setPrefsToCategory("strict")` then re-applies strict's feature list, whose `fppPrivate` means pbmode=true. That equals the StaticPrefList default, so Gecko drops the user value; Proof read (true, default).
+  - In the session, setting pbmode=false makes `matchCBCategory()` switch the category to `custom`. The next start forces it back.
+- **Live A/B** (`darkstr-0058c-*/a2/`; darkstr off, fresh profile, three sessions; same binary as main's DMG):
+
+| app | pbmode=false after restart 1 / 2 | cookieBehavior=0 (control) | category s1 → s2 |
+|---|---|---|---|
+| stock `darkstr-0058b-318ac5b0` | **reverted** / reverted (true, default) | reverted (5) | custom → strict |
+| same app, only cfg line 61 commented out | **kept** (false, user) / kept | kept (0) | custom → custom |
+
+  prefs.js after s1 has `privacy.fingerprintingProtection.pbmode false`, so the value was persisted. After s2 the category is "strict" and strict's other `*.pbmode` prefs have appeared.
+- **Conclusion:** darkstr startup and the 0053 migration play no part (same code in both arms). It affects every custom ETP pref in LibreWolf (cookieBehavior too) and predates darkstr's pbmode handling (Proof: 0056r2 / 0057r3).
+- Under Pollution, ModeXor still saves and restores pbmode exactly within a session. Fighting LibreWolf's forced strict category at startup is out of scope for darkstr.
+
+### 3. Armed vs stock global sets (Proof #95 ambiguity)
+With WebGPU off, the global-name lists of armed darkstr (Pollution) and stock LibreWolf differ **only** by two Pollution-wide effects:
+- **WebCodecs present**: the WebCodecs constructors (AudioData … VideoFrame in Proof's name diff). Stock LibreWolf hides them under RFP, and Pollution turns `privacy.resistFingerprinting` off (POLLUTION_PREFS).
+- **RTC\* and MediaStreamEvent absent:** Pollution's 0028 WebRTC kill sets `media.peerconnection.enabled=false`, saved and restored by DarkstrNativePersona.
+
+These are properties of Pollution's pref set, not of the WebGPU gate. Intel-persona-with-WebGPU-on equals armed-WebGPU-off exactly (all names), and `Navigator.prototype` equals stock.
+
+### 4. x51 concurrency liveness bound (harness)
+- `qa/xor55r2/grade51x.py` `[N2] conc tN: loop ran` now needs `>= CONC_MIN` requests: 8 by default, or `XOR_CONC_MIN` on a dedicated host. The old `>= 20` assumed an idle host.
+- It is a liveness / throughput count; every request that ran is still graded for UA, Accept-Language and persona.
+- Proof's parallel-load runs (9 and 12 requests, uaStable) regrade **860/0** default (was 859/1). `XOR_CONC_MIN=20` reproduces the old FAIL.

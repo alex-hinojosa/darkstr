@@ -1,0 +1,63 @@
+--- a/browser/components/DarkstrWorkerHooksChild.sys.mjs
++++ b/browser/components/DarkstrWorkerHooksChild.sys.mjs
+@@ -55,14 +55,58 @@
+   return /apple/i.test(vendor) || /apple/i.test(renderer);
+ }
+ 
+-/** true → this document / worker gets no WebGPU. */
++/**
++ * 0058c: the persona claims macOS. The UA's OS token decides first (as 0058's
++ * osOfSnapshot: a pasted snapshot's UA is what navigator.userAgent and every
++ * request claim), then navigator.platform. No OS information at all = the
++ * host's (Mac). iOS / iPadOS, Windows, Linux, Android, ChromeOS are not macOS.
++ */
++export function isMacPersona(persona) {
++  const ua = String(persona?.userAgent || "");
++  const m = /\(([^)]*)\)/.exec(ua);
++  if (m) {
++    const t = m[1];
++    if (/iPhone|iPad|iPod/i.test(t)) {
++      return false;
++    }
++    if (/Windows|Win64|Win32|WOW64/i.test(t)) {
++      return false;
++    }
++    if (/Android|Linux|X11|CrOS|FreeBSD|OpenBSD/i.test(t)) {
++      return false;
++    }
++    if (/Macintosh|Mac OS X/i.test(t)) {
++      return true;
++    }
++  }
++  const p = String(persona?.platform || "");
++  if (p) {
++    return /^Mac/i.test(p);
++  }
++  return true;
++}
++
++/**
++ * true → this document / worker gets no WebGPU.
++ * 0058c (Proof #95 note): keyed on the persona's OS *and* GPU vendor. On an
++ * Apple-silicon host the only adapter is Apple's, so WebGPU is exposed only to
++ * a macOS persona with an Apple GPU; a Windows / Linux persona (seeded or a
++ * pasted snapshot, with or without a depth GPU) gets stock
++ * dom.webgpu.enabled=false shape -- never the Apple adapter passed through.
++ */
+ export function webGpuHiddenFor(result, appleSiliconHost = isAppleSiliconHost()) {
+   if (!appleSiliconHost) {
+     return false;
+   }
+-  if (result?.decision !== "persona" || !result.depth) {
++  if (result?.decision !== "persona") {
+     return false;
+   }
++  if (result.persona && !isMacPersona(result.persona)) {
++    return true;
++  }
++  if (!result.depth) {
++    return false;
++  }
+   return !isApplePersonaGpu(result.depth.gpu);
+ }
+ 
