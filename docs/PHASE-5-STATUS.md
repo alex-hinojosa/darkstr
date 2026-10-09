@@ -1700,7 +1700,7 @@ Spec (Alex): each site gets one persona that stays the same on that site, so the
 - Live gate self-test (`darkstr-0058c-*/selftest`, port 8467, headless, `dom.webgpu.enabled=true`; 8 seeded sites, plus pasted Windows / Linux / Mac snapshots and Windows / Linux without a platform field, 2 sites each; stock-off / stock-on references):
   - **0058c: 837/837 PASS.** Every Windows / Linux snapshot document has the stock-off shape in the page and in dedicated / nested / shared / service workers. The Mac snapshot and seeded Apple personas get stock-on; seeded Intel personas get stock-off.
   - **Negative control on main's DMG (`darkstr-0058b-318ac5b0`, = 789f66c): FAIL 597/837.** All 240 failures are the Windows / Linux snapshot documents: WebGPU fully exposed (41 `GPU*` globals) behind a Windows / Linux UA.
-- Residual (not this pin): a pasted Windows / Linux snapshot still reports an Apple WebGL GPU (UNMASKED_VENDOR "Apple"), because the depth GPU follows the host. Making a pasted snapshot's WebGL GPU OS-plausible would be its own pin.
+- The residual noted here (a pasted Windows / Linux snapshot reporting the host's Apple WebGL GPU) is fixed in §5.
 
 ### 2. A user-set `privacy.fingerprintingProtection.pbmode=false` reverts at restart: LibreWolf, not darkstr (documented, no code change)
 - **Cause:**
@@ -1729,3 +1729,26 @@ These are properties of Pollution's pref set, not of the WebGPU gate. Intel-pers
 - `qa/xor55r2/grade51x.py` `[N2] conc tN: loop ran` now needs `>= CONC_MIN` requests: 8 by default, or `XOR_CONC_MIN` on a dedicated host. The old `>= 20` assumed an idle host.
 - It is a liveness / throughput count; every request that ran is still graded for UA, Accept-Language and persona.
 - Proof's parallel-load runs (9 and 12 requests, uaStable) regrade **860/0** default (was 859/1). `XOR_CONC_MIN=20` reproduces the old FAIL.
+
+### 5. Pasted Windows / Linux snapshots report an OS-coherent WebGL GPU (commits bc32b6ee + b120e999)
+- **Root cause (two parts):**
+  - The depth GPU table followed the **host** OS (`_generateDepthFromSeed` → `GPU_BY_OS[detectHostOs()]`), and a snapshot's own `gpu` was used unchecked.
+  - The main one, found by the live check on bc32b6ee: a pasted snapshot with no `canvasSeed` / `audioSeed` and no `darkstr.persona.seed` **never armed the depth layer.** Rotation is locked by the snapshot and `plan.seeds` was null, so WebGL, canvas, audio, fonts, speech and WebGPU were all native. Pages reported the Mac's real GPU (and drew an unnoised canvas) behind a Windows / Linux UA. NativePersona's resolved snapshot also drops `gpu`, so the depth path never saw the snapshot's own strings.
+- **Fix (`patches/0058c-files/DarkstrDepthHooks.sys.mjs`, chrome JS only):**
+  - `personaGpu(snap, gpu, seed)`: on a snapshot whose OS is known (the UA OS token first, then platform: the 0058 `snapshotOs` rule, tested equal), it uses the snapshot's own GPU strings only when `gpuCoherentWithOs`. Otherwise it keeps the derived GPU if coherent, or takes a bucketed default from that OS's table (picked by the canvas seed) and warns once (`console.warn`).
+    - Windows = ANGLE Direct3D renderer + "Google Inc. (<maker>)" vendor.
+    - Linux = native GL with its driver in the string (Mesa, llvmpipe, radeonsi, nouveau, NVIDIA "/PCIe/SSE2"); never ANGLE, Apple or the macOS GL vendors "Intel Inc." / "ATI Technologies Inc.".
+    - macOS = nothing clearly another OS's.
+  - `_readDepthSeeds` decides the GPU from the **raw** pasted snapshot. When the snapshot carries no depth seeds and `darkstr.persona.seed` is unset, it now derives the depth seeds deterministically from the snapshot text (FNV-1a 32 of the trimmed pref): same snapshot, same digests.
+  - Applied on the rotate, golden-snapshot and plan-seed paths of `depthSeedsForBrowsingContext`, so the page and every worker kind get the same GPU.
+  - The per-OS tables have the same length, so the rng index is unchanged. **macOS personas, seed-only and no-snapshot Proof paths are byte-identical** (tests compare against the 0057 code).
+- **Reported strings** go through the unchanged port of Gecko's sanitizer, so they are what stock Firefox gives on that OS:
+  - VENDOR stays "Mozilla".
+  - RENDERER and UNMASKED_RENDERER are equal, e.g. Windows `ANGLE (Intel, Intel(R) HD Graphics 400 Direct3D11 vs_5_0 ps_5_0), or similar` with UNMASKED_VENDOR "Google Inc. (Intel)"; Linux `Intel(R) HD Graphics 400, or similar` with "Intel", `NVIDIA GeForce GTX 980, or similar` with "NVIDIA Corporation", `Radeon R9 200 Series, or similar` with "AMD".
+- **Behaviour change for Proof:** a pasted snapshot without depth seeds now arms the full depth layer (canvas / audio / WebGL / fonts / speech / WebGPU farbling) from snapshot-derived seeds, where it used to be native. Snapshots that carry their own seeds, and `darkstr.persona.seed=42`, are unchanged.
+- Tests: `tests/webgl-gpu-os-0058c.test.mjs` (11 tests) cover coherence of every table entry for its OS only, the sanitized strings per OS, own-GPU used / replaced / warned once, a platform-only snapshot, the seedless snapshot arming (0057 returned null), determinism, and the seed-path identity. npm 334/334.
+- **DMG `darkstr-0058c-b120e999.dmg`** (#96 tip b120e999). dmgverify: both 0058c omni files MATCH. `darkstr-0058c-bc32b6ee.dmg` is superseded (sidecar `.SUPERSEDED.txt`) and kept as a negative control.
+- **Live check** (`darkstr-0058c-*/selftest`, port 8467; the 0058c gate self-test plus WebGL strings in page / dedicated / nested / shared / service workers; adds a Windows snapshot with its own coherent ANGLE GPU and a Linux snapshot with an Apple GPU):
+  - **b120e999: 1303/1303 PASS.** Windows snapshots: ANGLE D3D11 buckets; the own GPU (GTX 1660 SUPER) is reported as stock does (`GTX 980` bucket). Linux snapshots: Mesa / NVIDIA / AMD buckets; the Apple GPU is replaced by a Linux default. The Mac snapshot is unchanged (Apple). Every worker equals its page, and WebGPU stays hidden for Windows / Linux.
+  - **Negative controls:** 9eea6a5 (#96 before this commit, `darkstr-0058c-84d876e7`; that name is the DMG's sha256 prefix, not a commit) **FAIL 1243/1303**, and bc32b6ee **FAIL 1243/1303**. In both, all 60 failures are the Windows / Linux snapshot documents reporting `Apple / Apple M1, or similar`.
+  - **Regression on b120e999:** WebGL / depth 605/605, private windows 71/71, Fable S1 PASS. Keychain: own seed items deleted, none left.
