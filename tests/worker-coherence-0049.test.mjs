@@ -2,6 +2,8 @@
  * 0049: worker coherence (Rowan B3/B4/B5 + builder misses) — behavioural
  * tests against the shipped modules in patches/0049-files, with the 0051
  * page child (patches/0051-files) and minimal XPCOM / DOM stubs.
+ * 0052: DarkstrNativePersona / DarkstrWorkerHooks ship from patches/0052-files
+ * (diagnostics in memory only); the rest still ships from 0049 / 0051.
  *
  *   B3  Dedicated workers report their creating document's persona (UA,
  *       platform, hardwareConcurrency, languages, timezone); Shared/Service
@@ -15,14 +17,17 @@
  */
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join } from "node:path";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const FILES = join(root, "patches/0049-files");
 const FILES51 = join(root, "patches/0051-files");
-const src = (f) => readFileSync(join(FILES, f), "utf8");
+const FILES52 = join(root, "patches/0052-files");
+// Newest shipped copy of a module (0052 supersedes 0049 where it has one).
+const shipped = (f) => (existsSync(join(FILES52, f)) ? join(FILES52, f) : join(FILES, f));
+const src = (f) => readFileSync(shipped(f), "utf8");
 
 const NATIVE_UA =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:156.0) Gecko/20100101 Firefox/156.0";
@@ -125,9 +130,9 @@ globalThis.JSProcessActorParent = class {};
 const wgById = new Map();
 globalThis.WindowGlobalParent = { getByInnerWindowId: (id) => wgById.get(id) || null };
 
-modules.persona = await import(pathToFileURL(join(FILES, "DarkstrNativePersona.sys.mjs")));
+modules.persona = await import(pathToFileURL(shipped("DarkstrNativePersona.sys.mjs")));
 const pageChild = await import(pathToFileURL(join(FILES51, "DarkstrNativePersonaChild.sys.mjs")));
-const workerMod = await import(pathToFileURL(join(FILES, "DarkstrWorkerHooks.sys.mjs")));
+const workerMod = await import(pathToFileURL(shipped("DarkstrWorkerHooks.sys.mjs")));
 const workerChild = await import(pathToFileURL(join(FILES, "DarkstrWorkerHooksChild.sys.mjs")));
 const P = modules.persona.DarkstrNativePersona;
 const W = workerMod.DarkstrWorkerHooks;
@@ -371,7 +376,8 @@ for (const [name, setup] of Object.entries(SETUPS)) {
 
 test("B3: no seed pref still arms workers (session persona, same as page)", () => {
   fresh(ARMED);
-  assert.equal(prefs.get("darkstr.worker.hooksArmed"), true);
+  assert.equal(W.getDiagnostics()["darkstr.worker.hooksArmed"], true);
+  assert.equal(prefs.has("darkstr.worker.hooksArmed"), false, "0052: diag in memory only");
   const t = newTab();
   navigate(t, "https://beta.test/");
   const page = navigate(t, "https://beta.test/2");
@@ -498,7 +504,8 @@ test("defaults (hooks off): C++ never asks chrome; plain Firefox 156 workers", (
   const w = startWorker({ wg: p2.wg });
   assert.equal(w.observed, false);
   assert.equal(w.ua, NATIVE_UA);
-  assert.equal(prefs.get("darkstr.worker.hooksArmed"), false);
+  assert.equal(W.getDiagnostics()["darkstr.worker.hooksArmed"], false);
+  assert.equal(prefs.has("darkstr.worker.hooksArmed"), false, "0052: diag in memory only");
   // Even if asked, chrome answers "off".
   assert.equal(W.resolveWorker({ innerWindowId: p2.wg.innerWindowId }).decision, "off");
   for (const k of ["darkstr.mode", "darkstr.nativePersonaHooks"]) {
@@ -571,12 +578,16 @@ test("C++: WorkerNavigator serves the per-worker persona natively", () => {
 });
 
 test("persona versions and seed persistence untouched (N6 still open)", () => {
+  // 0052 removed the stale 0051 NativePersona copy; compare the shipped
+  // (0052) module with the 0049 one it was cut from.
   const np = src("DarkstrNativePersona.sys.mjs");
-  const np51 = readFileSync(join(FILES51, "DarkstrNativePersona.sys.mjs"), "utf8");
+  const np49 = readFileSync(join(FILES, "DarkstrNativePersona.sys.mjs"), "utf8");
   const ua = (s) => s.slice(s.indexOf("const FIREFOX_UA_GROUPS"), s.indexOf("const CORES"));
-  assert.equal(ua(np), ua(np51), "UA pool identical to 0051");
+  assert.ok(ua(np).length > 100);
+  assert.equal(ua(np), ua(np49), "UA pool identical to 0049");
   const readSnap = (s) => s.slice(s.indexOf("  _readSnapshot() {"), s.indexOf("  _readSnapshotFromFfi("));
-  assert.equal(readSnap(np), readSnap(np51), "seed/snapshot persistence identical to 0051");
+  assert.ok(readSnap(np).length > 100);
+  assert.equal(readSnap(np), readSnap(np49), "seed/snapshot persistence identical to 0049");
 });
 
 // ------------------------------------------------------------- 0049r2 ---

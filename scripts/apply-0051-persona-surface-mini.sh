@@ -16,8 +16,11 @@ PATCH="$HERE/patches/0051-darkstr-persona-surface.patch"
 : "${DARKSTR_GECKO_ROOT:?source ~/src/darkstr-gecko/DARKSTR_GECKO_ROOT.env}"
 R="$DARKSTR_GECKO_ROOT"
 # file in patches/0051-files → path in the tree
+# 0052 (Fable O13): DarkstrNativePersona.sys.mjs is no longer kept here. The
+# 0051 copy predated 0049 and was stale; the live source of truth is
+# patches/0049-files → patches/0052-files. The patch still carries the 0051
+# NativePersona hunks (history), and the grep checks below still cover them.
 MAP=(
-  "DarkstrNativePersona.sys.mjs:browser/components/DarkstrNativePersona.sys.mjs"
   "DarkstrNativePersonaChild.sys.mjs:browser/components/DarkstrNativePersonaChild.sys.mjs"
   "DarkstrNativePersonaParent.sys.mjs:browser/components/DarkstrNativePersonaParent.sys.mjs"
   "DarkstrCookieFirewallChild.sys.mjs:browser/components/DarkstrCookieFirewallChild.sys.mjs"

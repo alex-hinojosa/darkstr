@@ -504,6 +504,81 @@ All five 0043 Worker/SharedWorker WebGPU XOR gates passed on Proof tip `cc692641
 - Evidence: `~/AgentDocs/proof/darkstr-pr74-0043-xor-20260928-084400/`
 - Apply log: `~/AgentDocs/proof/darkstr-pr74-0043-xor-20260928-084400/darkstr-apply-0043-20260928-084400.log`
 
+## In review — 0052 no debug state in prefs.js (Fable QA B1)
+
+| | |
+|---|---|
+| Pin | **0052**: Fable QA **B1** (diagnostics in prefs.js), **O7**, **O13** (stale 0051 NativePersona copy), plus the DepthHooks last-site fallback |
+| Branch | `builder/0052-no-diag-prefs` from `main` @ `5faad83` |
+| Patch | [`patches/0052-darkstr-no-diag-prefs.patch`](../patches/0052-darkstr-no-diag-prefs.patch) + `patches/0052-files/` (7 modules + `SHA256SUMS`) |
+| Apply | `scripts/apply-0052-no-diag-prefs-mini.sh` (chrome JS only; no C++ recompile) |
+| Tests | `tests/no-diag-prefs-0052.test.mjs`; the 0048 / 0049 / 0050 / 0051 tests now load the 0052 copies where they exist |
+| DMG | `~/AgentDocs/builds/darkstr-0052-9bc120b1.dmg` (+ `.sha256`) |
+| Evidence | `~/AgentDocs/proof/darkstr-0052-nodiag-20261009-013950/` |
+
+### Bug
+
+Every chrome module mirrored its last decision into user prefs:
+`darkstr.cookieFirewall.lastCookieOut` / `lastCookieSet` (cookie values),
+`lastEtld` / `lastPartition` / `persona.lastEtld` / `persona.lastDecision`
+(the last site visited), `persona.effectiveSeed` / `cookieFirewall.lastSeed`
+(that site's seed), and more. They were all saved in prefs.js, kept across
+restarts, and readable by anything that can read the profile. Fable's S6 run
+left `lastCookieOut "qa_srv=1; qa_js=S6-b1"` and `lastEtld "lvh.me"` in prefs.js.
+
+### Fix
+
+- Each of DarkstrCookieFirewall, DarkstrNativePersona, DarkstrDepthHooks,
+  DarkstrWorkerHooks, DarkstrChaffScheduler, DarkstrModeXor and DarkstrFfi has
+  the same small `diagPrefs` facade. A diagnostic write lands in an in-memory
+  map and reaches prefs only while **`darkstr.debug.diagPrefs`** is `true`
+  (default `false`; nothing sets it). Values can be read with
+  `X.getDiagnostics()` from chrome. Write sites routed: CF 17, NP 10, DH 6,
+  WH 5, Chaff 4, ModeXor 4, Ffi 2.
+- `DarkstrModeXor` exports `DARKSTR_DIAG_PREFS` (38 names) and
+  `sweepDiagPrefs()`. It runs once in `init()` (BrowserGlue starts ModeXor
+  before any other darkstr module) and again whenever `darkstr.debug.diagPrefs`
+  is switched off. It clears the user values that older builds left behind.
+- No product code read any of these prefs back, except DepthHooks' fallbacks.
+  Those fallbacks are removed:
+  - When the rotate path cannot resolve a frame's own site/seed, it no longer
+    falls back to `persona.lastEtld` / `persona.effectiveSeed` (another site's
+    seed). It returns no depth seeds.
+  - When NativePersona is unavailable, it no longer reads the global
+    `persona.docShellPhase`. It fails closed (`null`).
+- `patches/0051-files/DarkstrNativePersona.sys.mjs` is deleted (O13). It
+  predated 0049 and is not what ships. The live NativePersona source is
+  0049-files → 0052-files. `apply-0051` no longer maps it, but it keeps its
+  BASE_SUMS and grep checks.
+
+### Kept on purpose (functional, not diagnostics)
+
+`darkstr.pollutionActive` (content-process / C++ gate),
+`darkstr.persona.saved*` (exact restore when leaving Pollution),
+`darkstr.cookieFirewall.contentGate` (default branch only) and the
+user-facing config prefs.
+
+### Not changed
+
+- C++: `DarkstrNavigatorHooks::TryGet*` still read `persona.ua|platform|
+  hardwareConcurrency|docShellPhase` and `docshell.strictNextNavArmed`, but
+  have had no callers since 0051 (Navigator.cpp) / 0049 (workers use
+  `PersonaForWorker`). `DarkstrDocShellHooks` writes `strictNextNavArmed`
+  from content processes only (no-op). 0052 stays chrome-JS only; removing
+  the dead C++ belongs in a later pin.
+- The UA still reports Firefox 140 personas (N6 → 0055); seeds stay
+  session-only (→ 0056).
+
+### Self-test (sandbox-exec loopback-only, app from the DMG)
+
+Fable's S6 (Pollution + hooks + cookie firewall `isolate`, a.localtest.me /
+b.lvh.me) behaves the same as before (same Cookie headers, same armed /
+native split). After the run, prefs.js has **0** matches for
+`lastCookie|lastEtld|lastDecision|effectiveSeed|lastPartition`. The same
+holds when starting from a prefs.js seeded with Fable's 34 stale diagnostic
+lines. With `darkstr.debug.diagPrefs=true` the 9 lines come back (positive
+control, `lastCookieOut "qa_srv=1; qa_js=S6-b1"` as in Fable's run).
+
 ## In review — 0048 cookie firewall correctness
 
 | | |

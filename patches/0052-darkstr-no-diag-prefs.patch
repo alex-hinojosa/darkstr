@@ -1,0 +1,902 @@
+--- a/browser/components/DarkstrChaffScheduler.sys.mjs
++++ b/browser/components/DarkstrChaffScheduler.sys.mjs
+@@ -46,6 +46,41 @@
+ const LAST_FIRE_PREF = "darkstr.chaff.lastFireAt";
+ const LAST_BEACON_PREF = "darkstr.chaff.lastBeaconKind";
+ 
++/**
++ * 0052 (Fable B1 / O7): diagnostics stay in memory. They reach prefs.js only
++ * while darkstr.debug.diagPrefs is true (default false; QA / Proof harnesses
++ * set it in user.js). Chrome callers read the same values through
++ * getDiagnostics(). Stale values are swept at startup by DarkstrModeXor.
++ */
++const DIAG_PREFS_PREF = "darkstr.debug.diagPrefs";
++const gDiag = new Map();
++const diagPrefs = {
++  _write(setter, name, value) {
++    gDiag.set(name, value);
++    let on = false;
++    try {
++      on = Services.prefs.getBoolPref(DIAG_PREFS_PREF, false);
++    } catch (_e) {
++      on = false;
++    }
++    if (on === true) {
++      Services.prefs[setter](name, value);
++    }
++  },
++  setBoolPref(name, value) {
++    this._write("setBoolPref", name, value);
++  },
++  setIntPref(name, value) {
++    this._write("setIntPref", name, value);
++  },
++  setStringPref(name, value) {
++    this._write("setStringPref", name, value);
++  },
++  snapshot() {
++    return Object.fromEntries(gDiag);
++  },
++};
++
+ const SCHEDULES = {
+   quiet: { minMin: 8, maxMin: 20, batchMin: 1, batchMax: 1, staggerBase: 4000 },
+   balanced: {
+@@ -479,6 +514,11 @@
+ }
+ 
+ export var DarkstrChaffScheduler = {
++  /** 0052: in-memory diagnostics (what used to be darkstr.*.last* prefs). */
++  getDiagnostics() {
++    return diagPrefs.snapshot();
++  },
++
+   _inited: false,
+   _timer: null,
+   _batchTimers: [],
+@@ -628,13 +668,13 @@
+ 
+   _persistDiagnostics(plan) {
+     try {
+-      Services.prefs.setBoolPref(ARMED_PREF, !!plan.armed);
++      diagPrefs.setBoolPref(ARMED_PREF, !!plan.armed);
+     } catch (_e) {}
+     try {
+       const summary = plan.armed
+         ? `${plan.level};interval=${plan.intervalMinutes?.toFixed?.(2) ?? "?"};batch=${plan.beaconCount}`
+         : `${plan.level};idle`;
+-      Services.prefs.setStringPref(LAST_PLAN_PREF, summary);
++      diagPrefs.setStringPref(LAST_PLAN_PREF, summary);
+     } catch (_e) {}
+   },
+ 
+@@ -752,13 +792,13 @@
+       });
+ 
+       try {
+-        Services.prefs.setStringPref(
++        diagPrefs.setStringPref(
+           LAST_FIRE_PREF,
+           `${new Date().toISOString()};${level};${index + 1}/${total};${cfg.endpoint};${cfg.kind}`
+         );
+       } catch (_e) {}
+       try {
+-        Services.prefs.setStringPref(
++        diagPrefs.setStringPref(
+           LAST_BEACON_PREF,
+           `${cfg.kind};clusters=${(this._persona.activeClusters || [])
+             .map(c => c.name)
+--- a/browser/components/DarkstrCookieFirewall.sys.mjs
++++ b/browser/components/DarkstrCookieFirewall.sys.mjs
+@@ -121,6 +121,41 @@
+ const LAST_COOKIE_SET_PREF = "darkstr.cookieFirewall.lastCookieSet";
+ const LAST_COOKIE_ERR_PREF = "darkstr.cookieFirewall.lastCookieErr";
+ 
++/**
++ * 0052 (Fable B1 / O7): diagnostics stay in memory. They reach prefs.js only
++ * while darkstr.debug.diagPrefs is true (default false; QA / Proof harnesses
++ * set it in user.js). Chrome callers read the same values through
++ * getDiagnostics(). Stale values are swept at startup by DarkstrModeXor.
++ */
++const DIAG_PREFS_PREF = "darkstr.debug.diagPrefs";
++const gDiag = new Map();
++const diagPrefs = {
++  _write(setter, name, value) {
++    gDiag.set(name, value);
++    let on = false;
++    try {
++      on = Services.prefs.getBoolPref(DIAG_PREFS_PREF, false);
++    } catch (_e) {
++      on = false;
++    }
++    if (on === true) {
++      Services.prefs[setter](name, value);
++    }
++  },
++  setBoolPref(name, value) {
++    this._write("setBoolPref", name, value);
++  },
++  setIntPref(name, value) {
++    this._write("setIntPref", name, value);
++  },
++  setStringPref(name, value) {
++    this._write("setStringPref", name, value);
++  },
++  snapshot() {
++    return Object.fromEntries(gDiag);
++  },
++};
++
+ const SNAPSHOT_PREF = "darkstr.persona.snapshot";
+ const SEED_PREF = "darkstr.persona.seed";
+ const ROTATE_PER_SITE_PREF = "darkstr.persona.rotatePerSite";
+@@ -771,6 +806,11 @@
+ }
+ 
+ export var DarkstrCookieFirewall = {
++  /** 0052: in-memory diagnostics (what used to be darkstr.*.last* prefs). */
++  getDiagnostics() {
++    return diagPrefs.snapshot();
++  },
++
+   _inited: false,
+   _actorRegistered: false,
+   _observer: null,
+@@ -985,7 +1025,7 @@
+   _setArmed(armed) {
+     this._armed = !!armed;
+     try {
+-      Services.prefs.setBoolPref(ARMED_PREF, this._armed);
++      diagPrefs.setBoolPref(ARMED_PREF, this._armed);
+     } catch (_e) {}
+     this._setContentGate(this._armed);
+     if (!this._armed && this._jar) {
+@@ -1193,16 +1233,16 @@
+   _writeDiag(etld, seed, decision, jarKey) {
+     try {
+       if (etld) {
+-        Services.prefs.setStringPref(LAST_ETLD_PREF, String(etld));
++        diagPrefs.setStringPref(LAST_ETLD_PREF, String(etld));
+       }
+       if (typeof seed === "number") {
+-        Services.prefs.setIntPref(LAST_SEED_PREF, seed >>> 0);
++        diagPrefs.setIntPref(LAST_SEED_PREF, seed >>> 0);
+       }
+       if (decision) {
+-        Services.prefs.setStringPref(LAST_DECISION_PREF, String(decision));
++        diagPrefs.setStringPref(LAST_DECISION_PREF, String(decision));
+       }
+       if (jarKey) {
+-        Services.prefs.setStringPref(LAST_PARTITION_PREF, String(jarKey));
++        diagPrefs.setStringPref(LAST_PARTITION_PREF, String(jarKey));
+       }
+     } catch (_e) {}
+   },
+@@ -1568,7 +1608,7 @@
+ 
+   recordInstallStatus(detail, _bc) {
+     try {
+-      Services.prefs.setStringPref(
++      diagPrefs.setStringPref(
+         LAST_INSTALL_PREF,
+         JSON.stringify({
+           ok: !!detail?.ok,
+@@ -1578,12 +1618,12 @@
+         })
+       );
+       if (detail?.error) {
+-        Services.prefs.setStringPref(
++        diagPrefs.setStringPref(
+           LAST_ERROR_PREF,
+           String(detail.error).slice(0, 1000)
+         );
+       } else {
+-        Services.prefs.setStringPref(LAST_ERROR_PREF, "");
++        diagPrefs.setStringPref(LAST_ERROR_PREF, "");
+       }
+     } catch (_e) {}
+   },
+@@ -1841,7 +1881,7 @@
+       channel = subject.QueryInterface(Ci.nsIHttpChannel);
+     } catch (_e) {
+       try {
+-        Services.prefs.setStringPref(
++        diagPrefs.setStringPref(
+           LAST_COOKIE_ERR_PREF,
+           "qi-fail:" + String(_e).slice(0, 200)
+         );
+@@ -1853,8 +1893,8 @@
+       return;
+     }
+     try {
+-      Services.prefs.setStringPref(LAST_HTTP_TOPIC_PREF, String(topic || ""));
+-      Services.prefs.setStringPref(LAST_HTTP_ETLD_PREF, String(ctx.req.base || ""));
++      diagPrefs.setStringPref(LAST_HTTP_TOPIC_PREF, String(topic || ""));
++      diagPrefs.setStringPref(LAST_HTTP_ETLD_PREF, String(ctx.req.base || ""));
+     } catch (_e) {}
+     if (ctx.decision !== "sandbox") {
+       this._writeDiag(ctx.top.base, 0, ctx.decision, null);
+@@ -1866,7 +1906,7 @@
+       if (ctx.anonymous) {
+         // credentials 'omit' / anonymous: Gecko adds no Cookie; neither do we.
+         try {
+-          Services.prefs.setStringPref(LAST_COOKIE_OUT_PREF, "<anonymous>");
++          diagPrefs.setStringPref(LAST_COOKIE_OUT_PREF, "<anonymous>");
+         } catch (_e) {}
+         return;
+       }
+@@ -1893,7 +1933,7 @@
+       );
+       this._writeDiag(ctx.top.base, undefined, "sandbox", ctx.readKeys.join(","));
+       try {
+-        Services.prefs.setStringPref(LAST_COOKIE_OUT_PREF, cookie.slice(0, 500));
++        diagPrefs.setStringPref(LAST_COOKIE_OUT_PREF, cookie.slice(0, 500));
+       } catch (_e) {}
+       try {
+         // Replace outbound Cookie with the sandbox view (empty if none) so
+@@ -1906,19 +1946,19 @@
+           verify = "";
+         }
+         try {
+-          Services.prefs.setStringPref(
++          diagPrefs.setStringPref(
+             LAST_COOKIE_SET_PREF,
+             String(verify || "").slice(0, 500)
+           );
+-          Services.prefs.setStringPref(LAST_COOKIE_ERR_PREF, "");
++          diagPrefs.setStringPref(LAST_COOKIE_ERR_PREF, "");
+         } catch (_e2) {}
+       } catch (e) {
+         try {
+-          Services.prefs.setStringPref(
++          diagPrefs.setStringPref(
+             LAST_COOKIE_ERR_PREF,
+             "set-fail:" + String(e).slice(0, 400)
+           );
+-          Services.prefs.setStringPref(LAST_COOKIE_SET_PREF, "");
++          diagPrefs.setStringPref(LAST_COOKIE_SET_PREF, "");
+         } catch (_e2) {}
+       }
+       return;
+--- a/browser/components/DarkstrDepthHooks.sys.mjs
++++ b/browser/components/DarkstrDepthHooks.sys.mjs
+@@ -54,6 +54,41 @@
+ const LAST_ERROR_PREF = "darkstr.depth.lastError";
+ const LAST_INSTALL_PREF = "darkstr.depth.lastInstall";
+ 
++/**
++ * 0052 (Fable B1 / O7): diagnostics stay in memory. They reach prefs.js only
++ * while darkstr.debug.diagPrefs is true (default false; QA / Proof harnesses
++ * set it in user.js). Chrome callers read the same values through
++ * getDiagnostics(). Stale values are swept at startup by DarkstrModeXor.
++ */
++const DIAG_PREFS_PREF = "darkstr.debug.diagPrefs";
++const gDiag = new Map();
++const diagPrefs = {
++  _write(setter, name, value) {
++    gDiag.set(name, value);
++    let on = false;
++    try {
++      on = Services.prefs.getBoolPref(DIAG_PREFS_PREF, false);
++    } catch (_e) {
++      on = false;
++    }
++    if (on === true) {
++      Services.prefs[setter](name, value);
++    }
++  },
++  setBoolPref(name, value) {
++    this._write("setBoolPref", name, value);
++  },
++  setIntPref(name, value) {
++    this._write("setIntPref", name, value);
++  },
++  setStringPref(name, value) {
++    this._write("setStringPref", name, value);
++  },
++  snapshot() {
++    return Object.fromEntries(gDiag);
++  },
++};
++
+ // Host-OS filtered Firefox-family GPU pairs (thin subset of profiles.js).
+ const GPU_BY_OS = {
+   macos: [
+@@ -173,6 +208,11 @@
+ }
+ 
+ export var DarkstrDepthHooks = {
++  /** 0052: in-memory diagnostics (what used to be darkstr.*.last* prefs). */
++  getDiagnostics() {
++    return diagPrefs.snapshot();
++  },
++
+   _inited: false,
+   _actorRegistered: false,
+   _observer: null,
+@@ -318,15 +358,15 @@
+       }
+     } catch (_e) {}
+     try {
+-      Services.prefs.setStringPref(LAST_INSTALL_PREF, JSON.stringify(payload));
++      diagPrefs.setStringPref(LAST_INSTALL_PREF, JSON.stringify(payload));
+     } catch (e) {
+       console.error("darkstr depth lastInstall write failed", e);
+     }
+     try {
+       if (payload.ok) {
+-        Services.prefs.setStringPref(LAST_ERROR_PREF, "");
++        diagPrefs.setStringPref(LAST_ERROR_PREF, "");
+       } else {
+-        Services.prefs.setStringPref(
++        diagPrefs.setStringPref(
+           LAST_ERROR_PREF,
+           `${payload.event}:${payload.status}:${payload.error}`.slice(0, 1000)
+         );
+@@ -382,17 +422,10 @@
+               etld = DarkstrNativePersona._etldPlus1FromBrowsingContext(bc);
+             }
+           } catch (_eEtld) {}
+-          if (!etld) {
+-            try {
+-              const last = Services.prefs.getStringPref(
+-                "darkstr.persona.lastEtld",
+-                ""
+-              );
+-              if (last && String(last).trim()) {
+-                etld = String(last).trim();
+-              }
+-            } catch (_eLast) {}
+-          }
++          // 0052 (Fable O13 / DH fallback): no fallback to the last visited
++          // site. darkstr.persona.lastEtld / effectiveSeed were global
++          // "last writer wins" prefs, so a frame whose own site could not be
++          // resolved took another site's depth seeds. Now it gets none.
+           let seed = 0;
+           if (etld && DarkstrNativePersona._seedForEtld) {
+             try {
+@@ -402,14 +435,7 @@
+             }
+           }
+           if (!seed) {
+-            try {
+-              seed = Services.prefs.getIntPref(
+-                "darkstr.persona.effectiveSeed",
+-                0
+-              ) >>> 0;
+-            } catch (_eEff) {
+-              seed = 0;
+-            }
++            return null;
+           }
+           if (seed) {
+             const derived = this._generateDepthFromSeed(seed);
+@@ -451,22 +477,10 @@
+         }
+       }
+     } catch (_e) {
+-      // Fallback: phase mirror when NativePersona unavailable.
+-      try {
+-        const strictFirst = Services.prefs.getBoolPref(
+-          "darkstr.strictFirstDoc",
+-          true
+-        );
+-        if (strictFirst) {
+-          const phase = Services.prefs.getStringPref(
+-            "darkstr.persona.docShellPhase",
+-            ""
+-          );
+-          if (phase !== "subsequent_nav") {
+-            return null;
+-          }
+-        }
+-      } catch (_e2) {}
++      // 0052: NativePersona unavailable → no per-tab phase or site decision.
++      // The global darkstr.persona.docShellPhase mirror is diagnostics only
++      // now (and was another tab's last load anyway), so fail closed.
++      return null;
+     }
+     const fontSeedOut =
+       (plan.seeds.fontSeed >>> 0) ||
+@@ -632,7 +646,7 @@
+   _writeLastSeeds(seeds) {
+     try {
+       if (seeds) {
+-        Services.prefs.setStringPref(
++        diagPrefs.setStringPref(
+           LAST_SEEDS_PREF,
+           JSON.stringify((() => {
+             const fontSeed =
+@@ -657,7 +671,7 @@
+           })())
+         );
+       } else {
+-        Services.prefs.setStringPref(LAST_SEEDS_PREF, "");
++        diagPrefs.setStringPref(LAST_SEEDS_PREF, "");
+       }
+     } catch (_e) {}
+   },
+@@ -665,7 +679,7 @@
+   _setArmed(armed, seeds) {
+     this._armed = !!armed;
+     try {
+-      Services.prefs.setBoolPref(ARMED_PREF, this._armed);
++      diagPrefs.setBoolPref(ARMED_PREF, this._armed);
+     } catch (_e) {}
+     if (this._armed && seeds) {
+       this._writeLastSeeds(seeds);
+--- a/browser/components/DarkstrFfi.sys.mjs
++++ b/browser/components/DarkstrFfi.sys.mjs
+@@ -31,6 +31,41 @@
+ const LAST_ERROR_PREF = "darkstr.ffi.lastError";
+ const LOAD_SOURCE_PREF = "darkstr.ffi.loadSource";
+ 
++/**
++ * 0052 (Fable B1 / O7): diagnostics stay in memory. They reach prefs.js only
++ * while darkstr.debug.diagPrefs is true (default false; QA / Proof harnesses
++ * set it in user.js). Chrome callers read the same values through
++ * getDiagnostics(). Stale values are swept at startup by DarkstrModeXor.
++ */
++const DIAG_PREFS_PREF = "darkstr.debug.diagPrefs";
++const gDiag = new Map();
++const diagPrefs = {
++  _write(setter, name, value) {
++    gDiag.set(name, value);
++    let on = false;
++    try {
++      on = Services.prefs.getBoolPref(DIAG_PREFS_PREF, false);
++    } catch (_e) {
++      on = false;
++    }
++    if (on === true) {
++      Services.prefs[setter](name, value);
++    }
++  },
++  setBoolPref(name, value) {
++    this._write("setBoolPref", name, value);
++  },
++  setIntPref(name, value) {
++    this._write("setIntPref", name, value);
++  },
++  setStringPref(name, value) {
++    this._write("setStringPref", name, value);
++  },
++  snapshot() {
++    return Object.fromEntries(gDiag);
++  },
++};
++
+ let gLib = null;
+ let gAbiVersion = null;
+ let gSnapshot = null;
+@@ -51,14 +86,14 @@
+ function setLoadError(msg) {
+   gLoadError = msg;
+   try {
+-    Services.prefs.setStringPref(LAST_ERROR_PREF, String(msg || "").slice(0, 500));
++    diagPrefs.setStringPref(LAST_ERROR_PREF, String(msg || "").slice(0, 500));
+   } catch (_e) {}
+ }
+ 
+ function setLoadSource(src) {
+   gLoadSource = src;
+   try {
+-    Services.prefs.setStringPref(LOAD_SOURCE_PREF, String(src || ""));
++    diagPrefs.setStringPref(LOAD_SOURCE_PREF, String(src || ""));
+   } catch (_e) {}
+ }
+ 
+@@ -224,6 +259,11 @@
+ }
+ 
+ export var DarkstrFfi = {
++  /** 0052: in-memory diagnostics (what used to be darkstr.*.last* prefs). */
++  getDiagnostics() {
++    return diagPrefs.snapshot();
++  },
++
+   personaSnapshotFromSeed,
+   abiVersion,
+   lastLoadError,
+--- a/browser/components/DarkstrModeXor.sys.mjs
++++ b/browser/components/DarkstrModeXor.sys.mjs
+@@ -47,7 +47,123 @@
+ const WEBGL_ENSURE_APPLIED_PREF = "darkstr.webgl.ensureApplied";
+ const WEBGL_LAST_STATUS_PREF = "darkstr.webgl.lastStatus";
+ 
++/**
++ * 0052 (Fable B1 / O7): diagnostics stay in memory. They reach prefs.js only
++ * while darkstr.debug.diagPrefs is true (default false; QA / Proof harnesses
++ * set it in user.js). Chrome callers read the same values through
++ * getDiagnostics(). Stale values are swept at startup by DarkstrModeXor.
++ */
++const DIAG_PREFS_PREF = "darkstr.debug.diagPrefs";
++const gDiag = new Map();
++const diagPrefs = {
++  _write(setter, name, value) {
++    gDiag.set(name, value);
++    let on = false;
++    try {
++      on = Services.prefs.getBoolPref(DIAG_PREFS_PREF, false);
++    } catch (_e) {
++      on = false;
++    }
++    if (on === true) {
++      Services.prefs[setter](name, value);
++    }
++  },
++  setBoolPref(name, value) {
++    this._write("setBoolPref", name, value);
++  },
++  setIntPref(name, value) {
++    this._write("setIntPref", name, value);
++  },
++  setStringPref(name, value) {
++    this._write("setStringPref", name, value);
++  },
++  snapshot() {
++    return Object.fromEntries(gDiag);
++  },
++};
++
++/**
++ * 0052 (Fable B1): every darkstr diagnostic / mirror pref. None of them is
++ * read back by product code; with darkstr.debug.diagPrefs false they live in
++ * memory only (module getDiagnostics()). Values left in prefs.js by older
++ * builds are cleared at startup (init) and whenever diagPrefs is switched off.
++ * Functional state is NOT listed here: darkstr.pollutionActive (content gate),
++ * darkstr.persona.saved* (exact restore), darkstr.cookieFirewall.contentGate
++ * (default branch only), and the user-facing config prefs.
++ */
++export const DARKSTR_DIAG_PREFS = Object.freeze([
++  "darkstr.cookieFirewall.armed",
++  "darkstr.cookieFirewall.lastEtld",
++  "darkstr.cookieFirewall.lastSeed",
++  "darkstr.cookieFirewall.lastDecision",
++  "darkstr.cookieFirewall.lastPartition",
++  "darkstr.cookieFirewall.lastInstall",
++  "darkstr.cookieFirewall.lastError",
++  "darkstr.cookieFirewall.lastHttpTopic",
++  "darkstr.cookieFirewall.lastHttpEtld",
++  "darkstr.cookieFirewall.lastCookieOut",
++  "darkstr.cookieFirewall.lastCookieSet",
++  "darkstr.cookieFirewall.lastCookieErr",
++  "darkstr.persona.lastEtld",
++  "darkstr.persona.effectiveSeed",
++  "darkstr.persona.ua",
++  "darkstr.persona.platform",
++  "darkstr.persona.hardwareConcurrency",
++  "darkstr.persona.languages",
++  "darkstr.persona.docShellPhase",
++  "darkstr.persona.lastError",
++  "darkstr.persona.lastDecision",
++  "darkstr.docshell.strictNextNavArmed",
++  "darkstr.depth.hooksArmed",
++  "darkstr.depth.lastSeeds",
++  "darkstr.depth.lastError",
++  "darkstr.depth.lastInstall",
++  "darkstr.worker.hooksArmed",
++  "darkstr.worker.lastPayload",
++  "darkstr.worker.lastError",
++  "darkstr.worker.lastInstall",
++  "darkstr.chaff.schedulerArmed",
++  "darkstr.chaff.lastPlan",
++  "darkstr.chaff.lastFireAt",
++  "darkstr.chaff.lastBeaconKind",
++  "darkstr.webgl.ensureApplied",
++  "darkstr.webgl.lastStatus",
++  "darkstr.ffi.lastError",
++  "darkstr.ffi.loadSource",
++]);
++
++/**
++ * Clear user values of every DARKSTR_DIAG_PREFS entry unless diagPrefs is on.
++ * @returns {string[]} the prefs that were cleared.
++ */
++export function sweepDiagPrefs() {
++  let on = false;
++  try {
++    on = Services.prefs.getBoolPref(DIAG_PREFS_PREF, false);
++  } catch (_e) {
++    on = false;
++  }
++  if (on === true) {
++    return [];
++  }
++  const cleared = [];
++  for (const name of DARKSTR_DIAG_PREFS) {
++    try {
++      if (Services.prefs.prefHasUserValue(name)) {
++        Services.prefs.clearUserPref(name);
++        cleared.push(name);
++      }
++    } catch (_e) {}
++  }
++  return cleared;
++}
++
+ export var DarkstrModeXor = {
++  /** 0052: in-memory diagnostics (what used to be darkstr.*.last* prefs). */
++  getDiagnostics() {
++    return diagPrefs.snapshot();
++  },
++
+   _inited: false,
+   _applying: false,
+ 
+@@ -56,7 +172,10 @@
+       return;
+     }
+     this._inited = true;
++    // 0052: drop diagnostics an older build (or a diag session) left behind.
++    this._lastSweep = sweepDiagPrefs();
+     this._observer = this._observe.bind(this);
++    Services.prefs.addObserver(DIAG_PREFS_PREF, this._observer);
+     Services.prefs.addObserver(MODE_PREF, this._observer);
+     Services.prefs.addObserver(NATIVE_PREF, this._observer);
+     Services.prefs.addObserver(RFP_PREF, this._observer);
+@@ -74,6 +193,7 @@
+       return;
+     }
+     try {
++      Services.prefs.removeObserver(DIAG_PREFS_PREF, this._observer);
+       Services.prefs.removeObserver(MODE_PREF, this._observer);
+       Services.prefs.removeObserver(NATIVE_PREF, this._observer);
+       Services.prefs.removeObserver(RFP_PREF, this._observer);
+@@ -113,6 +233,11 @@
+     if (topic !== "nsPref:changed") {
+       return;
+     }
++    if (data === DIAG_PREFS_PREF) {
++      // 0052: switching diagnostics off removes them from prefs.js at once.
++      this._lastSweep = sweepDiagPrefs();
++      return;
++    }
+     if (this._applying) {
+       return;
+     }
+@@ -254,15 +379,15 @@
+ 
+       const status = bits.join(",").slice(0, 400);
+       const ensureOk = !disabled && lwPrompt !== "true";
+-      Services.prefs.setBoolPref(WEBGL_ENSURE_APPLIED_PREF, ensureOk);
+-      Services.prefs.setStringPref(WEBGL_LAST_STATUS_PREF, status);
++      diagPrefs.setBoolPref(WEBGL_ENSURE_APPLIED_PREF, ensureOk);
++      diagPrefs.setStringPref(WEBGL_LAST_STATUS_PREF, status);
+     } catch (e) {
+       try {
+-        Services.prefs.setBoolPref(WEBGL_ENSURE_APPLIED_PREF, false);
++        diagPrefs.setBoolPref(WEBGL_ENSURE_APPLIED_PREF, false);
+         const reason =
+           "webgl-ensure: " +
+           (e && e.message ? String(e.message) : String(e)).slice(0, 160);
+-        Services.prefs.setStringPref(WEBGL_LAST_STATUS_PREF, reason);
++        diagPrefs.setStringPref(WEBGL_LAST_STATUS_PREF, reason);
+       } catch (_e2) {}
+     }
+   },
+--- a/browser/components/DarkstrNativePersona.sys.mjs
++++ b/browser/components/DarkstrNativePersona.sys.mjs
+@@ -92,6 +92,41 @@
+ const PERSONA_LAST_ERROR_PREF = "darkstr.persona.lastError";
+ /** 0051 diag: last top-level document decision {site, armed, ua, al}. */
+ const LAST_DECISION_PREF = "darkstr.persona.lastDecision";
++
++/**
++ * 0052 (Fable B1 / O7): diagnostics stay in memory. They reach prefs.js only
++ * while darkstr.debug.diagPrefs is true (default false; QA / Proof harnesses
++ * set it in user.js). Chrome callers read the same values through
++ * getDiagnostics(). Stale values are swept at startup by DarkstrModeXor.
++ */
++const DIAG_PREFS_PREF = "darkstr.debug.diagPrefs";
++const gDiag = new Map();
++const diagPrefs = {
++  _write(setter, name, value) {
++    gDiag.set(name, value);
++    let on = false;
++    try {
++      on = Services.prefs.getBoolPref(DIAG_PREFS_PREF, false);
++    } catch (_e) {
++      on = false;
++    }
++    if (on === true) {
++      Services.prefs[setter](name, value);
++    }
++  },
++  setBoolPref(name, value) {
++    this._write("setBoolPref", name, value);
++  },
++  setIntPref(name, value) {
++    this._write("setIntPref", name, value);
++  },
++  setStringPref(name, value) {
++    this._write("setStringPref", name, value);
++  },
++  snapshot() {
++    return Object.fromEntries(gDiag);
++  },
++};
+ const ACTOR_NAME = "DarkstrNativePersona";
+ const MSG_INSTALL = "DarkstrNativePersona:Install";
+ const MSG_REFRESH = "DarkstrNativePersona:Refresh";
+@@ -206,6 +241,11 @@
+ }
+ 
+ export var DarkstrNativePersona = {
++  /** 0052: in-memory diagnostics (what used to be darkstr.*.last* prefs). */
++  getDiagnostics() {
++    return diagPrefs.snapshot();
++  },
++
+   _inited: false,
+   _actorRegistered: false,
+   _httpObserver: null,
+@@ -391,7 +431,7 @@
+   _syncPhaseMirrorFromCount(n) {
+     const phase = n <= 1 ? "first_document" : "subsequent_nav";
+     try {
+-      Services.prefs.setStringPref(DOCSHELL_PHASE_MIRROR_PREF, phase);
++      diagPrefs.setStringPref(DOCSHELL_PHASE_MIRROR_PREF, phase);
+     } catch (_e) {}
+     this._syncStrictNextNavArmedDiag(phase);
+   },
+@@ -603,9 +643,9 @@
+   _writeEffectiveDiag(etld, seed) {
+     try {
+       if (etld) {
+-        Services.prefs.setStringPref(LAST_ETLD_PREF, String(etld));
++        diagPrefs.setStringPref(LAST_ETLD_PREF, String(etld));
+       }
+-      Services.prefs.setIntPref(EFFECTIVE_SEED_PREF, seed >>> 0);
++      diagPrefs.setIntPref(EFFECTIVE_SEED_PREF, seed >>> 0);
+     } catch (_e) {}
+   },
+ 
+@@ -674,8 +714,8 @@
+       if (!snapshot?.userAgent) {
+         return;
+       }
+-      Services.prefs.setStringPref(UA_MIRROR_PREF, snapshot.userAgent);
+-      Services.prefs.setStringPref(
++      diagPrefs.setStringPref(UA_MIRROR_PREF, snapshot.userAgent);
++      diagPrefs.setStringPref(
+         PLATFORM_MIRROR_PREF,
+         snapshot.platform || "MacIntel"
+       );
+@@ -684,7 +724,7 @@
+           Services.prefs.clearUserPref(HW_MIRROR_PREF);
+         }
+       } catch (_eHw) {}
+-      Services.prefs.setIntPref(
++      diagPrefs.setIntPref(
+         HW_MIRROR_PREF,
+         Number(snapshot.hardwareConcurrency) || 8
+       );
+@@ -792,7 +832,7 @@
+     // not clear here while applyNativeBase (would race multi-tab sites).
+     try {
+       if (this._plan.applyNativeBase && snapshot?.userAgent) {
+-        Services.prefs.setStringPref(UA_MIRROR_PREF, snapshot.userAgent);
++        diagPrefs.setStringPref(UA_MIRROR_PREF, snapshot.userAgent);
+       } else if (
+         !this._plan.applyNativeBase &&
+         Services.prefs.prefHasUserValue(UA_MIRROR_PREF)
+@@ -1115,7 +1155,7 @@
+   _syncStrictNextNavArmedDiag(phase) {
+     try {
+       const armed = this.strictNextNavArmed(phase);
+-      Services.prefs.setBoolPref(STRICT_NEXT_NAV_ARMED_PREF, armed);
++      diagPrefs.setBoolPref(STRICT_NEXT_NAV_ARMED_PREF, armed);
+     } catch (_e) {}
+   },
+ 
+@@ -1639,7 +1679,7 @@
+       }
+     } catch (e) {
+       try {
+-        Services.prefs.setStringPref(
++        diagPrefs.setStringPref(
+           PERSONA_LAST_ERROR_PREF,
+           ("timezoneOverride: " + String(e?.message || e)).slice(0, 200)
+         );
+@@ -1668,7 +1708,7 @@
+ 
+   _writeDecisionDiag(channel, decision, ua, al) {
+     try {
+-      Services.prefs.setStringPref(
++      diagPrefs.setStringPref(
+         LAST_DECISION_PREF,
+         JSON.stringify({
+           site: decision?.site || "",
+--- a/browser/components/DarkstrWorkerHooks.sys.mjs
++++ b/browser/components/DarkstrWorkerHooks.sys.mjs
+@@ -46,6 +46,41 @@
+ const LAST_ERROR_PREF = "darkstr.worker.lastError";
+ const LAST_INSTALL_PREF = "darkstr.worker.lastInstall";
+ 
++/**
++ * 0052 (Fable B1 / O7): diagnostics stay in memory. They reach prefs.js only
++ * while darkstr.debug.diagPrefs is true (default false; QA / Proof harnesses
++ * set it in user.js). Chrome callers read the same values through
++ * getDiagnostics(). Stale values are swept at startup by DarkstrModeXor.
++ */
++const DIAG_PREFS_PREF = "darkstr.debug.diagPrefs";
++const gDiag = new Map();
++const diagPrefs = {
++  _write(setter, name, value) {
++    gDiag.set(name, value);
++    let on = false;
++    try {
++      on = Services.prefs.getBoolPref(DIAG_PREFS_PREF, false);
++    } catch (_e) {
++      on = false;
++    }
++    if (on === true) {
++      Services.prefs[setter](name, value);
++    }
++  },
++  setBoolPref(name, value) {
++    this._write("setBoolPref", name, value);
++  },
++  setIntPref(name, value) {
++    this._write("setIntPref", name, value);
++  },
++  setStringPref(name, value) {
++    this._write("setStringPref", name, value);
++  },
++  snapshot() {
++    return Object.fromEntries(gDiag);
++  },
++};
++
+ export const WORKER_PERSONA_ACTOR = "DarkstrWorkerPersona";
+ export const WORKER_PERSONA_TOPIC = "darkstr-worker-persona-resolve";
+ export const MSG_RESOLVE = "DarkstrWorkerHooks:Resolve";
+@@ -106,6 +141,11 @@
+ }
+ 
+ export var DarkstrWorkerHooks = {
++  /** 0052: in-memory diagnostics (what used to be darkstr.*.last* prefs). */
++  getDiagnostics() {
++    return diagPrefs.snapshot();
++  },
++
+   _inited: false,
+   _actorRegistered: false,
+   _listening: false,
+@@ -325,7 +365,7 @@
+ 
+   _writeLastPayload(out) {
+     try {
+-      Services.prefs.setStringPref(
++      diagPrefs.setStringPref(
+         LAST_PAYLOAD_PREF,
+         JSON.stringify({
+           kind: out.kind,
+@@ -355,10 +395,10 @@
+       at: new Date().toISOString(),
+     };
+     try {
+-      Services.prefs.setStringPref(LAST_INSTALL_PREF, JSON.stringify(payload));
++      diagPrefs.setStringPref(LAST_INSTALL_PREF, JSON.stringify(payload));
+     } catch (_e) {}
+     try {
+-      Services.prefs.setStringPref(
++      diagPrefs.setStringPref(
+         LAST_ERROR_PREF,
+         payload.ok ? "" : `${payload.event}:${payload.status}:${payload.error}`.slice(0, 1000)
+       );
+@@ -368,11 +408,11 @@
+   _setArmed(armed) {
+     this._armed = !!armed;
+     try {
+-      Services.prefs.setBoolPref(ARMED_PREF, this._armed);
++      diagPrefs.setBoolPref(ARMED_PREF, this._armed);
+     } catch (_e) {}
+     if (!this._armed) {
+       try {
+-        Services.prefs.setStringPref(LAST_PAYLOAD_PREF, "");
++        diagPrefs.setStringPref(LAST_PAYLOAD_PREF, "");
+       } catch (_e) {}
+     }
+   },

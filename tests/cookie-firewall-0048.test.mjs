@@ -8,6 +8,8 @@
  *
  * The child actor under test is the shipped one: patches/0051-files when
  * present (0051 N4: prototype-level, native-shaped hooks), else 0048-files.
+ * The parent module is the shipped one too: patches/0052-files when present
+ * (0052: diagnostics in memory unless darkstr.debug.diagPrefs), else 0048.
  *
  * 0048r2 (Proof FAILED f3f1e748): F1 response ordering (suspend until the
  * content cache acked), F2 A-B-A / cross-site no-cors fetch (Gecko TCP +
@@ -26,6 +28,9 @@ const FILES = join(root, "patches/0048-files");
 const CHILD_FILES = existsSync(join(root, "patches/0051-files/DarkstrCookieFirewallChild.sys.mjs"))
   ? join(root, "patches/0051-files")
   : FILES;
+const FW_FILE = existsSync(join(root, "patches/0052-files/DarkstrCookieFirewall.sys.mjs"))
+  ? join(root, "patches/0052-files/DarkstrCookieFirewall.sys.mjs")
+  : join(FILES, "DarkstrCookieFirewall.sys.mjs");
 const FW_URL = "moz-src:///browser/components/DarkstrCookieFirewall.sys.mjs";
 
 // ---------------------------------------------------------------- stubs ---
@@ -141,7 +146,7 @@ globalThis.JSWindowActorParent = class {};
 const wgById = new Map();
 globalThis.WindowGlobalParent = { getByInnerWindowId: (id) => wgById.get(id) || null };
 
-const fwMod = await import(pathToFileURL(join(FILES, "DarkstrCookieFirewall.sys.mjs")));
+const fwMod = await import(pathToFileURL(FW_FILE));
 registry[FW_URL] = fwMod;
 const childMod = await import(
   pathToFileURL(join(CHILD_FILES, "DarkstrCookieFirewallChild.sys.mjs"))
@@ -735,7 +740,7 @@ test("non-http(s) principal documents are never hooked and cause no IPC", () => 
 });
 
 test("module header claim (line 29) is backed: strip + hook-every-document + residual named", () => {
-  const src = readFileSync(join(FILES, "DarkstrCookieFirewall.sys.mjs"), "utf8");
+  const src = readFileSync(FW_FILE, "utf8");
   assert.match(src, /kept out of the primary profile jar/);
   assert.match(src, /before SetCookieHeaders/);
   assert.match(src, /ServiceWorkerGlobalScope\.cookieStore/);
@@ -1088,6 +1093,53 @@ test("F3: C++ gate patch covers document, CookieStore, workers and change events
   assert.match(section("netwerk/cookie/CookieCommons.cpp"), /CheckGlobalAndRetrieveCookiePrincipals/);
   assert.match(patch, /"darkstr-cookie-gate"/);
   assert.match(patch, /EqualsLiteral\("passthrough"\)/, "only passthrough opens the store");
-  const fw = readFileSync(join(FILES, "DarkstrCookieFirewall.sys.mjs"), "utf8");
+  const fw = readFileSync(FW_FILE, "utf8");
   assert.match(fw, /getDefaultBranch\(""\)\.setBoolPref\(CONTENT_GATE_PREF/);
+});
+
+// ------------------------------------------------------------- 0052 ---
+const CF_DIAG = [
+  "darkstr.cookieFirewall.armed",
+  "darkstr.cookieFirewall.lastEtld",
+  "darkstr.cookieFirewall.lastSeed",
+  "darkstr.cookieFirewall.lastDecision",
+  "darkstr.cookieFirewall.lastPartition",
+  "darkstr.cookieFirewall.lastInstall",
+  "darkstr.cookieFirewall.lastError",
+  "darkstr.cookieFirewall.lastHttpTopic",
+  "darkstr.cookieFirewall.lastHttpEtld",
+  "darkstr.cookieFirewall.lastCookieOut",
+  "darkstr.cookieFirewall.lastCookieSet",
+  "darkstr.cookieFirewall.lastCookieErr",
+];
+function s6Flow() {
+  // Fable S6 shape: isolate mode, two sites, HTTP + document.cookie.
+  const a = tab("https://a.test/");
+  fetchVia("https://a.test/", { bc: a, type: 6, setCookie: "qa_srv=1; Path=/" });
+  fetchVia("https://a.test/echo", { bc: a });
+  const b = tab("https://b.test/");
+  fetchVia("https://b.test/", { bc: b, type: 6, setCookie: "qa_srv=1; Path=/" });
+  fetchVia("https://b.test/echo", { bc: b });
+  docCookie(a);
+  docCookie(b);
+}
+
+test("0052: diagPrefs off (default) → no cookieFirewall diagnostic in prefs; values kept in memory", () => {
+  fresh();
+  s6Flow();
+  for (const k of CF_DIAG) {
+    assert.equal(prefs.has(k), false, k);
+  }
+  const d = FW.getDiagnostics();
+  assert.equal(d["darkstr.cookieFirewall.armed"], true);
+  assert.match(String(d["darkstr.cookieFirewall.lastCookieOut"]), /qa_srv=1/);
+  assert.ok(d["darkstr.cookieFirewall.lastEtld"]);
+});
+
+test("0052: diagPrefs on → the same diagnostics are mirrored to prefs (QA / Proof)", () => {
+  fresh({ "darkstr.debug.diagPrefs": true });
+  s6Flow();
+  assert.equal(prefs.get("darkstr.cookieFirewall.armed"), true);
+  assert.match(String(prefs.get("darkstr.cookieFirewall.lastCookieOut")), /qa_srv=1/);
+  assert.equal(prefs.get("darkstr.cookieFirewall.lastEtld"), FW.getDiagnostics()["darkstr.cookieFirewall.lastEtld"]);
 });

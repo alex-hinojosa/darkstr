@@ -11,19 +11,22 @@
  *   fired one-shot timers leave the pending list.
  *   Nothing else about chaff changes: schedules, endpoints and defaults are
  *   byte-identical to the 0024 scheduler outside the cancel/rearm code.
+ * 0052: the scheduler now ships from patches/0052-files (diagnostics in
+ * memory unless darkstr.debug.diagPrefs). These tests run with diagPrefs on so
+ * they can keep observing the diag prefs; the last test runs with it off.
  */
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import vm from "node:vm";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
-const SOURCE = readFileSync(
-  join(root, "patches/0050-files/DarkstrChaffScheduler.sys.mjs"),
-  "utf8"
-);
+const SHIPPED = ["0052-files", "0050-files"]
+  .map((d) => join(root, "patches", d, "DarkstrChaffScheduler.sys.mjs"))
+  .find((f) => existsSync(f));
+const SOURCE = readFileSync(SHIPPED, "utf8");
 // The pre-0050 re-arm (B6) recreated in memory, as a negative control that
 // proves these tests discriminate.
 const REARM_FIXED = "    this._cancelIntervalTimer();\n    const delayMs";
@@ -48,12 +51,12 @@ const ENDPOINTS = [
  *   Math.random fixed at 0.5, intercepted fetch).
  * mode "real": nsITimer backed by real Node timers (setTimeout/clearTimeout).
  */
-function load({ source = SOURCE, mode = "sim", prefs = {}, random } = {}) {
+function load({ source = SOURCE, mode = "sim", prefs = {}, random, diag = true } = {}) {
   let now = 0;
   const timers = [];
   const fetches = [];
   const observers = [];
-  const store = new Map(Object.entries(prefs));
+  const store = new Map(Object.entries({ "darkstr.debug.diagPrefs": diag, ...prefs }));
   const api = {
     getStringPref: (k, d) => store.get(k) ?? d,
     getBoolPref: (k, d) => store.get(k) ?? d,
@@ -315,4 +318,25 @@ test("0050 diff is limited to the cancel/re-arm code (schedules, endpoints, payl
     assert.ok(SOURCE.includes(needle), needle);
   }
   assert.ok(!/_armIntervalTimer\(plan\) \{\n\s*\/\/[^\n]*\n\s*this\._cancelAll\(\)/.test(SOURCE));
+});
+
+test("0052: diagPrefs off → chaff diagnostics stay in memory, nothing in prefs", () => {
+  const env = load({ mode: "sim", prefs: { ...ARMED }, diag: false });
+  const { S, store, fire, fetches } = env;
+  S.init();
+  fire(S._timer);
+  for (const t of env.timers.filter((t) => !t.cancelled && !t.fired && t !== S._timer)) fire(t);
+  assert.ok(fetches.length > 0, "chaff still fires");
+  for (const k of [
+    "darkstr.chaff.schedulerArmed",
+    "darkstr.chaff.lastPlan",
+    "darkstr.chaff.lastFireAt",
+    "darkstr.chaff.lastBeaconKind",
+  ]) {
+    assert.equal(store.has(k), false, k);
+  }
+  const d = S.getDiagnostics();
+  assert.equal(d["darkstr.chaff.schedulerArmed"], true);
+  assert.equal(typeof d["darkstr.chaff.lastPlan"], "string");
+  S.uninit();
 });
