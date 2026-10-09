@@ -8,6 +8,8 @@
 #    absolute surface pixel, opaque pixels only (getImageData full/sub-rect, toDataURL, toBlob,
 #    OffscreenCanvas convertToBlob, WebGL readPixels with GL row flip all agree); getFloatFrequencyData
 #    offset by 20*log10(fudge) (consistent with the scaled signal).
+#  - seeds resolved for the requesting document's own WindowGlobalParent (sync pull + DepthHooksParent),
+#    not bc.currentWindowGlobal (still the previous / initial about:blank document at DOMWindowCreated).
 #  - WorkerHooksChild prelude: same rect noise + readPixels flip + OffscreenCanvas measureText fudge.
 # Needs 0052 + 0053 + 0053r2 + 0055r2 + 0056r2 applied. Chrome JS only (no C++).
 # usage: scripts/apply-0057-depth-per-site-mini.sh   (needs DARKSTR_GECKO_ROOT)
@@ -20,6 +22,7 @@ R="$DARKSTR_GECKO_ROOT"
 MAP=(
  "DarkstrDepthHooks.sys.mjs:browser/components/DarkstrDepthHooks.sys.mjs"
  "DarkstrDepthHooksChild.sys.mjs:browser/components/DarkstrDepthHooksChild.sys.mjs"
+ "DarkstrDepthHooksParent.sys.mjs:browser/components/DarkstrDepthHooksParent.sys.mjs"
  "DarkstrNativePersona.sys.mjs:browser/components/DarkstrNativePersona.sys.mjs"
  "DarkstrWorkerHooks.sys.mjs:browser/components/DarkstrWorkerHooks.sys.mjs"
  "DarkstrWorkerHooksChild.sys.mjs:browser/components/DarkstrWorkerHooksChild.sys.mjs"
@@ -40,6 +43,7 @@ for e in "${MAP[@]}"; do
   cmp "$F/${e%%:*}" "$R/${e#*:}" || { echo "error: ${e#*:} differs from patches/0057-files after apply" >&2; exit 1; }
 done
 grep -Fq 'DarkstrDepthHooks:GetSeedsSync' "$R/browser/components/DarkstrDepthHooks.sys.mjs"
+grep -Fq 'this.manager' "$R/browser/components/DarkstrDepthHooksParent.sys.mjs"
 grep -Fq '_storeSeedForEtld' "$R/browser/components/DarkstrNativePersona.sys.mjs"
 echo "0057 applied. Build (objdir pinned; never a bare mach build):"
 echo "  cd \$DARKSTR_GECKO_ROOT && MOZ_OBJDIR=\$DARKSTR_GECKO_ROOT/obj-aarch64-apple-darwin25.6.0 ./mach build && MOZ_OBJDIR=\$DARKSTR_GECKO_ROOT/obj-aarch64-apple-darwin25.6.0 ./mach package"

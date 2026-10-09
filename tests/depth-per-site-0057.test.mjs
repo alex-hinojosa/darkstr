@@ -178,7 +178,7 @@ test("0057 sync seed pull: parent listener + child sync path with async fallback
 
 test("0057 files: sums, baseline, patch headers", () => {
   const sums = readFileSync(join(F, "SHA256SUMS"), "utf8").trim().split("\n");
-  assert.equal(sums.length, 5);
+  assert.equal(sums.length, 6);
   for (const l of sums) {
     const [h, n] = l.split(/\s+/);
     assert.equal(createHash("sha256").update(readFileSync(join(F, n))).digest("hex"), h, n);
@@ -187,10 +187,35 @@ test("0057 files: sums, baseline, patch headers", () => {
   const baseOf = { "DarkstrDepthHooksChild.sys.mjs": "0039-files" };
   for (const l of base.trim().split("\n")) {
     const [h, p] = l.split(/\s+/); const n = p.split("/").pop();
+    if (n === "DarkstrDepthHooksParent.sys.mjs") continue; // baseline = 0017 patch (no -files pin)
     const dir = baseOf[n] ?? "0056-files";
     assert.equal(createHash("sha256").update(readFileSync(join(root, "patches", dir, n))).digest("hex"), h, `baseline ${n}`);
   }
   const patch = readFileSync(join(root, "patches", "0057-darkstr-depth-per-site.patch"), "utf8");
-  assert.equal((patch.match(/^\+\+\+ b\//gm) || []).length, 5);
+  assert.equal((patch.match(/^\+\+\+ b\//gm) || []).length, 6);
   assert.ok(readdirSync(join(root, "scripts")).includes("apply-0057-depth-per-site-mini.sh"));
+});
+
+test("0057 seeds resolve for the requesting document's own WindowGlobalParent", () => {
+  const PAR = src("DarkstrDepthHooksParent.sys.mjs");
+  assert.match(PAR, /depthSeedsForBrowsingContext\(\s*this\.browsingContext,\s*this\.manager\s*\)/);
+  assert.match(DH, /depthSeedsForBrowsingContext\(bc, wgp = null\)/);
+  assert.match(DH, /depthSeedsForBrowsingContext\(wgp\.browsingContext, wgp\)/);
+  assert.match(DH, /DarkstrNativePersona\.documentDecision\(wgp\)/);
+  assert.match(DH, /etld = decision\.site \|\| null/);
+});
+
+test("0057 install record keyed per inner global (no stacked hooks) + DOMDocElementInserted for reused windows", () => {
+  const key = lift(DHC, "installKey");
+  assert.match(key, /rawWindow\?\.HTMLCanvasElement\?\.prototype/);
+  for (const fn of ["installDepthHooks", "uninstallDepthHooks"]) {
+    const body = DHC.slice(DHC.indexOf(`function ${fn}(`), DHC.indexOf(`function ${fn}(`) + 400);
+    assert.match(body, /const key = installKey\(rawWindow\)/, fn);
+  }
+  assert.match(DHC, /installedByWindow\.set\(key, \{ replacements \}\)/);
+  assert.doesNotMatch(DHC, /installedByWindow\.(get|set|delete)\(rawWindow/);
+  assert.match(DH, /DOMDocElementInserted: \{\}/);
+  assert.match(DHC, /event\.type !== "DOMDocElementInserted"/);
+  // reused-window event never adds async IPC (off mode stays idle)
+  assert.match(DHC, /seeds === undefined && eventType === "DOMDocElementInserted"\) \{\s*\/\/[^\n]*\n[^\n]*\n\s*return;/);
 });

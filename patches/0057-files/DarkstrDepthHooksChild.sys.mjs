@@ -44,6 +44,31 @@
 
 const installedByWindow = new WeakMap();
 
+/**
+ * 0057: install-record key = the window's own HTMLCanvasElement.prototype,
+ * read through Xrays (page code cannot redirect it). One key per inner
+ * window global, whether the actor sees the WindowProxy or the inner window
+ * (DOMWindowCreated vs pageshow) and when an initial about:blank inner window
+ * is reused for a same-origin document -- so hooks are never stacked twice on
+ * the same prototypes (pre-0057: double noise once the sync DOMWindowCreated
+ * install and the pageshow install keyed differently).
+ */
+function installKey(rawWindow) {
+  try {
+    const proto = rawWindow?.HTMLCanvasElement?.prototype;
+    if (proto && typeof proto === "object") {
+      return proto;
+    }
+  } catch (_e) {}
+  return rawWindow;
+}
+
+/** 0057: hooks already live on this window's prototypes. */
+function depthHooksInstalled(rawWindow) {
+  const prior = installedByWindow.get(installKey(rawWindow));
+  return !!(prior && prior.replacements.every(methodIsInstalled));
+}
+
 function errorText(error) {
   try {
     return String(error?.stack || error?.message || error || "unknown error");
@@ -181,14 +206,15 @@ function restoreReplacement(replacement) {
 }
 
 function uninstallDepthHooks(rawWindow) {
-  const record = installedByWindow.get(rawWindow);
+  const key = installKey(rawWindow);
+  const record = installedByWindow.get(key);
   if (!record) {
     return "idle";
   }
   for (const replacement of record.replacements.slice().reverse()) {
     restoreReplacement(replacement);
   }
-  installedByWindow.delete(rawWindow);
+  installedByWindow.delete(key);
   return "uninstalled";
 }
 
@@ -319,7 +345,8 @@ function getCapBucket(renderer) {
 }
 
 function installDepthHooks(rawWindow, seeds, onRuntimeError) {
-  const prior = installedByWindow.get(rawWindow);
+  const key = installKey(rawWindow);
+  const prior = installedByWindow.get(key);
   if (prior && prior.replacements.every(methodIsInstalled)) {
     return "already-installed";
   }
@@ -2326,7 +2353,7 @@ return {
     }
 
 
-    installedByWindow.set(rawWindow, { replacements });
+    installedByWindow.set(key, { replacements });
     return "installed";
   } catch (error) {
     for (const replacement of replacements.slice().reverse()) {
@@ -2378,8 +2405,25 @@ export class DarkstrDepthHooksChild extends JSWindowActorChild {
   }
 
   async pullAndInstall(eventType) {
-    let seeds =
-      eventType === "DOMWindowCreated" ? this._seedsSync() : undefined;
+    const early =
+      eventType === "DOMWindowCreated" || eventType === "DOMDocElementInserted";
+    if (eventType === "DOMDocElementInserted") {
+      // 0057: covers documents that reuse their initial about:blank inner
+      // window (same-origin iframes), which get no DOMWindowCreated of their
+      // own; for every other document this is a no-op (already installed).
+      try {
+        const w = this.contentWindow;
+        if (!w || depthHooksInstalled(w)) {
+          return;
+        }
+      } catch (_e) {}
+    }
+    let seeds = early ? this._seedsSync() : undefined;
+    if (seeds === undefined && eventType === "DOMDocElementInserted") {
+      // Not armed (off mode) or parent not ready: DOMWindowCreated / pageshow
+      // keep the async path; no extra IPC per document.
+      return;
+    }
     if (seeds === undefined) {
       try {
         seeds = await this.sendQuery("DarkstrDepthHooks:GetSeeds");
@@ -2420,7 +2464,11 @@ export class DarkstrDepthHooksChild extends JSWindowActorChild {
   }
 
   async handleEvent(event) {
-    if (event.type !== "DOMWindowCreated" && event.type !== "pageshow") {
+    if (
+      event.type !== "DOMWindowCreated" &&
+      event.type !== "DOMDocElementInserted" &&
+      event.type !== "pageshow"
+    ) {
       return;
     }
     await this.pullAndInstall(event.type);

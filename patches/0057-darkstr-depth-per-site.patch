@@ -73,7 +73,18 @@
      if (this._actorRegistered) {
        try {
          ChromeUtils.unregisterWindowActor("DarkstrDepthHooks");
-@@ -326,13 +361,24 @@
+@@ -273,6 +308,10 @@
+             "moz-src:///browser/components/DarkstrDepthHooksChild.sys.mjs",
+           events: {
+             DOMWindowCreated: {},
++            // 0057: same-origin iframes reuse the initial about:blank window
++            // (no DOMWindowCreated for their document): install before any
++            // of their scripts run.
++            DOMDocElementInserted: {},
+             pageshow: {},
+           },
+         },
+@@ -326,13 +365,24 @@
  
      const pollutionActive = mode === "pollution" && !nativeCompatible;
      const seeds = pollutionActive ? this._readDepthSeeds() : null;
@@ -100,12 +111,10 @@
      };
      this._seeds = this._plan.seeds;
      this._setArmed(armed, this._seeds);
-@@ -341,8 +387,49 @@
- 
-   getPlan() {
+@@ -343,6 +393,47 @@
      return this._plan || this.refreshPlan();
-+  },
-+
+   },
+ 
 +  _nativePersona() {
 +    return ChromeUtils.importESModule(
 +      "moz-src:///browser/components/DarkstrNativePersona.sys.mjs"
@@ -120,8 +129,8 @@
 +    } catch (_e) {
 +      return false;
 +    }
-   },
- 
++  },
++
 +  /** 0057: sync seed pull from DarkstrDepthHooksChild (DOMWindowCreated). */
 +  _onSyncSeeds(message) {
 +    const id = message?.data?.innerWindowId;
@@ -144,29 +153,75 @@
 +        return { seeds: null, error: "pid-mismatch" };
 +      }
 +    } catch (_e) {}
-+    return { seeds: this.depthSeedsForBrowsingContext(wgp.browsingContext) };
++    return { seeds: this.depthSeedsForBrowsingContext(wgp.browsingContext, wgp) };
 +  },
 +
    /** Persist content-install diagnostics. Never writes privacy.*. */
    recordInstallStatus(detail, browsingContext = null) {
      const payload = {
-@@ -379,7 +466,7 @@
-   /** Depth seeds for JSWindowActor child (null when idle / first-doc). */
-   depthSeedsForBrowsingContext(bc) {
+@@ -376,10 +467,17 @@
+     }
+   },
+ 
+-  /** Depth seeds for JSWindowActor child (null when idle / first-doc). */
+-  depthSeedsForBrowsingContext(bc) {
++  /**
++   * Depth seeds for JSWindowActor child (null when idle / first-doc).
++   * 0057: `wgp` = the requesting document's WindowGlobalParent. At
++   * DOMWindowCreated (sync pull) bc.currentWindowGlobal / currentURI can
++   * still be the previous document (other site, or the initial about:blank),
++   * so the site, container and snapshot come from that document's own
++   * NativePersona decision (frames: their top document's decision).
++   */
++  depthSeedsForBrowsingContext(bc, wgp = null) {
      const plan = this.getPlan();
 -    if (!plan.armed || !plan.seeds) {
 +    if (!plan.armed || (!plan.seeds && !plan.perSite)) {
        return null;
      }
      // SubsequentNav arm: reuse NativePersona first-doc gate when available.
-@@ -427,18 +514,22 @@
+@@ -395,8 +493,18 @@
+       const { DarkstrNativePersona } = ChromeUtils.importESModule(
+         "moz-src:///browser/components/DarkstrNativePersona.sys.mjs"
+       );
+-      if (DarkstrNativePersona.snapshotForBrowsingContext) {
+-        const snap = DarkstrNativePersona.snapshotForBrowsingContext(bc);
++      let decision = null;
++      if (wgp && DarkstrNativePersona.documentDecision) {
++        try {
++          decision = DarkstrNativePersona.documentDecision(wgp);
++        } catch (_eDec) {
++          decision = null;
++        }
++      }
++      if (decision || DarkstrNativePersona.snapshotForBrowsingContext) {
++        const snap = decision
++          ? decision.snapshot
++          : DarkstrNativePersona.snapshotForBrowsingContext(bc);
+         if (!snap) {
+           return null;
+         }
+@@ -418,7 +526,9 @@
+         if (rotating) {
+           let etld = null;
+           try {
+-            if (DarkstrNativePersona._etldPlus1FromBrowsingContext) {
++            if (decision) {
++              etld = decision.site || null;
++            } else if (DarkstrNativePersona._etldPlus1FromBrowsingContext) {
+               etld = DarkstrNativePersona._etldPlus1FromBrowsingContext(bc);
+             }
+           } catch (_eEtld) {}
+@@ -427,18 +537,24 @@
            // "last writer wins" prefs, so a frame whose own site could not be
            // resolved took another site's depth seeds. Now it gets none.
            let seed = 0;
 -          if (etld && DarkstrNativePersona._seedForEtld) {
-+          const ctx = DarkstrNativePersona._ctxOfBC
-+            ? DarkstrNativePersona._ctxOfBC(bc)
-+            : "0";
++          const ctx = decision?.ctx
++            ? decision.ctx
++            : DarkstrNativePersona._ctxOfBC
++              ? DarkstrNativePersona._ctxOfBC(bc)
++              : "0";
 +          if (etld && plan.perSite) {
 +            // 0057: the stored per-site seed only (no session-mix fallback).
              try {
@@ -190,7 +245,7 @@
            }
            if (!seed) {
              return null;
-@@ -486,6 +577,10 @@
+@@ -486,6 +602,10 @@
        // 0052: NativePersona unavailable → no per-tab phase or site decision.
        // The global darkstr.persona.docShellPhase mirror is diagnostics only
        // now (and was another tab's last load anyway), so fail closed.
@@ -201,7 +256,7 @@
        return null;
      }
      const fontSeedOut =
-@@ -699,6 +794,13 @@
+@@ -699,6 +819,13 @@
      try {
        diagPrefs.setBoolPref(ARMED_PREF, this._armed);
      } catch (_e) {}
@@ -217,7 +272,39 @@
      } else {
 --- a/browser/components/DarkstrDepthHooksChild.sys.mjs
 +++ b/browser/components/DarkstrDepthHooksChild.sys.mjs
-@@ -77,19 +77,75 @@
+@@ -44,6 +44,31 @@
+ 
+ const installedByWindow = new WeakMap();
+ 
++/**
++ * 0057: install-record key = the window's own HTMLCanvasElement.prototype,
++ * read through Xrays (page code cannot redirect it). One key per inner
++ * window global, whether the actor sees the WindowProxy or the inner window
++ * (DOMWindowCreated vs pageshow) and when an initial about:blank inner window
++ * is reused for a same-origin document -- so hooks are never stacked twice on
++ * the same prototypes (pre-0057: double noise once the sync DOMWindowCreated
++ * install and the pageshow install keyed differently).
++ */
++function installKey(rawWindow) {
++  try {
++    const proto = rawWindow?.HTMLCanvasElement?.prototype;
++    if (proto && typeof proto === "object") {
++      return proto;
++    }
++  } catch (_e) {}
++  return rawWindow;
++}
++
++/** 0057: hooks already live on this window's prototypes. */
++function depthHooksInstalled(rawWindow) {
++  const prior = installedByWindow.get(installKey(rawWindow));
++  return !!(prior && prior.replacements.every(methodIsInstalled));
++}
++
+ function errorText(error) {
+   try {
+     return String(error?.stack || error?.message || error || "unknown error");
+@@ -77,19 +102,75 @@
    return h & 1 ? magnitude : -magnitude;
  }
  
@@ -254,7 +341,7 @@
 +  if (sw < 0) {
 +    sx += sw;
 +    sw = -sw;
-+  }
+   }
 +  if (sh < 0) {
 +    sy += sh;
 +    sh = -sh;
@@ -288,7 +375,7 @@
 +        Math.min(255, data[i + 2] + pixelNoise(seed, a + 2, data[i + 2]))
 +      );
 +    }
-   }
++  }
 +}
 +
 +/** Whole-surface readout (w x h from 0,0). */
@@ -304,7 +391,35 @@
  }
  
  function methodIsInstalled(replacement) {
-@@ -322,7 +378,7 @@
+@@ -125,14 +206,15 @@
+ }
+ 
+ function uninstallDepthHooks(rawWindow) {
+-  const record = installedByWindow.get(rawWindow);
++  const key = installKey(rawWindow);
++  const record = installedByWindow.get(key);
+   if (!record) {
+     return "idle";
+   }
+   for (const replacement of record.replacements.slice().reverse()) {
+     restoreReplacement(replacement);
+   }
+-  installedByWindow.delete(rawWindow);
++  installedByWindow.delete(key);
+   return "uninstalled";
+ }
+ 
+@@ -263,7 +345,8 @@
+ }
+ 
+ function installDepthHooks(rawWindow, seeds, onRuntimeError) {
+-  const prior = installedByWindow.get(rawWindow);
++  const key = installKey(rawWindow);
++  const prior = installedByWindow.get(key);
+   if (prior && prior.replacements.every(methodIsInstalled)) {
+     return "already-installed";
+   }
+@@ -322,7 +405,7 @@
        const cctx = c.getContext("2d");
        cctx.drawImage(src, 0, 0);
        const id = Reflect.apply(origGetImageData, cctx, [0, 0, c.width, c.height]);
@@ -313,7 +428,7 @@
        cctx.putImageData(id, 0, 0);
        return c;
      }
-@@ -367,7 +423,11 @@
+@@ -367,7 +450,11 @@
        "getImageData",
        function (...args) {
          const id = Reflect.apply(origGetImageData, this, args);
@@ -326,7 +441,7 @@
          return id;
        },
        replacements
-@@ -547,10 +607,27 @@
+@@ -547,10 +634,27 @@
              ]);
              if (
                pixels &&
@@ -355,7 +470,7 @@
              }
              return result;
            },
-@@ -728,7 +805,11 @@
+@@ -728,7 +832,11 @@
            "getImageData",
            function (...args) {
              const id = Reflect.apply(origOcGetImageData, this, args);
@@ -368,7 +483,7 @@
              return id;
            },
            replacements
-@@ -753,7 +834,12 @@
+@@ -753,7 +861,12 @@
                      this.width,
                      this.height,
                    ]);
@@ -382,7 +497,7 @@
                    const tmp = new pageWindow.OffscreenCanvas(
                      this.width,
                      this.height
-@@ -1992,6 +2078,16 @@
+@@ -1992,6 +2105,16 @@
  var noisedBuffers = new WeakMap();
  // Brave BALANCED-style fudge: [0.999, 1.0). Zero * fudge === 0 (silence-safe).
  var fudge = 0.999 + (((seed >>> 0) / 4294967295) / 1000);
@@ -399,7 +514,7 @@
  function contentKey(data) {
    var n = data.length | 0;
    if (!n) { return "0"; }
-@@ -2113,6 +2209,8 @@
+@@ -2113,6 +2236,8 @@
        if (array && array.length) {
          if (kind === "float") {
            farbleFloat(array);
@@ -408,7 +523,7 @@
          } else if (kind === "byteTime") {
            farbleByteTimeDomain(array);
          } else {
-@@ -2130,7 +2228,7 @@
+@@ -2130,7 +2255,7 @@
      analyserHooks.push({ name: name, wrapper: wrapped, original: orig });
    }
    wrapAnalyser("getFloatTimeDomainData", "float");
@@ -417,24 +532,33 @@
    wrapAnalyser("getByteTimeDomainData", "byteTime");
    wrapAnalyser("getByteFrequencyData", "byteFreq");
  }
-@@ -2255,16 +2353,43 @@
+@@ -2228,7 +2353,7 @@
+     }
+ 
+ 
+-    installedByWindow.set(rawWindow, { replacements });
++    installedByWindow.set(key, { replacements });
+     return "installed";
+   } catch (error) {
+     for (const replacement of replacements.slice().reverse()) {
+@@ -2255,15 +2380,59 @@
      }
    }
  
 -  async pullAndInstall(eventType) {
 -    let seeds;
+-    try {
+-      seeds = await this.sendQuery("DarkstrDepthHooks:GetSeeds");
+-    } catch (error) {
+-      console.error("darkstr depth seed IPC failed", error);
+-      this._report(false, eventType, "seed-query-failed", error);
 +  /**
 +   * 0057: seeds synchronously at DOMWindowCreated (before any page script),
 +   * only while the parent says depth is armed (sharedData hint). Returns
 +   * undefined when the parent cannot answer yet (async fallback).
 +   */
 +  _seedsSync() {
-     try {
--      seeds = await this.sendQuery("DarkstrDepthHooks:GetSeeds");
--    } catch (error) {
--      console.error("darkstr depth seed IPC failed", error);
--      this._report(false, eventType, "seed-query-failed", error);
--      return;
++    try {
 +      if (Services.cpmm.sharedData.get("darkstr:depthArmed") !== true) {
 +        return undefined;
 +      }
@@ -449,12 +573,29 @@
 +      return r.seeds || null;
 +    } catch (_e) {
 +      return undefined;
-     }
++    }
 +  }
- 
++
 +  async pullAndInstall(eventType) {
-+    let seeds =
-+      eventType === "DOMWindowCreated" ? this._seedsSync() : undefined;
++    const early =
++      eventType === "DOMWindowCreated" || eventType === "DOMDocElementInserted";
++    if (eventType === "DOMDocElementInserted") {
++      // 0057: covers documents that reuse their initial about:blank inner
++      // window (same-origin iframes), which get no DOMWindowCreated of their
++      // own; for every other document this is a no-op (already installed).
++      try {
++        const w = this.contentWindow;
++        if (!w || depthHooksInstalled(w)) {
++          return;
++        }
++      } catch (_e) {}
++    }
++    let seeds = early ? this._seedsSync() : undefined;
++    if (seeds === undefined && eventType === "DOMDocElementInserted") {
++      // Not armed (off mode) or parent not ready: DOMWindowCreated / pageshow
++      // keep the async path; no extra IPC per document.
+       return;
+     }
 +    if (seeds === undefined) {
 +      try {
 +        seeds = await this.sendQuery("DarkstrDepthHooks:GetSeeds");
@@ -464,10 +605,37 @@
 +        return;
 +      }
 +    }
-+
+ 
      const rawWindow = this.contentWindow;
      if (!rawWindow) {
-       this._report(false, eventType, "no-content-window", "contentWindow unavailable");
+@@ -2295,7 +2464,11 @@
+   }
+ 
+   async handleEvent(event) {
+-    if (event.type !== "DOMWindowCreated" && event.type !== "pageshow") {
++    if (
++      event.type !== "DOMWindowCreated" &&
++      event.type !== "DOMDocElementInserted" &&
++      event.type !== "pageshow"
++    ) {
+       return;
+     }
+     await this.pullAndInstall(event.type);
+--- a/browser/components/DarkstrDepthHooksParent.sys.mjs
++++ b/browser/components/DarkstrDepthHooksParent.sys.mjs
+@@ -15,8 +15,11 @@
+         "moz-src:///browser/components/DarkstrDepthHooks.sys.mjs"
+       );
+       if (message.name === "DarkstrDepthHooks:GetSeeds") {
++        // 0057: seeds for THIS document (its own WindowGlobalParent), not
++        // whatever document the browsing context currently shows.
+         return DarkstrDepthHooks.depthSeedsForBrowsingContext(
+-          this.browsingContext
++          this.browsingContext,
++          this.manager
+         );
+       }
+       if (message.name === "DarkstrDepthHooks:InstallStatus") {
 --- a/browser/components/DarkstrNativePersona.sys.mjs
 +++ b/browser/components/DarkstrNativePersona.sys.mjs
 @@ -857,8 +857,40 @@

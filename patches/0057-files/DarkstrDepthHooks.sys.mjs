@@ -308,6 +308,10 @@ export var DarkstrDepthHooks = {
             "moz-src:///browser/components/DarkstrDepthHooksChild.sys.mjs",
           events: {
             DOMWindowCreated: {},
+            // 0057: same-origin iframes reuse the initial about:blank window
+            // (no DOMWindowCreated for their document): install before any
+            // of their scripts run.
+            DOMDocElementInserted: {},
             pageshow: {},
           },
         },
@@ -427,7 +431,7 @@ export var DarkstrDepthHooks = {
         return { seeds: null, error: "pid-mismatch" };
       }
     } catch (_e) {}
-    return { seeds: this.depthSeedsForBrowsingContext(wgp.browsingContext) };
+    return { seeds: this.depthSeedsForBrowsingContext(wgp.browsingContext, wgp) };
   },
 
   /** Persist content-install diagnostics. Never writes privacy.*. */
@@ -463,8 +467,15 @@ export var DarkstrDepthHooks = {
     }
   },
 
-  /** Depth seeds for JSWindowActor child (null when idle / first-doc). */
-  depthSeedsForBrowsingContext(bc) {
+  /**
+   * Depth seeds for JSWindowActor child (null when idle / first-doc).
+   * 0057: `wgp` = the requesting document's WindowGlobalParent. At
+   * DOMWindowCreated (sync pull) bc.currentWindowGlobal / currentURI can
+   * still be the previous document (other site, or the initial about:blank),
+   * so the site, container and snapshot come from that document's own
+   * NativePersona decision (frames: their top document's decision).
+   */
+  depthSeedsForBrowsingContext(bc, wgp = null) {
     const plan = this.getPlan();
     if (!plan.armed || (!plan.seeds && !plan.perSite)) {
       return null;
@@ -482,8 +493,18 @@ export var DarkstrDepthHooks = {
       const { DarkstrNativePersona } = ChromeUtils.importESModule(
         "moz-src:///browser/components/DarkstrNativePersona.sys.mjs"
       );
-      if (DarkstrNativePersona.snapshotForBrowsingContext) {
-        const snap = DarkstrNativePersona.snapshotForBrowsingContext(bc);
+      let decision = null;
+      if (wgp && DarkstrNativePersona.documentDecision) {
+        try {
+          decision = DarkstrNativePersona.documentDecision(wgp);
+        } catch (_eDec) {
+          decision = null;
+        }
+      }
+      if (decision || DarkstrNativePersona.snapshotForBrowsingContext) {
+        const snap = decision
+          ? decision.snapshot
+          : DarkstrNativePersona.snapshotForBrowsingContext(bc);
         if (!snap) {
           return null;
         }
@@ -505,7 +526,9 @@ export var DarkstrDepthHooks = {
         if (rotating) {
           let etld = null;
           try {
-            if (DarkstrNativePersona._etldPlus1FromBrowsingContext) {
+            if (decision) {
+              etld = decision.site || null;
+            } else if (DarkstrNativePersona._etldPlus1FromBrowsingContext) {
               etld = DarkstrNativePersona._etldPlus1FromBrowsingContext(bc);
             }
           } catch (_eEtld) {}
@@ -514,9 +537,11 @@ export var DarkstrDepthHooks = {
           // "last writer wins" prefs, so a frame whose own site could not be
           // resolved took another site's depth seeds. Now it gets none.
           let seed = 0;
-          const ctx = DarkstrNativePersona._ctxOfBC
-            ? DarkstrNativePersona._ctxOfBC(bc)
-            : "0";
+          const ctx = decision?.ctx
+            ? decision.ctx
+            : DarkstrNativePersona._ctxOfBC
+              ? DarkstrNativePersona._ctxOfBC(bc)
+              : "0";
           if (etld && plan.perSite) {
             // 0057: the stored per-site seed only (no session-mix fallback).
             try {
