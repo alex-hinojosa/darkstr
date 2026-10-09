@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # darkstr 0056 apply (Fable N6 follow-up): persisted per-site persona seeds.
 #  - new browser/components/DarkstrPersonaSeedStore.sys.mjs (+ moz.build): <profile>/darkstr/persona-seeds.json,
-#    parent-only, atomic, 0600; entries {c,h,s,t}, h = HMAC-SHA256(K, eTLD+1), K wrapped by OSKeyStore
+#    parent-only, atomic, 0600; entries v2 {c,h,s}, c = HMAC(K,"ctx:"+ctx), h = HMAC(K, ctx|eTLD+1), K wrapped by OSKeyStore
 #    (unavailable -> session-only); per container; private memory-only; darkstr.persona.seed bypasses it;
 #    keep rule = persist-data-on-shutdown exceptions when cookies/site data are cleared on shutdown.
 #  - ClearDataService: DarkstrPersonaSeedCleaner on CLEAR_FINGERPRINTING_PROTECTION_STATE (site incl. subdomains,
