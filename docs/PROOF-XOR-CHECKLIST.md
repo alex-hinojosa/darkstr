@@ -11,6 +11,8 @@ When the PR touches XOR mode→RFP application (even docs/Rust-only):
 - [ ] Table matches `duppel_persona::mode_pref_effects` / `duppel_bridge::PrefsApplicator::apply_mode_effects`
 - [ ] Pollution → RFP=false, FPP=false; persona/chaff unless `nativeCompatible`
 - [ ] Homogeneous → stock RFP true / FPP stock; idle crates; **no** RFP metric customization
+- [ ] (0053) Homogeneous writes **no** prefs: a fresh off-mode profile has no `webgl.*` / `gfx.*` / `librewolf.*` / `darkstr.*` / `privacy.resistFingerprinting` user values after two restarts (other `privacy.*` values are stock CB-strict). A user's `RFP=false` survives. Pollution on→off restores the exact pre-Pollution RFP / FPP / `librewolf.webgl.prompt` state (`darkstr.xor.savedPrefs`, removed on exit)
+- [ ] (0053) WebGL under Pollution only through `librewolf.webgl.prompt=false`: no `webgl.force-enabled` / `gfx.blocklist.all` / `forbid-*` user values; a GPU blocklist entry still blocks WebGL
 - [ ] Forbidden: Pollution with RFP still true via prefs path (`PrefApplyPlan::is_xor_safe`)
 - [ ] Live observer claims limited to train-pinned `patches/0002-darkstr-mode-xor-rfp.patch` (chrome JS `DarkstrModeXor.sys.mjs` on 155.0.1-1); no C++/Rust FFI claims without Proof on a fork artifact
 - [ ] FPP under Pollution: fork `0002` applied+rebuilt; ModeXor observes RFP/FPP + `browser.contentblocking.category` + dual idle. Stock/WebExt-only profiles may still show FPP=true — not a WebExt XOR fail

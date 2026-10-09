@@ -3,6 +3,7 @@
  * shipped modules in patches/0051-files with minimal XPCOM / DOM stubs.
  * 0052: DarkstrNativePersona ships from patches/0052-files (the stale 0051
  * copy was removed); every other module still ships from 0051-files.
+ * 0053: NativePersona / ModeXor ship from patches/0053-files.
  *
  *   N2  HTTP User-Agent phase is per tab / per document, never a global pref:
  *       a new tab cannot flip other tabs; redirects are not extra navigations.
@@ -22,8 +23,15 @@ import { dirname, join } from "node:path";
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const FILES = join(root, "patches/0051-files");
 const FILES52 = join(root, "patches/0052-files");
-// Newest shipped copy of a module (0052 supersedes 0051 where it has one).
-const shipped = (f) => (existsSync(join(FILES52, f)) ? join(FILES52, f) : join(FILES, f));
+// Newest shipped copy of a module (later pins supersede earlier ones).
+const NEWER = ["0053-files", "0052-files"].map((d) => join(root, "patches", d));
+const newest = (f, fallbackDir) => {
+  for (const d of NEWER) {
+    if (existsSync(join(d, f))) return join(d, f);
+  }
+  return join(fallbackDir, f);
+};
+const shipped = (f) => newest(f, FILES);
 const src = (f) => readFileSync(shipped(f), "utf8");
 
 const NATIVE_UA =
@@ -655,7 +663,7 @@ test("0051r2 popup: user-initiated new tabs keep strictFirstDoc (no opener, no c
 });
 
 test("0052: no persona diagnostic reaches prefs while darkstr.debug.diagPrefs is off", async () => {
-  const { DARKSTR_DIAG_PREFS } = await import(pathToFileURL(join(FILES52, "DarkstrModeXor.sys.mjs")));
+  const { DARKSTR_DIAG_PREFS } = await import(pathToFileURL(shipped("DarkstrModeXor.sys.mjs")));
   const leaked = writes.filter((k) => DARKSTR_DIAG_PREFS.includes(k));
   assert.deepEqual([...new Set(leaked)], [], "diag prefs written during this file's flows");
   for (const k of DARKSTR_DIAG_PREFS) {

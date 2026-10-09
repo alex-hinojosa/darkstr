@@ -28,9 +28,10 @@ const FILES = join(root, "patches/0048-files");
 const CHILD_FILES = existsSync(join(root, "patches/0051-files/DarkstrCookieFirewallChild.sys.mjs"))
   ? join(root, "patches/0051-files")
   : FILES;
-const FW_FILE = existsSync(join(root, "patches/0052-files/DarkstrCookieFirewall.sys.mjs"))
-  ? join(root, "patches/0052-files/DarkstrCookieFirewall.sys.mjs")
-  : join(FILES, "DarkstrCookieFirewall.sys.mjs");
+const FW_FILE =
+  ["0053-files", "0052-files"]
+    .map((d) => join(root, "patches", d, "DarkstrCookieFirewall.sys.mjs"))
+    .find((f) => existsSync(f)) || join(FILES, "DarkstrCookieFirewall.sys.mjs");
 const FW_URL = "moz-src:///browser/components/DarkstrCookieFirewall.sys.mjs";
 
 // ---------------------------------------------------------------- stubs ---
