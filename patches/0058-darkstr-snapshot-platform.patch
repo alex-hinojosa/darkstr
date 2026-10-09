@@ -178,17 +178,17 @@
    }
 --- a/browser/components/DarkstrWorkerHooksChild.sys.mjs
 +++ b/browser/components/DarkstrWorkerHooksChild.sys.mjs
-@@ -528,6 +528,10 @@
-   if (persona?.userAgent) {
-     bag.setPropertyAsAString("userAgent", String(persona.userAgent));
-     bag.setPropertyAsAString("platform", String(persona.platform || ""));
+@@ -351,6 +351,10 @@
+     }
+     if (persona.timezone) {
+       bag.setPropertyAsAString("timezone", String(persona.timezone));
++    }
 +    // 0058: WorkerNavigator.appVersion follows the persona's OS too.
 +    if (persona.appVersion) {
 +      bag.setPropertyAsAString("appVersion", String(persona.appVersion));
-+    }
-     const hc = Number(persona.hardwareConcurrency) >>> 0;
-     if (hc > 0) {
-       bag.setPropertyAsUint32("hardwareConcurrency", hc);
+     }
+   }
+   const prelude = persona ? buildWorkerPrelude(result.depth) : "";
 --- a/dom/base/DarkstrNavigatorHooks.cpp
 +++ b/dom/base/DarkstrNavigatorHooks.cpp
 @@ -240,6 +240,7 @@
