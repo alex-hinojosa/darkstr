@@ -899,8 +899,10 @@ function installDepthHooks(rawWindow, seeds, onRuntimeError) {
       "WEBGL_draw_buffers",
       "WEBGL_lose_context",
     ];
+    // 0057r4: WEBGL_debug_renderer_info is never stubbed: advertised only when
+    // native has it, and getExtension hands back the native object, which also
+    // enables the extension so UNMASKED_* answer like stock (Proof #88 r3 5a).
     const STUBBED_EXTENSIONS = new Set([
-      "WEBGL_debug_renderer_info",
       "EXT_texture_filter_anisotropic",
     ]);
     // Always keep when native/stub allows — coherent Apple/Firefox surface.
@@ -1138,13 +1140,9 @@ function installDepthHooks(rawWindow, seeds, onRuntimeError) {
               return null;
             }
             if (want === "WEBGL_debug_renderer_info") {
-              return Cu.cloneInto(
-                {
-                  UNMASKED_VENDOR_WEBGL: 0x9245,
-                  UNMASKED_RENDERER_WEBGL: 0x9246,
-                },
-                pageWindow
-              );
+              // 0057r4: the native WebGLDebugRendererInfo (enables the
+              // extension); never a plain-object stub.
+              return Reflect.apply(origGetExtension, this, [want]);
             }
             if (want === "EXT_texture_filter_anisotropic") {
               // Prefer native object when present; else coherent stub (MAX=16).
