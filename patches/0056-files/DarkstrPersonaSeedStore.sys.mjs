@@ -158,6 +158,37 @@ export function contextOnlyFromPattern(pattern) {
   return String(Number(p.userContextId) >>> 0);
 }
 
+/**
+ * 0056r4: true when a principal's origin attributes / a pattern name a
+ * partition (third-party data stored under some top-level site). Persona
+ * seeds are first-party state keyed by the top-level site, so a partitioned
+ * clear never touches one. Firefox's shutdown sanitizer clears a kept site's
+ * partitioned data under every non-kept top-level site; before 0056r4 that
+ * deleteByPrincipal(host^partitionKey=...) reset the kept site's own seed.
+ */
+export function isPartitioned(oaOrPattern) {
+  let p = oaOrPattern;
+  if (typeof p === "string") {
+    try {
+      p = p ? JSON.parse(p) : {};
+    } catch (_e) {
+      p = {};
+    }
+  }
+  if (!p || typeof p !== "object") {
+    return false;
+  }
+  if (typeof p.partitionKey === "string" && p.partitionKey !== "") {
+    return true;
+  }
+  const kp = p.partitionKeyPattern;
+  return !!(
+    kp &&
+    typeof kp === "object" &&
+    Object.values(kp).some(v => v !== undefined && v !== null && v !== "")
+  );
+}
+
 /** Contexts an origin-attributes pattern selects: null = all. */
 export function contextFilterFromPattern(pattern) {
   let p = pattern;
@@ -1045,7 +1076,7 @@ export var DarkstrPersonaSeedCleaner = {
 
   async deleteByPrincipal(aPrincipal) {
     const host = aPrincipal?.host;
-    if (!host) {
+    if (!host || isPartitioned(aPrincipal.originAttributes)) {
       return;
     }
     const ctx = contextKeyFromOA(aPrincipal.originAttributes);
@@ -1057,6 +1088,9 @@ export var DarkstrPersonaSeedCleaner = {
   },
 
   async deleteBySite(aSchemelessSite, aOriginAttributesPattern) {
+    if (isPartitioned(aOriginAttributesPattern)) {
+      return;
+    }
     await DarkstrPersonaSeedStore.clearSite(
       aSchemelessSite,
       contextFilterFromPattern(aOriginAttributesPattern),
@@ -1065,6 +1099,9 @@ export var DarkstrPersonaSeedCleaner = {
   },
 
   async deleteByHost(aHost, aOriginAttributesPattern) {
+    if (isPartitioned(aOriginAttributesPattern)) {
+      return;
+    }
     await DarkstrPersonaSeedStore.clearSite(
       aHost,
       contextFilterFromPattern(aOriginAttributesPattern),
@@ -1077,6 +1114,9 @@ export var DarkstrPersonaSeedCleaner = {
   },
 
   async deleteByOriginAttributes(aOriginAttributesString) {
+    if (isPartitioned(aOriginAttributesString)) {
+      return;
+    }
     await DarkstrPersonaSeedStore.clearContexts(
       contextFilterFromPattern(aOriginAttributesString),
       contextOnlyFromPattern(aOriginAttributesString)

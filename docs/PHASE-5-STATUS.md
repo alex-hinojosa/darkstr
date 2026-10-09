@@ -618,6 +618,29 @@ All 10 scenarios plus two new ones PASS:
 
 Negative control on the 0056r2 app (`137c3b27`): `range_regression` FAILs, reproducing Proof's finding. The seeds change but the snapshot cache is not flushed, the visible persona stays stale, and the state is inconsistent after restart.
 
+### 0056r4: a partitioned clear never resets a kept site's seed
+
+**Bug (present since 0056, so it was in 0056r2, 0057r2 and 0057r3):** a site with a persist-data-on-shutdown exception got a new persona after a restart whenever it had been embedded cross-site.
+- At shutdown, Firefox's sanitizer preserves A's first-party data, but it clears A's data **partitioned under every non-kept top-level site B**. That reaches the cleaner as `deleteByPrincipal(http://A^partitionKey=(http,B))`.
+- `DarkstrPersonaSeedCleaner.deleteByPrincipal` ignored the partitionKey and cleared A's eTLD+1 seed. The kept entry was gone from disk (1 → 0, same key and label).
+- Proof's 0056r2 keep_restart PASSed because no kept site was framed cross-site.
+
+**Fix:** persona seeds are first-party state keyed by the top-level site, so partitioned principals and partition patterns are no-ops:
+- `isPartitioned(oa|pattern)` covers a non-empty `partitionKey` or a `partitionKeyPattern` with any field set;
+- it applies in `deleteByPrincipal`, `deleteBySite`, `deleteByHost` and `deleteByOriginAttributes`.
+
+A's own first-party principal still clears A.
+
+**Tests:** two regression tests. One fails on the unfixed store ("kept entry still on disk").
+
+**Live** (`~/AgentDocs/proof/darkstr-keep-20261009-112434`): own server on 127.0.0.1:8461, hosts akp.test / bkp.test, sandbox-exec loopback only, one fresh profile per app and variant, Proof's COS_ON prefs and keep permission. Variants:
+- `plain`: keep A, visit B, restart;
+- `xframe`: B embeds an A iframe that writes localStorage.
+
+Before the fix:
+- `plain` PASSes on 0056r2, 0057r2 and 0057r3;
+- `xframe` FAILs on all three, and so does a direct `deleteDataFromPrincipal` probe with A's partitioned principal.
+
 ### Residual
 
 - **Startup (0056r2).** While the store is still loading (file read + Keychain
