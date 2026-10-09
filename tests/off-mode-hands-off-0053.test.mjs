@@ -540,6 +540,40 @@ test("0057c: re-entering Pollution before the idle pass runs skips the re-match"
   MX.uninit();
   delete MX._cbPrefsForTest;
 });
+test("0057c: first start already in Pollution (FPP saved before CB applied strict): own prefs fixed, strict re-matched", () => {
+  // librewolf.cfg put "strict" in place, but ContentBlockingPrefs had not yet
+  // set FPP when ModeXor saved its state: FPP has no user value (default false).
+  const cbp = cbProfile();
+  user.delete("privacy.fingerprintingProtection");
+  user.set("network.cookie.cookieBehavior", 5);
+  MX.init();
+  setUser("darkstr.mode", "pollution");
+  setUser("browser.contentblocking.category", "custom");
+  assert.deepEqual(JSON.parse(get("darkstr.xor.savedPrefs")).prefs["privacy.fingerprintingProtection"], { user: false, value: null });
+  setUser("darkstr.mode", "homogeneous");
+  assert.equal(get("privacy.fingerprintingProtection"), false, "restored exactly (no user value)");
+  for (const f of idle.splice(0)) f();
+  assert.equal(get("browser.contentblocking.category"), "strict");
+  assert.equal(get("privacy.fingerprintingProtection"), true, "strict's value, as the next start would set it");
+  assert.match(MX._lastCategoryRematch, /^rematched:strict\+own$/);
+  assert.equal(cbp.switchingCategory, false);
+  assert.equal(user.has(ETP), false);
+  MX.uninit();
+});
+test("0057c: a non-ModeXor pref mismatch still blocks the re-match (no-fit), nothing rewritten", () => {
+  cbProfile();
+  MX.init();
+  setUser("darkstr.mode", "pollution");
+  setUser("network.cookie.cookieBehavior", 1);
+  prefs.clearUserPref("privacy.fingerprintingProtection");
+  setUser("darkstr.mode", "homogeneous");
+  const fppBefore = get("privacy.fingerprintingProtection");
+  for (const f of idle.splice(0)) f();
+  assert.equal(get("browser.contentblocking.category"), "custom");
+  assert.equal(MX._lastCategoryRematch, "no-fit");
+  assert.equal(get("privacy.fingerprintingProtection"), fppBefore, "own prefs not touched when blocked");
+  MX.uninit();
+});
 test("0057c: patch artifacts — SHA256SUMS, base pinned to 0057-files, apply script wiring", async () => {
   const { createHash } = await import("node:crypto");
   const sha = (p) => createHash("sha256").update(readFileSync(join(root, p))).digest("hex");

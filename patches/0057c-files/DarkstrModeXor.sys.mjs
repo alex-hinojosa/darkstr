@@ -556,15 +556,19 @@ export var DarkstrModeXor = {
     }
   },
 
-  /** true when every category-defining pref has that category's value. */
-  _cbPrefsFit(cbp, category) {
+  /**
+   * Category-defining prefs that do not have that category's value
+   * ([name, expected] pairs), or null when the category is unknown.
+   */
+  _cbMismatches(cbp, category) {
     if (!cbp.CATEGORY_PREFS?.[category] && cbp.setPrefExpectations) {
       cbp.setPrefExpectations();
     }
     const defs = cbp.CATEGORY_PREFS?.[category];
     if (!defs) {
-      return false;
+      return null;
     }
+    const out = [];
     for (const [pref, value] of Object.entries(defs)) {
       // Same exemptions as stock prefsMatch (user may change these in strict).
       if (
@@ -575,7 +579,7 @@ export var DarkstrModeXor = {
       }
       if (value === null || value === undefined) {
         if (Services.prefs.prefHasUserValue(pref)) {
-          return false;
+          out.push([pref, null]);
         }
         continue;
       }
@@ -583,15 +587,16 @@ export var DarkstrModeXor = {
       try {
         current = readUserValue(pref);
       } catch (_e) {
-        return false;
+        out.push([pref, value]);
+        continue;
       }
       // Stock semantics: a pref that does not exist is not a mismatch; loose !=.
       // eslint-disable-next-line eqeqeq
       if (current !== null && current != value) {
-        return false;
+        out.push([pref, value]);
       }
     }
-    return true;
+    return out;
   },
 
   /**
@@ -624,8 +629,29 @@ export var DarkstrModeXor = {
         return (result = "left");
       }
       const cbp = this._contentBlockingPrefs();
-      if (!cbp || !this._cbPrefsFit(cbp, target)) {
+      const miss = cbp ? this._cbMismatches(cbp, target) : null;
+      if (!miss) {
         return (result = "no-fit");
+      }
+      // A profile whose first start is already in Pollution saved the
+      // Pollution prefs before ContentBlockingPrefs applied the category (FPP
+      // had no user value yet), so restoring them leaves e.g. FPP=false under
+      // "strict". Only when every mismatch is one of ModeXor's own Pollution
+      // prefs, give those the category's value — what the cfg + stock
+      // setPrefsToCategory do at the next start. Anything else: no-fit.
+      const own = new Set(POLLUTION_PREFS.map(([n]) => n));
+      if (miss.some(([name, v]) => !own.has(name) || typeof v !== "boolean")) {
+        return (result = "no-fit");
+      }
+      for (const [name, v] of miss) {
+        Services.prefs.setBoolPref(name, v);
+      }
+      if (miss.length) {
+        this._lastCategoryFixed = miss.map(([n]) => n);
+      }
+      if (Services.prefs.getStringPref(CB_CATEGORY_PREF, "") === target) {
+        // stock matchCBCategory already re-matched on the pref change
+        return (result = "rematched:" + target + (miss.length ? "+own" : ""));
       }
       const was = !!cbp.switchingCategory;
       cbp.switchingCategory = true;
@@ -638,7 +664,7 @@ export var DarkstrModeXor = {
       } finally {
         cbp.switchingCategory = was;
       }
-      return (result = "rematched:" + target);
+      return (result = "rematched:" + target + (miss.length ? "+own" : ""));
     } catch (_e) {
       return (result = "error");
     } finally {
