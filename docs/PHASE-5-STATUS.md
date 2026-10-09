@@ -504,6 +504,183 @@ All five 0043 Worker/SharedWorker WebGPU XOR gates passed on Proof tip `cc692641
 - Evidence: `~/AgentDocs/proof/darkstr-pr74-0043-xor-20260928-084400/`
 - Apply log: `~/AgentDocs/proof/darkstr-pr74-0043-xor-20260928-084400/darkstr-apply-0043-20260928-084400.log`
 
+## In review — 0057 depth farbling seeded per site (Fable B2)
+
+| | |
+|---|---|
+| Pin | **0057**: canvas / audio / WebGL readPixels / fonts / WebGPU depth farbling, seeded per (container, site) from the 0056 store |
+| Branch | `builder/0057-depth-per-site`, stacked on `builder/0056-persona-seed-store` (0056r3 merged in, not rebased) |
+| Patch | [`patches/0057-darkstr-depth-per-site.patch`](../patches/0057-darkstr-depth-per-site.patch) + `patches/0057-files/` (DepthHooks, DepthHooksChild, DepthHooksParent, NativePersona, WorkerHooks, WorkerHooksChild, **ModeXor** (0057r2, base 0053r2); `SHA256SUMS`, `BASE_SHA256SUMS`: NativePersona base = 0056r3) |
+| Apply | `scripts/apply-0057-depth-per-site-mini.sh` (chrome JS only) |
+| Tests | `tests/depth-per-site-0057.test.mjs` |
+| DMG | **0057r3:** `~/AgentDocs/builds/darkstr-0057r3-91fd245c.dmg` (+ `.sha256`), sha256 `91fd245cf5c9d498b822d9c6a987190d13ba98301651a01d84cd0d4d5b121422`; omni matches all 7 `patches/0057-files`. **0057r2:** `~/AgentDocs/builds/darkstr-0057r2-f0595dd2.dmg` (+ `.sha256`), sha256 `f0595dd28963056bcf8fda0341792cfec5520332f9432f4e652bdf6f340f114a` (baseline FPP off under Pollution). Before: `~/AgentDocs/builds/darkstr-0057-35247c01.dmg`, sha256 `35247c01797681cec6534fc5e219e77186e5131c60f8c90146247bad668c07a0` (r5 = 0057 on 0056r3); omni matches `patches/0057-files`, 0056 store / CookieFirewall / ClearDataService, 0053r2 ModeXor, 0055 Ffi. Superseded: `darkstr-0057-75174927` (r1), `darkstr-0057-c2f8cece` (r4 on 0056r2) |
+| Evidence | **0057r3:** `~/AgentDocs/proof/darkstr-0057r3-20261009-111700/` (`selftest/live-r3`, negative control `live-negctl-0057r2`, `grade-*.txt`, `dmgverify.txt`). **0057r2:** `~/AgentDocs/proof/darkstr-0057r2-20261009-102504/` (`selftest/live-final`, `live-off-granted`, negative controls `live-negctl-0057r5` + `live-negctl-xor-0057r5`, `ROUNDTRIP-ADDENDUM.json`, `dmg-verify.log`); r5: `~/AgentDocs/proof/darkstr-0057-r5-20261009-101325/` (`selftest/live-final`, negative control `live-negctl-0056r3`, 0056 suite on this app `run-0056-on-0057r5.log`, `live-rfp-baseline`, `rfpcheck/`); r1–r4: `~/AgentDocs/proof/darkstr-0057-20261009-092626/` |
+
+### Design
+
+- **Arming.** DepthHooks arm on Pollution + native hooks + per-site rotation, with no global `darkstr.persona.seed`. The fixed seed and a locked snapshot stay the deterministic Proof path. The sharedData hint `darkstr:depthArmed` gates the sync pull, so off mode does no IPC.
+- **Seeds.** One seed set per (container, site) per surface (canvas, audio, font, speech, WebGPU), derived from the 0056 store seed. Seeds are resolved for the requesting document's own WindowGlobalParent (`NP.documentDecision(wgp)`), not `bc.currentWindowGlobal`.
+- **Early reads.** The child pulls synchronously (`DarkstrDepthHooks:GetSeedsSync`) at `DOMWindowCreated`, and also at `DOMDocElementInserted` for reused initial windows. An inline script's first read is already farbled.
+- **No stacking.** There is one install per inner global (key: Xray `HTMLCanvasElement.prototype`), with waiver-safe identity checks and an own-wrapper guard.
+- **Canvas.** Noise is keyed by the absolute surface pixel and applied to opaque pixels only. `getImageData` (full and sub-rect), `toDataURL`, `toBlob`, OffscreenCanvas `convertToBlob` and WebGL `readPixels` (with the GL row flip) all agree. The worker prelude mirrors it.
+- **Audio.** Ratio farbling within the fudge. `getFloatFrequencyData` is offset by `20*log10(fudge)` dB. Silence stays silent.
+
+### Live self-test (Mini, headless SWGL, sandbox-exec loopback only, own port 8357)
+
+r5 app: `armed` 63/63, `off_mode` and `fixed_seed` PASS.
+- **Same as the page:** early inline read, repeat reads, same-origin and same-site cross-origin frames, workers (OffscreenCanvas and fonts).
+- **Alternate paths agree:** canvas and GL.
+- **Single-layer seed replay:** canvas, GL, audio and fonts.
+- **Stable:** across reload, and across restart for a kept site.
+- **Differs:** across sites and across user contexts.
+- **Off mode:** native, store untouched.
+
+Negative control (0056r3 app): `armed` FAILs on every farbling check. The 0056 driver's 12 scenarios also PASS on the 0057 r5 app (`run-0056-on-0057r5.log`).
+
+### 0057r2: darkstr's farbling is the only canvas noise under Pollution
+
+ModeXor now also turns `privacy.baselineFingerprintingProtection` off under Pollution. It is a POLLUTION_PREF:
+- saved on entry together with RFP, FPP, the WebGL prompt and the ETP flag;
+- re-asserted when stomped;
+- restored exactly on exit.
+
+A saved copy left by an older build is backfilled for baseline only (RFP, FPP and the prompt are never backfilled), and off mode stays hands-off.
+
+Live results (no `canvas` permission anywhere):
+- **`armed`:** all checks PASS. Alternate canvas/GL paths disagree on **0 px** in total, against 4470 px on the r5 app (which also loses restart stability to per-session engine noise).
+- **`xor_roundtrip`** (runtime `darkstr.mode`, three starts: stock, user baseline off, user RFP off):
+  - under Pollution, RFP, FPP and baseline are false, and the saved copy has a baseline record;
+  - alternate canvas paths agree (0 px);
+  - on leave and after a restart, every owned pref and the ETP flag equal the start state exactly (`ROUNDTRIP-ADDENDUM.json`).
+- **`off_mode`:** baseline keeps its stock value with no user value, nothing is saved, and DepthHooks are idle. Without the permission, Firefox's own baseline canvas noise is present (stock, hands-off). With the permission (`live-off-granted`), the canvas is native.
+
+**Pre-existing (0053r2, same on r5):** right after leaving Pollution, `browser.contentblocking.category` stays `custom`. It returns to `strict` at the next start, when `ContentBlockingPrefs.init` re-matches it. Proposed fix (not done): re-run `matchCBCategory()` in ModeXor's idle restore pass, before re-restoring the ETP flag.
+
+### 0057r3: OffscreenCanvas WebGL exports, WebGPU (Proof 0057r2 FAIL)
+
+**1. OffscreenCanvas `convertToBlob` (page and worker prelude).**
+- The wrapper now exports a noisy clone drawn from the canvas itself: a temporary 2D OffscreenCanvas, then `drawImage(this)`, native `getImageData`, the same absolute-pixel noise, and `putImageData`. This is the same as `noisyClone` for `HTMLCanvasElement`.
+- WebGL and bitmaprenderer OffscreenCanvases now export what `readPixels` / `getImageData` report. r2 exported the real WebGL pixels, about 3020 px apart.
+- No 2D context is forced onto a canvas that had none. r2 called `getContext("2d")` on the source.
+
+**2. WebGPU: native objects, persona AdapterInfo.** One body (`WEBGPU_BODY`) is used byte-identically by the page and the worker prelude, and a test enforces this.
+- **Features:**
+  - `adapter.features` is the real `GPUSupportedFeatures`; `[...adapter.features]` works.
+  - The seed-ranked feature drop from 0038 is gone.
+  - An Intel persona (the one non-Apple persona on macOS) hides only the Apple-silicon-only formats (`texture-compression-astc`, `-astc-sliced-3d`, `-etc2`). It does this through a Proxy over the real object: `instanceof`, the prototype and `toStringTag` stay native; the setlike members read a real `Set` (Set iterators; `keys === values === @@iterator`).
+  - `requestDevice` rejects a hidden feature, and nothing is ever added.
+  - Device features are the native granted set. An Apple persona gets the native object untouched.
+- **Limits:** the real adapter and device limits are passed through. The seeded ×[0.99, 1) fudge, which produced impossible values like 16334, is gone.
+  - Every macOS persona is a Metal GPU behind the same wgpu limit tiers, so the host's limits are a coherent value for any of them.
+  - On a non-Mac host the renderer list is OS-filtered too.
+- **AdapterInfo:** unchanged; the per-site persona is coherent with WebGL UNMASKED.
+- **Readback: WebGPU canvases stay unfarbled.** A canvas that gets a `webgpu` context is recorded by a `getContext` wrapper, installed only when `navigator.gpu` exists. Its `toDataURL` / `toBlob` / `convertToBlob` return native output, so the canvas exports, `copyTextureToBuffer` readback and compute results all agree. Why not farble:
+  - consistent farbling of buffer readback is not feasible without corrupting compute results;
+  - farbling only canvas-texture copies is still exposed by rendering the same scene into an ordinary texture and reading that back.
+- **Caveat, inherent while WebGPU is enabled:** `drawImage(webgpuCanvas)` into a 2D canvas followed by `getImageData` is farbled by the 2D layer, like any image source. Likewise, `copyExternalImageToTexture` can read any image unfarbled. So 2D farbling vs WebGPU raw pixels can be told apart whenever WebGPU is exposed. LibreWolf ships `dom.webgpu.enabled=false`.
+
+**Live (headless, own server on 127.0.0.1:8459, hosts ar3.test / br3.test, sandbox-exec loopback only, fresh profile per app):**
+- Proof's ARMED prefs plus `dom.webgpu.enabled`; visits A1, A2, B1, then Native-Compatible NC-A1. Each visit probes:
+  - the page's 2D / WebGL / OffscreenCanvas 2D + WebGL;
+  - dedicated, shared and service workers (OffscreenCanvas 2D + WebGL);
+  - PNG / JPEG / WebP exports and `toBlob` JPEG.
+- **r3: 243/243.**
+  - Every lossless export equals its own read (0 px): page, dedicated, shared and service workers, 2D and WebGL.
+  - JPEG / WebP follow the farbled read (WebP quality 1 is lossless: 0.00 vs 1.52 to the known scene).
+  - Worker reads == page reads, and worker UA / hardwareConcurrency == page, including shared and service workers.
+  - A1 == A2 and A ≠ B; NC-A1 is fully native.
+- **0057r2 negative control: 195/243.** All 48 FAILs are the OffscreenCanvas WebGL export:
+  - native pixels, 757/768 px vs readPixels, in the page and all three worker kinds;
+  - a 2D context forced onto context-less canvases.
+- **Info:** a site's already-running service worker keeps the persona it started with when a later document of that site uses Native-Compatible, since NC is a per-document escape.
+- **WebGPU headless:** `navigator.gpu` is present, but `requestAdapter()` returns null, so WebGPU is untestable headless. The probe page and the JS unit tests (fake GPU: features iterable, real limits, Intel hiding, requestDevice) cover it offline. **For Proof's headed run:**
+  - `[...adapter.features]` (Apple persona == stock list; Intel persona == stock minus astc/etc2);
+  - limits == stock;
+  - WebGPU canvas `toDataURL` == `copyTextureToBuffer` readback;
+  - compute readback exact.
+
+### 0057r4: WebGL renderer strings as Gecko reports them (Proof #88 r3 item 5a)
+
+**Proof FAIL (live by default, no WebGPU needed).** Under an Intel persona, `RENDERER` (masked) was the native `"Apple M1, or similar"` while `UNMASKED_RENDERER_WEBGL` was the raw persona string `"Intel(R) Iris(R) Plus Graphics"`. Real Firefox never reports an unmasked renderer without its sanitizer: no ", or similar" suffix, no bucket. It was present since the first depth pin (r1 and r2 data show it too).
+
+**How Gecko 156 answers (dom/canvas/ClientWebGLContext.cpp, SanitizeRenderer.cpp), RFP / FPP / baseline FPP off as under Pollution:**
+- `VENDOR` = "Mozilla".
+- `RENDERER` = `SanitizeRenderer(raw GL_RENDERER)`.
+- `UNMASKED_RENDERER_WEBGL` = `SanitizeRenderer(raw)` (`webgl.sanitize-unmasked-renderer`, default true).
+- `UNMASKED_VENDOR_WEBGL` = the raw GL vendor (sanitized only under the RFP target).
+- Without `WEBGL_debug_renderer_info`, the UNMASKED_* calls return null and raise INVALID_ENUM.
+
+**Fix.**
+- `geckoSanitizeRenderer` is a 1:1 port of SanitizeRenderer / ChooseDeviceReplacement. It is byte-identical in DarkstrDepthHooksChild and DarkstrWorkerHooksChild (and the 0058 re-ship), so the page and every worker kind agree.
+- The page and worker `getParameter` hooks call the native getter first. A non-string (missing extension) or an RFP constant ("Mozilla...") passes through unchanged; otherwise the hook returns the persona's string as Gecko would:
+  - RENDERER is always sanitized;
+  - UNMASKED_RENDERER is sanitized while the pref is on;
+  - UNMASKED_VENDOR is the persona's raw vendor;
+  - VENDOR is never touched.
+- WebGL1 and WebGL2 prototypes are both hooked, so OffscreenCanvas WebGL in the page and in dedicated / shared / service workers is covered.
+- The page hook no longer stubs `WEBGL_debug_renderer_info`. The live self-test caught the old stub: page `getExtension` returned a plain `{UNMASKED_VENDOR_WEBGL, UNMASKED_RENDERER_WEBGL}` object, which is not a `WebGLDebugRendererInfo` (a tell of its own). It also never enabled the native extension, so with native-first the UNMASKED_* calls returned null + INVALID_ENUM in the page while workers answered. The extension is now advertised only when native has it, and `getExtension` returns the native object.
+
+| Persona GPU (raw) | RENDERER = UNMASKED_RENDERER | UNMASKED_VENDOR |
+|---|---|---|
+| Apple M1 / Apple M2 | `Apple M1, or similar` | `Apple` |
+| Intel(R) Iris(R) Plus Graphics (Gen11, 2020 13" MacBook Pro / Air) | `Intel(R) HD Graphics, or similar` | `Intel Inc.` |
+| ANGLE (Intel, Intel(R) UHD Graphics 630 Direct3D11 vs_5_0 ps_5_0, D3D11) | `ANGLE (Intel, Intel(R) HD Graphics 400 Direct3D11 vs_5_0 ps_5_0), or similar` | `Google Inc. (Intel)` |
+| ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 Direct3D11 …) | `ANGLE (NVIDIA, NVIDIA GeForce GTX 980 Direct3D11 vs_5_0 ps_5_0), or similar` | `Google Inc. (NVIDIA)` |
+| ANGLE (AMD, AMD Radeon RX 580 Direct3D11 …) | `ANGLE (AMD, Radeon R9 200 Series Direct3D11 vs_5_0 ps_5_0), or similar` | `Google Inc. (AMD)` |
+| Mesa Intel(R) UHD Graphics 630 (CFL GT2) | `Intel(R) HD Graphics 400, or similar` | `Intel` |
+| NVIDIA GeForce RTX 3060/PCIe/SSE2 | `NVIDIA GeForce GTX 980, or similar` | `NVIDIA Corporation` |
+| AMD Radeon RX 580 (radeonsi, …) | `Radeon R9 200 Series, or similar` | `AMD` |
+
+- The Windows pool used Chrome-style `ANGLE (…, OpenGL 4.5)` strings, which Gecko's sanitizer turns into "Generic Renderer". They are now the ANGLE Direct3D11 raw strings Firefox on Windows sees, with the same cap buckets.
+- Tests: `tests/webgl-renderer-0057r4.test.mjs`. It covers the bucket table, every pool entry, pass-through of stock null / "Mozilla", the worker prelude for WebGL1 and WebGL2, the page hook order, and byte-identity across copies.
+
+### 0057r4: private windows get darkstr's canvas noise only (Proof #92 / 0058r2 pbm finding)
+
+**Proof finding.** In a new private window, canvas `toDataURL` / `toBlob` / `convertToBlob` differed from `getImageData` (220 px), and WebGL exports differed from `readPixels` (465 px). Normal windows were at 0 px. It was present since 0057r2.
+
+**Cause.** Gecko 156 picks the protection mode per window: `nsRFPService::GetFingerprintingProtectionType(aIsPrivateMode)`.
+- In a private window, `privacy.fingerprintingProtection.pbmode` (StaticPrefList default **true**; strict's `fppPrivate`) turns on FPP mode, and FPP's CanvasRandomization noises the export paths.
+- `privacy.resistFingerprinting.pbmode` would do the same with RFP.
+- Pollution set only the global RFP / FPP / baseline prefs.
+- Self-test (`selftest-pbm`, same profile): private window 54 px on 2D exports and 230 px on GL exports in the page, OffscreenCanvas and dedicated / shared / service workers. With `privacy.fingerprintingProtection.pbmode=false` actually set at runtime: 0 px everywhere.
+- Proof's `pbmoff` run recorded the pref as default `true` at runtime (no user value), so that control never took effect.
+
+**Fix (DarkstrModeXor).**
+- `privacy.fingerprintingProtection.pbmode` and `privacy.resistFingerprinting.pbmode` join POLLUTION_PREFS (both false). They are saved once on entry and restored exactly on exit, like RFP / FPP / baseline FPP.
+- They are also in BACKFILL_PREFS: a profile already in Pollution under an older build records their current (user / stock) state before darkstr takes them over.
+- Both prefs are observed, and stomps under Pollution are re-asserted.
+- `xorSafe` requires both off.
+- The 0057c category re-match covers them through POLLUTION_PREFS: strict's `fppPrivate` = pbmode true is put back on exit.
+- Off mode never touches either pref.
+- Tests: `tests/off-mode-hands-off-0053.test.mjs` (round trips with user values, stomps, backfill, off mode, xorSafe).
+
+**Rebuilt DMG `darkstr-0057r4-49dbb327.dmg`** (0056r5 + 0057 at this fix; supersedes `789d970b`). dmgverify: 9/9 omni files MATCH the pins.
+- Private windows (`selftest-pbm2`, armed, default prefs, fresh profile): **71/71**. Every window is 0 px export vs read (2D, GL, drawImage, OffscreenCanvas in page / dedicated / shared / service): normal, private, private after a runtime FPP-pbmode stomp, and private2 after an RFP-pbmode stomp. Both pbmode prefs read false under Pollution and are back to stock defaults (no user value) after leaving.
+- WebGL strings (`gl57r4`): **605/605**. 0057r3 regression suite: **243/243**.
+- 0056r5 late keep, live (`selftest-latekeep`, no manual flush):
+  - **On r4:** late PASS, readd PASS, remove PASS (re-rolls).
+  - **Negative control on the old `789d970b`:** late FAIL and readd FAIL (empty disk store, persona re-rolls). This reproduces Proof #93.
+
+### Residual / for Proof
+
+- **(Fixed in 0057r2, see above.) Engine canvas noise under Pollution = baseline FPP.** ModeXor sets RFP and FPP to false, but `privacy.baselineFingerprintingProtection` stays true (Firefox default). Its canvas randomization adds per-session engine noise on top of darkstr's layer, so `toDataURL`/`toBlob`/`convertToBlob` vs `getImageData` and GL sub-rect/`toDataURL` disagree (`engine_rfp`: 94/2944 URL pixels).
+  - With `privacy.baselineFingerprintingProtection=false` and no canvas permission, every check passes (`engine_rfp_nobaseline`: 0/2944).
+  - The self-test grants the `canvas` permission to its probe origins to isolate darkstr's layer.
+  - **Proposed follow-up (not in this PR):** ModeXor also turns baseline FPP off under Pollution, with the same save/restore as RFP/FPP.
+- **Headed real-GPU items (Proof):**
+  - WebGL `readPixels` / `toDataURL` agreement and noise on a real GPU;
+  - WebGPU (`dom.webgpu.enabled`; `navigator.gpu` is absent headless here);
+  - GPU timing.
+- **WebGPU is a user opt-in residual. darkstr never enables it.**
+  - Gecko's built-in default for `dom.webgpu.enabled` is true on Windows and Apple-silicon macOS. LibreWolf's `librewolf.cfg` overrides it with `defaultPref("dom.webgpu.enabled", false)`, which ships unchanged in the DMG.
+  - No darkstr code writes the pref:
+    - ModeXor's `POLLUTION_PREFS` are only RFP, FPP, baseline FPP and the LibreWolf WebGL prompt.
+    - The persona, depth, worker and seed-store modules write only `darkstr.*` diagnostics.
+    - No apply script sets it.
+  - It is on only when a user flips it, or when a test harness sets it (Proof's ARMED prefs; this PR's self-test).
+  - While a user has it on, the WebGPU readback caveat above applies: WebGPU canvases, buffer readback and `copyExternalImageToTexture` are native and unfarbled, so they are a stable cross-site value.
+  - Accepted as user opt-in, the same as any other default-off API a user enables.
+
 ## In review — 0056 persisted per-site persona seeds (Fable N6 follow-up)
 
 | | |

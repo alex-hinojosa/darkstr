@@ -1,0 +1,2765 @@
+--- a/browser/components/DarkstrDepthHooks.sys.mjs
++++ b/browser/components/DarkstrDepthHooks.sys.mjs
+@@ -42,6 +42,15 @@
+  * coherent with depth gpu persona (no Chrome adapter cosplay).
+  *
+  * Workers = Phase 3 pin 3 — NOT in this module.
++ *
++ * 0057 (Fable B2): depth farbling is seeded per site from the persisted 0056
++ * seed store. It arms when Pollution, hooks and per-site rotation on the store
++ * are all on (no snapshot / darkstr.persona.seed needed); each (container,
++ * site) gets its own canvas / audio / WebGL / fonts / WebGPU noise, stable
++ * across reloads and restarts and different across sites and users.
++ * darkstr.persona.seed / a snapshot remain the deterministic Proof path only.
++ * Content pulls seeds synchronously at DOMWindowCreated (sharedData armed
++ * hint), so page scripts never read a native value first. Off mode: idle.
+  */
+ 
+ const MODE_PREF = "darkstr.mode";
+@@ -53,6 +62,12 @@
+ const LAST_SEEDS_PREF = "darkstr.depth.lastSeeds";
+ const LAST_ERROR_PREF = "darkstr.depth.lastError";
+ const LAST_INSTALL_PREF = "darkstr.depth.lastInstall";
++/** 0057: rotation pref (NativePersona) — depth arms on per-site store seeds. */
++const ROTATE_PER_SITE_PREF = "darkstr.persona.rotatePerSite";
++/** 0057: content asks for seeds synchronously at DOMWindowCreated. */
++const MSG_SEEDS_SYNC = "DarkstrDepthHooks:GetSeedsSync";
++/** 0057: sharedData hint so idle profiles never make the sync call. */
++const SHARED_ARMED_KEY = "darkstr:depthArmed";
+ 
+ /**
+  * 0052 (Fable B1 / O7): diagnostics stay in memory. They reach prefs.js only
+@@ -90,6 +105,9 @@
+ };
+ 
+ // Host-OS filtered Firefox-family GPU pairs (thin subset of profiles.js).
++// 0057r4: renderers are the RAW GL_RENDERER Firefox gets on that OS (Windows:
++// ANGLE Direct3D11); page / worker hooks report them through Gecko's
++// sanitizer like stock ("..., or similar").
+ const GPU_BY_OS = {
+   macos: [
+     { vendor: "Apple", renderer: "Apple M1" },
+@@ -97,9 +115,9 @@
+     { vendor: "Intel Inc.", renderer: "Intel(R) Iris(R) Plus Graphics" },
+   ],
+   windows: [
+-    { vendor: "Google Inc. (Intel)", renderer: "ANGLE (Intel, Intel(R) UHD Graphics 630, OpenGL 4.5)" },
+-    { vendor: "Google Inc. (NVIDIA)", renderer: "ANGLE (NVIDIA, NVIDIA GeForce RTX 3060, OpenGL 4.5)" },
+-    { vendor: "Google Inc. (AMD)", renderer: "ANGLE (AMD, AMD Radeon RX 580, OpenGL 4.5)" },
++    { vendor: "Google Inc. (Intel)", renderer: "ANGLE (Intel, Intel(R) UHD Graphics 630 Direct3D11 vs_5_0 ps_5_0, D3D11)" },
++    { vendor: "Google Inc. (NVIDIA)", renderer: "ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 Direct3D11 vs_5_0 ps_5_0, D3D11)" },
++    { vendor: "Google Inc. (AMD)", renderer: "ANGLE (AMD, AMD Radeon RX 580 Direct3D11 vs_5_0 ps_5_0, D3D11)" },
+   ],
+   linux: [
+     { vendor: "Intel", renderer: "Mesa Intel(R) UHD Graphics 630 (CFL GT2)" },
+@@ -225,9 +243,25 @@
+     }
+     this._inited = true;
+     this._observer = this._observe.bind(this);
+-    for (const p of [MODE_PREF, NATIVE_PREF, HOOKS_PREF, SNAPSHOT_PREF, SEED_PREF]) {
++    for (const p of [MODE_PREF, NATIVE_PREF, HOOKS_PREF, SNAPSHOT_PREF, SEED_PREF, ROTATE_PER_SITE_PREF]) {
+       Services.prefs.addObserver(p, this._observer);
+     }
++    // 0057: synchronous seed pull (DOMWindowCreated) so page scripts never see
++    // a native readout before the hooks are in (same pattern as the 0051
++    // NativePersona install).
++    this._syncListener = {
++      receiveMessage: message => {
++        try {
++          return this._onSyncSeeds(message);
++        } catch (e) {
++          console.error("darkstr 0057: depth seed sync IPC failed", e);
++          return { retry: true };
++        }
++      },
++    };
++    try {
++      Services.ppmm.addMessageListener(MSG_SEEDS_SYNC, this._syncListener);
++    } catch (_e) {}
+     this._registerActor();
+     this.refreshPlan();
+   },
+@@ -236,11 +270,15 @@
+     if (!this._inited) {
+       return;
+     }
+-    for (const p of [MODE_PREF, NATIVE_PREF, HOOKS_PREF, SNAPSHOT_PREF, SEED_PREF]) {
++    for (const p of [MODE_PREF, NATIVE_PREF, HOOKS_PREF, SNAPSHOT_PREF, SEED_PREF, ROTATE_PER_SITE_PREF]) {
+       try {
+         Services.prefs.removeObserver(p, this._observer);
+       } catch (_e) {}
+     }
++    try {
++      Services.ppmm.removeMessageListener(MSG_SEEDS_SYNC, this._syncListener);
++    } catch (_e) {}
++    this._syncListener = null;
+     if (this._actorRegistered) {
+       try {
+         ChromeUtils.unregisterWindowActor("DarkstrDepthHooks");
+@@ -273,6 +311,10 @@
+             "moz-src:///browser/components/DarkstrDepthHooksChild.sys.mjs",
+           events: {
+             DOMWindowCreated: {},
++            // 0057: same-origin iframes reuse the initial about:blank window
++            // (no DOMWindowCreated for their document): install before any
++            // of their scripts run.
++            DOMDocElementInserted: {},
+             pageshow: {},
+           },
+         },
+@@ -326,13 +368,24 @@
+ 
+     const pollutionActive = mode === "pollution" && !nativeCompatible;
+     const seeds = pollutionActive ? this._readDepthSeeds() : null;
+-    const armed = !!(pollutionActive && nativeHooks && seeds);
++    // 0057 (Fable B2): without a snapshot / Proof test seed, depth arms on the
++    // persisted per-site seeds (0056 store) — every site, every user its own
++    // noise. darkstr.persona.seed is the deterministic Proof path only. Off
++    // mode never gets here (pollutionActive false: NativePersona untouched).
++    const perSite = !!(
++      pollutionActive &&
++      nativeHooks &&
++      !seeds &&
++      this._perSiteStoreActive()
++    );
++    const armed = !!(pollutionActive && nativeHooks && (seeds || perSite));
+ 
+     this._plan = {
+       pollutionActive,
+       nativeHooks,
+       armed,
+-      seeds: armed ? seeds : null,
++      perSite,
++      seeds: armed && seeds ? seeds : null,
+     };
+     this._seeds = this._plan.seeds;
+     this._setArmed(armed, this._seeds);
+@@ -341,6 +394,47 @@
+ 
+   getPlan() {
+     return this._plan || this.refreshPlan();
++  },
++
++  _nativePersona() {
++    return ChromeUtils.importESModule(
++      "moz-src:///browser/components/DarkstrNativePersona.sys.mjs"
++    ).DarkstrNativePersona;
++  },
++
++  /** 0057: NativePersona per-site rotation runs on the 0056 store. */
++  _perSiteStoreActive() {
++    try {
++      const NP = this._nativePersona();
++      return !!NP._storeRotationActive?.(NP.getPlan());
++    } catch (_e) {
++      return false;
++    }
++  },
++
++  /** 0057: sync seed pull from DarkstrDepthHooksChild (DOMWindowCreated). */
++  _onSyncSeeds(message) {
++    const id = message?.data?.innerWindowId;
++    let wgp = null;
++    try {
++      wgp = id ? WindowGlobalParent.getByInnerWindowId(id) : null;
++    } catch (_e) {}
++    if (!wgp) {
++      return { retry: true };
++    }
++    try {
++      const senderPid = message.target?.osPid;
++      if (
++        typeof senderPid === "number" &&
++        typeof wgp.osPid === "number" &&
++        senderPid > 0 &&
++        wgp.osPid > 0 &&
++        senderPid !== wgp.osPid
++      ) {
++        return { seeds: null, error: "pid-mismatch" };
++      }
++    } catch (_e) {}
++    return { seeds: this.depthSeedsForBrowsingContext(wgp.browsingContext, wgp) };
+   },
+ 
+   /** Persist content-install diagnostics. Never writes privacy.*. */
+@@ -376,10 +470,17 @@
+     }
+   },
+ 
+-  /** Depth seeds for JSWindowActor child (null when idle / first-doc). */
+-  depthSeedsForBrowsingContext(bc) {
++  /**
++   * Depth seeds for JSWindowActor child (null when idle / first-doc).
++   * 0057: `wgp` = the requesting document's WindowGlobalParent. At
++   * DOMWindowCreated (sync pull) bc.currentWindowGlobal / currentURI can
++   * still be the previous document (other site, or the initial about:blank),
++   * so the site, container and snapshot come from that document's own
++   * NativePersona decision (frames: their top document's decision).
++   */
++  depthSeedsForBrowsingContext(bc, wgp = null) {
+     const plan = this.getPlan();
+-    if (!plan.armed || !plan.seeds) {
++    if (!plan.armed || (!plan.seeds && !plan.perSite)) {
+       return null;
+     }
+     // SubsequentNav arm: reuse NativePersona first-doc gate when available.
+@@ -395,8 +496,18 @@
+       const { DarkstrNativePersona } = ChromeUtils.importESModule(
+         "moz-src:///browser/components/DarkstrNativePersona.sys.mjs"
+       );
+-      if (DarkstrNativePersona.snapshotForBrowsingContext) {
+-        const snap = DarkstrNativePersona.snapshotForBrowsingContext(bc);
++      let decision = null;
++      if (wgp && DarkstrNativePersona.documentDecision) {
++        try {
++          decision = DarkstrNativePersona.documentDecision(wgp);
++        } catch (_eDec) {
++          decision = null;
++        }
++      }
++      if (decision || DarkstrNativePersona.snapshotForBrowsingContext) {
++        const snap = decision
++          ? decision.snapshot
++          : DarkstrNativePersona.snapshotForBrowsingContext(bc);
+         if (!snap) {
+           return null;
+         }
+@@ -418,7 +529,9 @@
+         if (rotating) {
+           let etld = null;
+           try {
+-            if (DarkstrNativePersona._etldPlus1FromBrowsingContext) {
++            if (decision) {
++              etld = decision.site || null;
++            } else if (DarkstrNativePersona._etldPlus1FromBrowsingContext) {
+               etld = DarkstrNativePersona._etldPlus1FromBrowsingContext(bc);
+             }
+           } catch (_eEtld) {}
+@@ -427,18 +540,24 @@
+           // "last writer wins" prefs, so a frame whose own site could not be
+           // resolved took another site's depth seeds. Now it gets none.
+           let seed = 0;
+-          if (etld && DarkstrNativePersona._seedForEtld) {
++          const ctx = decision?.ctx
++            ? decision.ctx
++            : DarkstrNativePersona._ctxOfBC
++              ? DarkstrNativePersona._ctxOfBC(bc)
++              : "0";
++          if (etld && plan.perSite) {
++            // 0057: the stored per-site seed only (no session-mix fallback).
+             try {
+-              seed =
+-                DarkstrNativePersona._seedForEtld(
+-                  etld,
+-                  DarkstrNativePersona._ctxOfBC
+-                    ? DarkstrNativePersona._ctxOfBC(bc)
+-                    : "0"
+-                ) >>> 0;
++              seed = DarkstrNativePersona._storeSeedForEtld(etld, ctx) >>> 0;
+             } catch (_eSeed) {
+               seed = 0;
+             }
++          } else if (etld && DarkstrNativePersona._seedForEtld) {
++            try {
++              seed = DarkstrNativePersona._seedForEtld(etld, ctx) >>> 0;
++            } catch (_eSeed) {
++              seed = 0;
++            }
+           }
+           if (!seed) {
+             return null;
+@@ -488,6 +607,10 @@
+       // now (and was another tab's last load anyway), so fail closed.
+       return null;
+     }
++    if (!plan.seeds) {
++      // 0057: per-site arming has no global fallback (fail closed).
++      return null;
++    }
+     const fontSeedOut =
+       (plan.seeds.fontSeed >>> 0) ||
+       deriveFontSeed(plan.seeds.canvasSeed, plan.seeds.audioSeed);
+@@ -699,6 +822,13 @@
+     try {
+       diagPrefs.setBoolPref(ARMED_PREF, this._armed);
+     } catch (_e) {}
++    try {
++      const shared = Services.ppmm.sharedData;
++      if (shared.get(SHARED_ARMED_KEY) !== this._armed) {
++        shared.set(SHARED_ARMED_KEY, this._armed);
++        shared.flush();
++      }
++    } catch (_e) {}
+     if (this._armed && seeds) {
+       this._writeLastSeeds(seeds);
+     } else {
+--- a/browser/components/DarkstrDepthHooksChild.sys.mjs
++++ b/browser/components/DarkstrDepthHooksChild.sys.mjs
+@@ -44,6 +44,31 @@
+ 
+ const installedByWindow = new WeakMap();
+ 
++/**
++ * 0057: install-record key = the window's own HTMLCanvasElement.prototype,
++ * read through Xrays (page code cannot redirect it). One key per inner
++ * window global, whether the actor sees the WindowProxy or the inner window
++ * (DOMWindowCreated vs pageshow) and when an initial about:blank inner window
++ * is reused for a same-origin document -- so hooks are never stacked twice on
++ * the same prototypes (pre-0057: double noise once the sync DOMWindowCreated
++ * install and the pageshow install keyed differently).
++ */
++function installKey(rawWindow) {
++  try {
++    const proto = rawWindow?.HTMLCanvasElement?.prototype;
++    if (proto && typeof proto === "object") {
++      return unwaived(proto);
++    }
++  } catch (_e) {}
++  return rawWindow;
++}
++
++/** 0057: hooks already live on this window's prototypes. */
++function depthHooksInstalled(rawWindow) {
++  const prior = installedByWindow.get(installKey(rawWindow));
++  return !!(prior && prior.replacements.every(methodIsInstalled));
++}
++
+ function errorText(error) {
+   try {
+     return String(error?.stack || error?.message || error || "unknown error");
+@@ -77,21 +102,100 @@
+   return h & 1 ? magnitude : -magnitude;
+ }
+ 
+-function applyCanvasNoise(px, seed) {
++/**
++ * 0057: canvas noise for a readout of rectangle (sx, sy, sw, sh) of a cw x ch
++ * surface. Keyed by the pixel's ABSOLUTE position on the surface (top-down
++ * rows), so every readout path agrees on every pixel: full vs sub-rectangle
++ * getImageData, toDataURL / toBlob / convertToBlob (full clone), WebGL
++ * readPixels (flipY: GL rows are bottom-up), page vs worker. Only opaque,
++ * in-bounds pixels are touched: transparent/semi-transparent pixels would not
++ * survive the premultiplied putImageData round trip of the encode paths (and a
++ * blank canvas stays blank, like stock). Full-surface reads keep the pre-0057
++ * index (i) for opaque pixels.
++ */
++function applyCanvasNoiseRect(px, seed, sx, sy, sw, sh, cw, ch, flipY) {
+   const data = Cu.waiveXrays(px);
+-  for (let i = 0; i < data.length; i += 4) {
+-    data[i] = Math.max(0, Math.min(255, data[i] + pixelNoise(seed, i, data[i])));
+-    data[i + 1] = Math.max(
+-      0,
+-      Math.min(255, data[i + 1] + pixelNoise(seed, i + 1, data[i + 1]))
+-    );
+-    data[i + 2] = Math.max(
+-      0,
+-      Math.min(255, data[i + 2] + pixelNoise(seed, i + 2, data[i + 2]))
+-    );
++  sx = Math.trunc(Number(sx) || 0);
++  sy = Math.trunc(Number(sy) || 0);
++  sw = Math.trunc(Number(sw) || 0);
++  sh = Math.trunc(Number(sh) || 0);
++  cw = Math.trunc(Number(cw) || 0);
++  ch = Math.trunc(Number(ch) || 0);
++  if (sw < 0) {
++    sx += sw;
++    sw = -sw;
+   }
++  if (sh < 0) {
++    sy += sh;
++    sh = -sh;
++  }
++  if (!sw || !sh || !cw || !ch || data.length < sw * sh * 4) {
++    return;
++  }
++  for (let r = 0; r < sh; r++) {
++    const y = sy + r;
++    if (y < 0 || y >= ch) {
++      continue;
++    }
++    const ay = flipY ? ch - 1 - y : y;
++    for (let c = 0; c < sw; c++) {
++      const x = sx + c;
++      if (x < 0 || x >= cw) {
++        continue;
++      }
++      const i = (r * sw + c) * 4;
++      if (data[i + 3] !== 255) {
++        continue;
++      }
++      const a = (ay * cw + x) * 4;
++      data[i] = Math.max(0, Math.min(255, data[i] + pixelNoise(seed, a, data[i])));
++      data[i + 1] = Math.max(
++        0,
++        Math.min(255, data[i + 1] + pixelNoise(seed, a + 1, data[i + 1]))
++      );
++      data[i + 2] = Math.max(
++        0,
++        Math.min(255, data[i + 2] + pixelNoise(seed, a + 2, data[i + 2]))
++      );
++    }
++  }
+ }
+ 
++/** Whole-surface readout (w x h from 0,0). */
++function applyCanvasNoise(px, seed, w, h) {
++  applyCanvasNoiseRect(px, seed, 0, 0, w, h, w, h, false);
++}
++
++/** getImageData(sx, sy, sw, sh[, settings]) on a context of surface `surf`. */
++function noiseImageDataRead(id, seed, args, surf) {
++  const w = Number(surf?.width) || 0;
++  const h = Number(surf?.height) || 0;
++  applyCanvasNoiseRect(Cu.waiveXrays(id).data, seed, args[0], args[1], args[2], args[3], w, h, false);
++}
++
++/**
++ * 0057: identity across Xray waivers. Values read from a waived prototype are
++ * waiver wrappers, while Cu.exportFunction hands back a plain wrapper, so a
++ * raw === never matched: "already-installed" and uninstall's restore never
++ * fired, and every install event stacked another layer of hooks.
++ */
++function unwaived(x) {
++  try {
++    return x && (typeof x === "object" || typeof x === "function")
++      ? Cu.unwaiveXrays(x)
++      : x;
++  } catch (_e) {
++    return x;
++  }
++}
++
++function sameObject(a, b) {
++  return a === b || (a != null && b != null && unwaived(a) === unwaived(b));
++}
++
++/** 0057: our wrapper (unwaived) -> the descriptor it replaced. */
++const ourWrappers = new WeakMap();
++
+ function methodIsInstalled(replacement) {
+   try {
+     const desc = Object.getOwnPropertyDescriptor(
+@@ -102,10 +206,10 @@
+       return false;
+     }
+     if (desc.value !== undefined) {
+-      return desc.value === replacement.wrapper;
++      return sameObject(desc.value, replacement.wrapper);
+     }
+     if (desc.get !== undefined) {
+-      return desc.get === replacement.wrapper;
++      return sameObject(desc.get, replacement.wrapper);
+     }
+     return false;
+   } catch (_e) {
+@@ -125,23 +229,244 @@
+ }
+ 
+ function uninstallDepthHooks(rawWindow) {
+-  const record = installedByWindow.get(rawWindow);
++  const key = installKey(rawWindow);
++  const record = installedByWindow.get(key);
+   if (!record) {
+     return "idle";
+   }
+   for (const replacement of record.replacements.slice().reverse()) {
+     restoreReplacement(replacement);
+   }
+-  installedByWindow.delete(rawWindow);
++  installedByWindow.delete(key);
+   return "uninstalled";
++}
++
++/**
++ * 0057r3: WebGPU page/worker body (byte-identical in DarkstrWorkerHooksChild;
++ * tests/depth-per-site-0057 checks). Runs in the page / worker global with
++ * (seed, gpuVendor, gpuRenderer); returns the requestAdapter hook record.
++ */
++const WEBGPU_BODY = `"use strict";
++// 0057r3 (Proof 0057r2): WebGPU keeps its native objects. Limits and device
++// features are the real ones; adapter features are the real setlike (an Intel
++// persona hides only the Apple-silicon-only texture formats); AdapterInfo is the
++// persona's. Canvas exports of WebGPU canvases stay unfarbled (DepthHooksChild /
++// worker prelude), so canvas and buffer readback agree.
++var VENDOR = String(gpuVendor || "Apple");
++var RENDERER = String(gpuRenderer || "Apple M1");
++var hooks = { requestAdapter: null, origRequestAdapter: null, gpuProto: null };
++var gpuObj = null;
++try {
++  if (typeof navigator !== "undefined" && navigator && navigator.gpu) {
++    gpuObj = navigator.gpu;
++  }
++} catch (_e) {}
++if (!gpuObj) { return hooks; }
++// WebGL persona -> Firefox-plausible AdapterInfo. Never Chrome/ANGLE brands.
++function mapAdapterInfo() {
++  var v = VENDOR.toLowerCase();
++  var r = String(RENDERER || "");
++  if (/apple/i.test(v) || /apple/i.test(r)) {
++    return { vendor: "apple", architecture: "common-3", device: "", description: r || "Apple GPU" };
++  }
++  if (/intel/i.test(v) || /intel/i.test(r)) {
++    return { vendor: "intel", architecture: "gen-12lp", device: "", description: r || "Intel Graphics" };
++  }
++  if (/nvidia/i.test(v) || /nvidia/i.test(r)) {
++    return { vendor: "nvidia", architecture: "gpu", device: "", description: r || "NVIDIA GPU" };
++  }
++  if (/amd/i.test(v) || /radeon/i.test(r)) {
++    return { vendor: "amd", architecture: "gcn", device: "", description: r || "AMD GPU" };
++  }
++  return { vendor: "apple", architecture: "common-3", device: "", description: r || "Apple GPU" };
++}
++var PERSONA_INFO = mapAdapterInfo();
++// Metal texture formats only Apple-silicon GPUs have. A non-Apple persona hides
++// them so the feature set is one its renderer could report. Nothing is ever
++// added; every other feature and every limit is the host's own.
++var APPLE_SILICON_ONLY_FEATURES = {
++  "texture-compression-astc": 1,
++  "texture-compression-astc-sliced-3d": 1,
++  "texture-compression-etc2": 1
++};
++var HIDDEN_FEATURES = PERSONA_INFO.vendor === "apple" ? null : APPLE_SILICON_ONLY_FEATURES;
++var featureViews = new WeakMap();
++function named(fn, name) {
++  try { Object.defineProperty(fn, "name", { configurable: true, value: name }); } catch (_n) {}
++  return fn;
++}
++function wrapFeatures(nativeFeatures) {
++  if (!nativeFeatures || typeof nativeFeatures !== "object" || !HIDDEN_FEATURES) {
++    return nativeFeatures;
++  }
++  var known = featureViews.get(nativeFeatures);
++  if (known) { return known; }
++  var visible = new Set();
++  var hidden = false;
++  try {
++    nativeFeatures.forEach(function(name) {
++      name = String(name);
++      if (HIDDEN_FEATURES[name] === 1) { hidden = true; } else { visible.add(name); }
++    });
++  } catch (_e) {
++    return nativeFeatures;
++  }
++  if (!hidden) {
++    featureViews.set(nativeFeatures, nativeFeatures);
++    return nativeFeatures;
++  }
++  // Proxy over the real GPUSupportedFeatures: instanceof, toStringTag and
++  // prototype stay native; the setlike members read a real Set (Set iterators,
++  // native-looking bound functions; keys === values === @@iterator).
++  var values = named(visible.values.bind(visible), "values");
++  var own = {
++    has: named(visible.has.bind(visible), "has"),
++    values: values,
++    keys: values,
++    entries: named(visible.entries.bind(visible), "entries"),
++    forEach: named(visible.forEach.bind(visible), "forEach")
++  };
++  var view = new Proxy(nativeFeatures, {
++    get: function(target, prop) {
++      if (prop === Symbol.iterator) { return values; }
++      if (prop === "size") { return visible.size; }
++      if (typeof prop === "string" && Object.prototype.hasOwnProperty.call(own, prop)) {
++        return own[prop];
++      }
++      return Reflect.get(target, prop, target);
++    }
++  });
++  featureViews.set(nativeFeatures, view);
++  return view;
++}
++function wrapInfo(nativeInfo) {
++  // Plain object (a Proxy(GPUAdapterInfo) is Xray-transparent to Marionette).
++  var out = {
++    vendor: String(PERSONA_INFO.vendor || ""),
++    architecture: String(PERSONA_INFO.architecture || ""),
++    device: String(PERSONA_INFO.device || ""),
++    description: String(PERSONA_INFO.description || "")
++  };
++  try {
++    if (nativeInfo && typeof nativeInfo.isFallbackAdapter === "boolean") {
++      out.isFallbackAdapter = nativeInfo.isFallbackAdapter;
++    }
++    if (nativeInfo && typeof nativeInfo.subgroupMinSize === "number") {
++      out.subgroupMinSize = nativeInfo.subgroupMinSize;
++    }
++    if (nativeInfo && typeof nativeInfo.subgroupMaxSize === "number") {
++      out.subgroupMaxSize = nativeInfo.subgroupMaxSize;
++    }
++  } catch (_e) {}
++  return out;
++}
++function overlayDeviceInfo(device, info) {
++  // Device features / limits stay native (what was granted). Only adapterInfo
++  // follows the adapter's persona info.
++  try {
++    if (device && "adapterInfo" in device) {
++      Object.defineProperty(device, "adapterInfo", {
++        configurable: true, enumerable: true, get: function() { return info; }
++      });
++    }
++  } catch (_e) {}
++  return device;
++}
++var wrappedAdapters = new WeakMap();
++function wrapAdapter(adapter) {
++  if (!adapter) { return adapter; }
++  var known = wrappedAdapters.get(adapter);
++  if (known) { return known; }
++  var featCache = null;
++  var infoCache = null;
++  var requestDevice = null;
++  function getFeat() {
++    if (!featCache) { featCache = wrapFeatures(adapter.features); }
++    return featCache;
++  }
++  function getInfo() {
++    if (!infoCache) { infoCache = wrapInfo(adapter.info); }
++    return infoCache;
++  }
++  var proxy = new Proxy(adapter, {
++    get: function(target, prop) {
++      if (typeof prop === "symbol") { return Reflect.get(target, prop, target); }
++      if (prop === "features") { return getFeat(); }
++      if (prop === "info") { return getInfo(); }
++      if (prop === "requestDevice") {
++        if (!requestDevice) {
++          var origRD = target.requestDevice;
++          requestDevice = named(function() {
++            var desc = arguments[0];
++            var feats = getFeat();
++            if (feats !== target.features && desc && desc.requiredFeatures) {
++              var req;
++              try { req = Array.from(desc.requiredFeatures, String); } catch (_r) { req = []; }
++              for (var i = 0; i < req.length; i++) {
++                if (!feats.has(req[i])) {
++                  return Promise.reject(new TypeError(
++                    "GPUAdapter.requestDevice: feature '" + req[i] + "' is not supported by the adapter"
++                  ));
++                }
++              }
++            }
++            return Promise.resolve(origRD.apply(target, arguments)).then(function(dev) {
++              return overlayDeviceInfo(dev, getInfo());
++            });
++          }, "requestDevice");
++        }
++        return requestDevice;
++      }
++      var raw;
++      try { raw = target[prop]; } catch (_e) { return undefined; }
++      if (typeof raw === "function") { return raw.bind(target); }
++      return raw;
++    }
++  });
++  wrappedAdapters.set(adapter, proxy);
++  return proxy;
+ }
++var gpuProto = Object.getPrototypeOf(gpuObj);
++if (!gpuProto && typeof GPU !== "undefined" && GPU.prototype) {
++  gpuProto = GPU.prototype;
++}
++if (gpuProto && typeof gpuProto.requestAdapter === "function") {
++  var origRA = gpuProto.requestAdapter;
++  var wrappedRA = named(function() {
++    return Promise.resolve(origRA.apply(this, arguments)).then(function(adapter) {
++      if (!adapter) { return null; }
++      return wrapAdapter(adapter);
++    });
++  }, "requestAdapter");
++  Object.defineProperty(gpuProto, "requestAdapter", {
++    configurable: true, enumerable: true, writable: true, value: wrappedRA
++  });
++  hooks.requestAdapter = wrappedRA;
++  hooks.origRequestAdapter = origRA;
++  hooks.gpuProto = gpuProto;
++}
++return hooks;
++`;
+ 
+ function replaceMethod(pageWindow, proto, name, implementation, replacements) {
+-  const descriptor = Object.getOwnPropertyDescriptor(proto, name);
++  let descriptor = Object.getOwnPropertyDescriptor(proto, name);
++  // 0057: never wrap one of our own wrappers (no stacked noise, whatever the
++  // install bookkeeping says): start from the descriptor it replaced.
++  for (
++    let i = 0;
++    i < 8 &&
++    descriptor &&
++    typeof descriptor.value === "function" &&
++    ourWrappers.has(unwaived(descriptor.value));
++    i++
++  ) {
++    descriptor = ourWrappers.get(unwaived(descriptor.value));
++  }
+   if (!descriptor || typeof descriptor.value !== "function") {
+     throw new Error(`${name} native descriptor unavailable`);
+   }
+   const wrapper = Cu.exportFunction(implementation, pageWindow);
++  ourWrappers.set(unwaived(wrapper), descriptor);
+   Object.defineProperty(proto, name, { ...descriptor, value: wrapper });
+   replacements.push({
+     proto,
+@@ -240,7 +565,160 @@
+     maxAnisotropy: 16,
+   },
+ };
++
++// 0057r4: Gecko's WebGL renderer sanitizer (dom/canvas/SanitizeRenderer.cpp,
++// Firefox 156) ported 1:1. A persona's RENDERER and UNMASKED_RENDERER_WEBGL are
++// what Gecko reports for that GPU's raw GL_RENDERER: the same bucket plus the
++// ", or similar" suffix. Byte-identical in DarkstrDepthHooksChild and
++// DarkstrWorkerHooksChild (tests/webgl-renderer-0057r4 checks).
++function geckoChooseDeviceReplacement(str) {
++  str = String(str);
++  if (str.indexOf("llvmpipe") === 0) return "llvmpipe";
++  if (str.indexOf("Apple") === 0) return "Apple M1";
++  let m;
++  const has = (part) => str.indexOf(part) !== -1;
++  // AMD
++  const RADEON_HD_3000 = "Radeon HD 3200 Graphics";
++  const RADEON_HD_5850 = "Radeon HD 5850";
++  const RADEON_R9_290 = "Radeon R9 200 Series";
++  if (has("REMBRANDT") || has("RENOIR") || has("Vega") || has("VII") || has("Fury")) {
++    return RADEON_R9_290;
++  }
++  m = /Radeon.*?((R[579X]|HD) )?([0-9][0-9][0-9]+)/.exec(str);
++  if (m) {
++    const modelNum = parseInt(m[3], 10);
++    if ((m[2] || "") === "HD") {
++      if (modelNum >= 5000) return RADEON_HD_5850;
++      return RADEON_HD_3000;
++    }
++    return RADEON_R9_290;
++  }
++  m = /FirePro.*?([VDW])[0-9][0-9][0-9]+/.exec(str);
++  if (m) return m[1] === "V" ? RADEON_HD_3000 : RADEON_R9_290;
++  if (has("ARUBA")) return RADEON_HD_5850;
++  if (has("AMD ") || has("FirePro") || has("Radeon")) return RADEON_HD_3000;
++  // NVIDIA
++  const GEFORCE_8800 = "GeForce 8800 GTX";
++  const GEFORCE_480 = "GeForce GTX 480";
++  const GEFORCE_980 = "GeForce GTX 980";
++  if (has("NVIDIA") || has("GeForce") || has("Quadro")) {
++    let ret = GEFORCE_8800;
++    if ((m = /GeForce.*?([0-9][0-9][0-9]+)/.exec(str))) {
++      const modelNum = parseInt(m[1], 10);
++      if (modelNum >= 8000) ret = GEFORCE_8800;
++      else if (modelNum >= 900) ret = GEFORCE_980;
++      else if (modelNum >= 400) ret = GEFORCE_480;
++      else ret = GEFORCE_8800;
++    } else if ((m = /Quadro.*?([KMPVT]?)[0-9][0-9][0-9]+/.exec(str))) {
++      if (has("RTX")) ret = GEFORCE_980;
++      else if (m[1]) ret = "MPVT".indexOf(m[1]) !== -1 ? GEFORCE_980 : GEFORCE_480;
++      else ret = GEFORCE_8800;
++    } else if ((m = /TITAN( [BZXVR])?/.exec(str))) {
++      const letter = m[1] ? m[1][1] : " ";
++      ret = letter === " " || letter === "B" || letter === "Z" ? GEFORCE_480 : GEFORCE_980;
++    }
++    if (str.indexOf("NVIDIA") === 0) ret = "NVIDIA " + ret;
++    return ret;
++  }
++  if ((m = /^NV(1?[0-9A-F][0-9A-F])$/.exec(str))) {
++    const modelNum = parseInt(m[1], 16);
++    if (modelNum >= 0x120) return GEFORCE_980;
++    if (modelNum >= 0xc0) return GEFORCE_480;
++    return GEFORCE_8800;
++  }
++  // Intel
++  if (has("Intel")) {
++    if (has("Intel(R) Arc(TM)")) return "Intel(R) Arc(TM) A750 Graphics";
++    if ((m = /Intel.*Graphics( P?([0-9][0-9][0-9]+))?/.exec(str))) {
++      if (!m[1]) return "Intel(R) HD Graphics";
++      const modelNum = parseInt(m[2], 10);
++      if (modelNum >= 5000) return "Intel(R) HD Graphics 400";
++      if (modelNum >= 1000) return "Intel(R) HD Graphics";
++      return "Intel(R) HD Graphics 400";
++    }
++    return "Intel 945GM";
++  }
++  if ((m = /Adreno.*?([A-Z]?[0-9]-?[0-9]+)/.exec(str))) {
++    const modelName = m[1];
++    if (modelName[0] === "A") return "Adreno (TM) A11";
++    if (modelName[0] === "X") return "Adreno (TM) X1-45";
++    const modelNum = parseInt(modelName, 10);
++    if (modelNum >= 600) return "Adreno (TM) 650";
++    if (modelNum >= 500) return "Adreno (TM) 540";
++    if (modelNum >= 400) return "Adreno (TM) 430";
++    if (modelNum >= 300) return "Adreno (TM) 330";
++    return "Adreno (TM) 225";
++  }
++  if ((m = /Mali.*?([0-9][0-9]+)/.exec(str))) {
++    const modelNum = parseInt(m[1], 10);
++    if (modelNum >= 800) return "Mali-T880";
++    if (modelNum >= 700) return "Mali-T760";
++    if (modelNum >= 600) return "Mali-T628";
++    if (modelNum >= 400) return "Mali-400 MP";
++    return "Mali-G51";
++  }
++  if (has("PowerVR")) return has("Rogue") ? "PowerVR Rogue G6200" : "PowerVR SGX 540";
++  if (has("Samsung Xclipse")) return "Samsung Xclipse 920";
++  if (has("Vivante")) return "Vivante GC1000";
++  if (has("VideoCore")) return "VideoCore IV HW";
++  if (has("Tegra")) return "NVIDIA Tegra";
++  if (has("Microsoft Basic Render Driver")) return str;
++  return null;
++}
+ 
++export function geckoSanitizeRenderer(rawRenderer) {
++  const raw = String(rawRenderer);
++  const GENERIC_RENDERER = "Generic Renderer";
++  const device = (() => {
++    let m;
++    if ((m = /^ANGLE [(]([^,]*), ([^,]*)( Direct3D[^,]*), .*[)]$/.exec(raw))) {
++      const r2 = geckoChooseDeviceReplacement(m[2]) || GENERIC_RENDERER;
++      return "ANGLE (" + m[1] + ", " + r2 + m[3] + ")";
++    }
++    if ((m = /^ANGLE [(]+(.*)[)]( on Vulkan) [0-9.]*[)]*$/.exec(raw))) {
++      const r2 = geckoChooseDeviceReplacement(m[1]) || GENERIC_RENDERER;
++      return "ANGLE (" + r2 + ")" + m[2];
++    }
++    if ((m = /^ANGLE [(]([^,]*), ANGLE Metal Renderer: ([^,]*), Version .*[)]$/.exec(raw))) {
++      const r2 = geckoChooseDeviceReplacement(m[2]) || GENERIC_RENDERER;
++      return "ANGLE (" + m[1] + ", ANGLE Metal Renderer: " + r2 + ")";
++    }
++    if (raw.indexOf("ANGLE") !== -1) return null;
++    if ((m = /^(.*) OpenGL Engine$/.exec(raw))) return geckoChooseDeviceReplacement(m[1]);
++    if ((m = /^(.*)(\/PCIe?\/SSE2)$/.exec(raw))) return geckoChooseDeviceReplacement(m[1]);
++    if ((m = /^(.*)( [(].*[)])$/.exec(raw))) return geckoChooseDeviceReplacement(m[1]);
++    return geckoChooseDeviceReplacement(raw);
++  })();
++  if (!device) return GENERIC_RENDERER;
++  return device + ", or similar";
++}
++
++/** webgl.sanitize-unmasked-renderer (Gecko default true). */
++export function sanitizeUnmaskedPref() {
++  try {
++    const prefs = globalThis.Services?.prefs;
++    if (!prefs?.getBoolPref) return true;
++    return prefs.getBoolPref("webgl.sanitize-unmasked-renderer", true) !== false;
++  } catch (_e) {
++    return true;
++  }
++}
++
++/**
++ * RENDERER (0x1F01) / UNMASKED_VENDOR_WEBGL (0x9245) / UNMASKED_RENDERER_WEBGL
++ * (0x9246) for a persona GPU, given what stock returned for the same call.
++ * Stock non-strings (no WEBGL_debug_renderer_info: null + INVALID_ENUM) and
++ * RFP constants ("Mozilla...") pass through; VENDOR (0x1F00) is never touched
++ * (stock "Mozilla").
++ */
++export function personaGlString(param, native, gpu, sanitizeUnmasked = true) {
++  if (typeof native !== "string" || native.indexOf("Mozilla") === 0) return native;
++  if (param === 0x9245) return String(gpu?.vendor || "Apple");
++  const raw = String(gpu?.renderer || "Apple M1");
++  if (param === 0x1f01) return geckoSanitizeRenderer(raw);
++  return sanitizeUnmasked ? geckoSanitizeRenderer(raw) : raw;
++}
++
+ function getCapBucket(renderer) {
+   const r = String(renderer || "");
+   if (/Apple\s+M[12]/.test(r)) {
+@@ -263,7 +741,8 @@
+ }
+ 
+ function installDepthHooks(rawWindow, seeds, onRuntimeError) {
+-  const prior = installedByWindow.get(rawWindow);
++  const key = installKey(rawWindow);
++  const prior = installedByWindow.get(key);
+   if (prior && prior.replacements.every(methodIsInstalled)) {
+     return "already-installed";
+   }
+@@ -290,6 +769,7 @@
+       ? seeds.webgpuSeed >>> 0
+       : (speechSeed ^ Math.imul(audioSeed, 0xc2b2ae35)) >>> 0;
+   const gpu = seeds.gpu || { vendor: "Apple", renderer: "Apple M1" };
++  const sanitizeUnmasked = sanitizeUnmaskedPref();
+   const replacements = [];
+ 
+   try {
+@@ -315,6 +795,19 @@
+       throw new Error("Canvas 2D native methods unavailable");
+     }
+ 
++    // 0057r3: canvases with a WebGPU context keep native exports. WebGPU
++    // buffer / compute readback of the same texture cannot be farbled without
++    // corrupting compute results, so farbling the canvas exports alone would
++    // make the two paths disagree (Proof 0057r2). Recorded by getContext below.
++    const webgpuCanvases = new WeakSet();
++    const isWebGpuCanvas = (c) => {
++      try {
++        return webgpuCanvases.has(unwaived(c));
++      } catch (_e) {
++        return false;
++      }
++    };
++
+     function noisyClone(src) {
+       const c = doc.createElement("canvas");
+       c.width = src.width;
+@@ -322,7 +815,7 @@
+       const cctx = c.getContext("2d");
+       cctx.drawImage(src, 0, 0);
+       const id = Reflect.apply(origGetImageData, cctx, [0, 0, c.width, c.height]);
+-      applyCanvasNoise(Cu.waiveXrays(id).data, canvasSeed);
++      applyCanvasNoise(Cu.waiveXrays(id).data, canvasSeed, c.width, c.height);
+       cctx.putImageData(id, 0, 0);
+       return c;
+     }
+@@ -333,7 +826,7 @@
+       "toDataURL",
+       function (...args) {
+         try {
+-          if (this.width > 0 && this.height > 0) {
++          if (this.width > 0 && this.height > 0 && !isWebGpuCanvas(this)) {
+             return Reflect.apply(origToDataURL, noisyClone(this), args);
+           }
+         } catch (error) {
+@@ -350,7 +843,7 @@
+       "toBlob",
+       function (callback, ...args) {
+         try {
+-          if (this.width > 0 && this.height > 0) {
++          if (this.width > 0 && this.height > 0 && !isWebGpuCanvas(this)) {
+             return Reflect.apply(origToBlob, noisyClone(this), [callback, ...args]);
+           }
+         } catch (error) {
+@@ -367,7 +860,11 @@
+       "getImageData",
+       function (...args) {
+         const id = Reflect.apply(origGetImageData, this, args);
+-        applyCanvasNoise(Cu.waiveXrays(id).data, canvasSeed);
++        try {
++          noiseImageDataRead(id, canvasSeed, args, this.canvas);
++        } catch (error) {
++          onRuntimeError("canvas.getImageData", error);
++        }
+         return id;
+       },
+       replacements
+@@ -402,8 +899,10 @@
+       "WEBGL_draw_buffers",
+       "WEBGL_lose_context",
+     ];
++    // 0057r4: WEBGL_debug_renderer_info is never stubbed: advertised only when
++    // native has it, and getExtension hands back the native object, which also
++    // enables the extension so UNMASKED_* answer like stock (Proof #88 r3 5a).
+     const STUBBED_EXTENSIONS = new Set([
+-      "WEBGL_debug_renderer_info",
+       "EXT_texture_filter_anisotropic",
+     ]);
+     // Always keep when native/stub allows — coherent Apple/Firefox surface.
+@@ -499,12 +998,17 @@
+           proto,
+           "getParameter",
+           function (param) {
+-            if (param === 0x9245) {
+-              return gpu.vendor;
++            if (param === 0x1f01 || param === 0x9245 || param === 0x9246) {
++              // 0057r4: stock first (null + INVALID_ENUM without the
++              // extension, "Mozilla" under RFP), then the persona's string
++              // as Gecko reports it (sanitized RENDERER / UNMASKED_*).
++              return personaGlString(
++                param,
++                Reflect.apply(origGetParameter, this, [param]),
++                gpu,
++                sanitizeUnmasked
++              );
+             }
+-            if (param === 0x9246) {
+-              return gpu.renderer;
+-            }
+             if (Object.prototype.hasOwnProperty.call(activeGlCaps, param)) {
+               return activeGlCaps[param];
+             }
+@@ -547,10 +1051,27 @@
+             ]);
+             if (
+               pixels &&
++              typeof pixels === "object" &&
++              arguments.length <= 7 &&
+               format === 0x1908 /* RGBA */ &&
+               type === 0x1401 /* UNSIGNED_BYTE */
+             ) {
+-              applyCanvasNoise(pixels, canvasSeed);
++              // 0057: GL rows are bottom-up; key noise by the canvas pixel.
++              try {
++                applyCanvasNoiseRect(
++                  pixels,
++                  canvasSeed,
++                  x,
++                  y,
++                  w,
++                  h,
++                  this.drawingBufferWidth,
++                  this.drawingBufferHeight,
++                  true
++                );
++              } catch (error) {
++                onRuntimeError("webgl.readPixels", error);
++              }
+             }
+             return result;
+           },
+@@ -619,13 +1140,9 @@
+               return null;
+             }
+             if (want === "WEBGL_debug_renderer_info") {
+-              return Cu.cloneInto(
+-                {
+-                  UNMASKED_VENDOR_WEBGL: 0x9245,
+-                  UNMASKED_RENDERER_WEBGL: 0x9246,
+-                },
+-                pageWindow
+-              );
++              // 0057r4: the native WebGLDebugRendererInfo (enables the
++              // extension); never a plain-object stub.
++              return Reflect.apply(origGetExtension, this, [want]);
+             }
+             if (want === "EXT_texture_filter_anisotropic") {
+               // Prefer native object when present; else coherent stub (MAX=16).
+@@ -705,74 +1222,91 @@
+     }
+ 
+     // OffscreenCanvas window parity with HTMLCanvasElement depth (Phase 1 webgl.js).
+-    // Soft-optional: missing constructors skip without failing install. 2D path
+-    // only — WebGL-backed OffscreenCanvas exports still covered by readPixels.
++    // Soft-optional: missing constructors skip without failing install.
++    // 0057r3: convertToBlob exports a noisy clone drawn from the canvas itself
++    // (like noisyClone), so 2D, WebGL and bitmaprenderer OffscreenCanvases all
++    // export what getImageData / readPixels report (0057r2 had WebGL exporting
++    // real pixels, and created a 2D context on canvases that had none).
+     if (pageWindow.OffscreenCanvas?.prototype) {
+       const ocProto = pageWindow.OffscreenCanvas.prototype;
+-      const origConvertToBlob = Object.getOwnPropertyDescriptor(
+-        ocProto,
+-        "convertToBlob"
+-      )?.value;
+-      let origOcGetImageData = null;
++      let nativeOcGetImageData = null;
+       const Oc2d = pageWindow.OffscreenCanvasRenderingContext2D;
+-      if (Oc2d?.prototype) {
+-        origOcGetImageData = Object.getOwnPropertyDescriptor(
+-          Oc2d.prototype,
+-          "getImageData"
+-        )?.value;
+-      }
+-      if (origOcGetImageData) {
+-        replaceMethod(
++      if (Oc2d?.prototype && Object.getOwnPropertyDescriptor(Oc2d.prototype, "getImageData")) {
++        nativeOcGetImageData = replaceMethod(
+           pageWindow,
+           Oc2d.prototype,
+           "getImageData",
+           function (...args) {
+-            const id = Reflect.apply(origOcGetImageData, this, args);
+-            applyCanvasNoise(Cu.waiveXrays(id).data, canvasSeed);
++            const id = Reflect.apply(nativeOcGetImageData, this, args);
++            try {
++              noiseImageDataRead(id, canvasSeed, args, this.canvas);
++            } catch (error) {
++              onRuntimeError("offscreencanvas.getImageData", error);
++            }
+             return id;
+           },
+           replacements
+         );
+       }
+-      if (origConvertToBlob) {
+-        replaceMethod(
++      if (nativeOcGetImageData && Object.getOwnPropertyDescriptor(ocProto, "convertToBlob")) {
++        let nativeConvertToBlob = null;
++        nativeConvertToBlob = replaceMethod(
+           pageWindow,
+           ocProto,
+           "convertToBlob",
+           function (...args) {
+             try {
+-              if (this.width > 0 && this.height > 0) {
+-                const ocCtx = this.getContext("2d");
+-                if (ocCtx) {
+-                  const gid =
+-                    origOcGetImageData ||
+-                    ocCtx.getImageData.bind(ocCtx);
+-                  const id = Reflect.apply(gid, ocCtx, [
+-                    0,
+-                    0,
+-                    this.width,
+-                    this.height,
+-                  ]);
+-                  applyCanvasNoise(Cu.waiveXrays(id).data, canvasSeed);
+-                  const tmp = new pageWindow.OffscreenCanvas(
+-                    this.width,
+-                    this.height
+-                  );
+-                  const tmpCtx = tmp.getContext("2d");
+-                  tmpCtx.putImageData(id, 0, 0);
+-                  return Reflect.apply(origConvertToBlob, tmp, args);
+-                }
++              const w = this.width;
++              const h = this.height;
++              if (w > 0 && h > 0 && !isWebGpuCanvas(this)) {
++                const tmp = new pageWindow.OffscreenCanvas(w, h);
++                const tmpCtx = tmp.getContext("2d");
++                tmpCtx.drawImage(this, 0, 0);
++                const id = Reflect.apply(nativeOcGetImageData, tmpCtx, [0, 0, w, h]);
++                applyCanvasNoise(Cu.waiveXrays(id).data, canvasSeed, w, h);
++                tmpCtx.putImageData(id, 0, 0);
++                return Reflect.apply(nativeConvertToBlob, tmp, args);
+               }
+             } catch (error) {
+               onRuntimeError("offscreencanvas.convertToBlob", error);
+             }
+-            return Reflect.apply(origConvertToBlob, this, args);
++            return Reflect.apply(nativeConvertToBlob, this, args);
+           },
+           replacements
+         );
+       }
+     }
+ 
++    // 0057r3: record canvases that get a WebGPU context (only when WebGPU is
++    // exposed) so their exports stay native (see webgpuCanvases).
++    if (pageWindow.navigator?.gpu) {
++      const trackWebGpu = (proto, label) => {
++        if (!proto || !Object.getOwnPropertyDescriptor(proto, "getContext")) {
++          return;
++        }
++        let nativeGetContext = null;
++        nativeGetContext = replaceMethod(
++          pageWindow,
++          proto,
++          "getContext",
++          function (...args) {
++            const ctx = Reflect.apply(nativeGetContext, this, args);
++            try {
++              if (ctx && String(args[0]) === "webgpu") {
++                webgpuCanvases.add(unwaived(this));
++              }
++            } catch (error) {
++              onRuntimeError(label, error);
++            }
++            return ctx;
++          },
++          replacements
++        );
++      };
++      trackWebGpu(canvasProto, "canvas.getContext");
++      trackWebGpu(pageWindow.OffscreenCanvas?.prototype, "offscreencanvas.getContext");
++    }
++
+     // Soft residual (0036)+0039: fonts coherence / fingerprint farbling.
+     // Brave-inspired, Firefox/LibreWolf/Gecko persona only — no Chrome font lists.
+     // Surfaces: measureText width (Canvas2D + OffscreenCanvas2D), document.fonts.check,
+@@ -1509,425 +2043,15 @@
+       }
+     }
+ 
+-    // Soft residual (0038): WebGPU adapter/device/limits/features coherence.
+-    // LibreWolf defaults dom.webgpu.enabled=false — when navigator.gpu is absent,
+-    // skip entirely (idle; do not invent WebGPU API / Chrome adapters).
+-    // When exposed: wrap requestAdapter → Proxy adapter with seed-tied features
+-    // subset, soft limits fudge, and AdapterInfo coherent with depth gpu persona
+-    // (Firefox/LibreWolf/Gecko-plausible only). requestDevice reuses adapter
+-    // farbled features/limits/info (sharedFeatCache) — not native device set.
+-    // Default-on with depth hooks. Homogeneous/hooks-off: idle.
++    // WebGPU (0038, 0057r3): real features / limits / device, persona
++    // AdapterInfo, Intel persona hides Apple-silicon-only formats (WEBGPU_BODY).
++    // LibreWolf defaults dom.webgpu.enabled=false: idle when navigator.gpu is absent.
+     if (pageWindow.navigator?.gpu?.requestAdapter) {
+       const installWebGpuInPage = new pageWindow.Function(
+         "seed",
+         "gpuVendor",
+         "gpuRenderer",
+-        `"use strict";
+-var SEED = seed >>> 0;
+-var VENDOR = String(gpuVendor || "Apple");
+-var RENDERER = String(gpuRenderer || "Apple M1");
+-function hashStr(s) {
+-  var h = SEED;
+-  var str = String(s || "");
+-  for (var i = 0; i < str.length; i++) {
+-    h = Math.imul(h ^ str.charCodeAt(i), 0x01000193) >>> 0;
+-  }
+-  return h >>> 0;
+-}
+-// Map depth WebGL gpu persona → Firefox-plausible WebGPU AdapterInfo.
+-// Never invent Chrome/Google adapter brands.
+-function mapAdapterInfo() {
+-  // Soft residual (0038 Proof FAIL fix): plain non-empty vendor/architecture so
+-  // Proof familyOf(info.vendor) matches WebGL UNMASKED family. description
+-  // mirrors depth gpu renderer (Firefox-plausible; never Chrome/ANGLE brands).
+-  var v = VENDOR.toLowerCase();
+-  var r = String(RENDERER || "");
+-  var desc = r;
+-  if (/apple/i.test(v) || /apple/i.test(r)) {
+-    return {
+-      vendor: "apple",
+-      architecture: "common-3",
+-      device: "",
+-      description: desc || "Apple GPU"
+-    };
+-  }
+-  if (/intel/i.test(v) || /intel/i.test(r)) {
+-    return {
+-      vendor: "intel",
+-      architecture: "gen-12lp",
+-      device: "",
+-      description: desc || "Intel Graphics"
+-    };
+-  }
+-  if (/nvidia/i.test(v) || /nvidia/i.test(r)) {
+-    return {
+-      vendor: "nvidia",
+-      architecture: "gpu",
+-      device: "",
+-      description: desc || "NVIDIA GPU"
+-    };
+-  }
+-  if (/amd/i.test(v) || /radeon/i.test(r)) {
+-    return {
+-      vendor: "amd",
+-      architecture: "gcn",
+-      device: "",
+-      description: desc || "AMD GPU"
+-    };
+-  }
+-  // Host-OS unknown: Apple-family is the Mini SoT / Firefox-on-macOS default.
+-  return {
+-    vendor: "apple",
+-    architecture: "common-3",
+-    device: "",
+-    description: desc || "Apple GPU"
+-  };
+-}
+-var PERSONA_INFO = mapAdapterInfo();
+-var ALWAYS_KEEP_FEATURES = {
+-  "core-features-and-limits": 1
+-};
+-// Seed-ranked subset (0038 Proof FAIL fix): sort optional host features by
+-// seed hash and drop a seed-tied count so different webgpuSeeds diverge.
+-// Avoids &3 keep-mask collisions across eTLD (gate 3). Never invent names.
+-function wrapFeatures(nativeFeatures) {
+-  if (!nativeFeatures) { return nativeFeatures; }
+-  var all = [];
+-  try {
+-    if (typeof nativeFeatures.forEach === "function") {
+-      nativeFeatures.forEach(function(name) { all.push(String(name)); });
+-    } else if (typeof nativeFeatures.values === "function") {
+-      var it = nativeFeatures.values();
+-      var step;
+-      while (!(step = it.next()).done) { all.push(String(step.value)); }
+-    }
+-  } catch (_e) {
+-    return nativeFeatures;
+-  }
+-  var always = [];
+-  var optional = [];
+-  for (var i = 0; i < all.length; i++) {
+-    if (ALWAYS_KEEP_FEATURES[all[i]]) { always.push(all[i]); }
+-    else { optional.push(all[i]); }
+-  }
+-  optional.sort(function(a, b) {
+-    var ra = hashStr("rank:" + a);
+-    var rb = hashStr("rank:" + b);
+-    if (ra !== rb) { return ra < rb ? -1 : 1; }
+-    if (a < b) { return -1; }
+-    if (a > b) { return 1; }
+-    return 0;
+-  });
+-  var drop = 0;
+-  if (optional.length > 0) {
+-    drop = 1 + (SEED % Math.min(3, optional.length));
+-    if (drop > optional.length) { drop = optional.length; }
+-    if (optional.length >= 2 && drop >= optional.length) {
+-      drop = optional.length - 1;
+-    }
+-  }
+-  var kept = always.concat(optional.slice(drop));
+-  if (!kept.length && all.length) { kept.push(all[0]); }
+-  var seen = Object.create(null);
+-  var uniq = [];
+-  for (var k = 0; k < kept.length; k++) {
+-    if (!seen[kept[k]]) { seen[kept[k]] = 1; uniq.push(kept[k]); }
+-  }
+-  kept = uniq;
+-  var set = Object.create(null);
+-  for (var j = 0; j < kept.length; j++) { set[kept[j]] = 1; }
+-  return {
+-    has: function(name) { return !!set[String(name)]; },
+-    values: function() {
+-      var idx = 0;
+-      return {
+-        next: function() {
+-          if (idx >= kept.length) { return { done: true, value: undefined }; }
+-          return { done: false, value: kept[idx++] };
+-        },
+-        [Symbol.iterator]: function() { return this; }
+-      };
+-    },
+-    keys: function() { return this.values(); },
+-    entries: function() {
+-      var idx = 0;
+-      return {
+-        next: function() {
+-          if (idx >= kept.length) { return { done: true, value: undefined }; }
+-          var kk = kept[idx++];
+-          return { done: false, value: [kk, kk] };
+-        },
+-        [Symbol.iterator]: function() { return this; }
+-      };
+-    },
+-    forEach: function(cb, thisArg) {
+-      for (var j2 = 0; j2 < kept.length; j2++) {
+-        cb.call(thisArg, kept[j2], kept[j2], this);
+-      }
+-    },
+-    get size() { return kept.length; }
+-  };
+-}
+-// Soft-fudge fingerprinty max* limits downward only; never touch alignments.
+-var FUDGE_LIMIT_KEYS = {
+-  maxTextureDimension1D: 1,
+-  maxTextureDimension2D: 1,
+-  maxTextureDimension3D: 1,
+-  maxTextureArrayLayers: 1,
+-  maxBindGroups: 1,
+-  maxSampledTexturesPerShaderStage: 1,
+-  maxSamplersPerShaderStage: 1,
+-  maxStorageBuffersPerShaderStage: 1,
+-  maxUniformBuffersPerShaderStage: 1,
+-  maxUniformBufferBindingSize: 1,
+-  maxStorageBufferBindingSize: 1,
+-  maxBufferSize: 1,
+-  maxVertexBuffers: 1,
+-  maxVertexAttributes: 1,
+-  maxColorAttachments: 1,
+-  maxComputeWorkgroupStorageSize: 1,
+-  maxComputeInvocationsPerWorkgroup: 1,
+-  maxComputeWorkgroupsPerDimension: 1
+-};
+-function fudgeLimit(key, nativeVal) {
+-  var n = Number(nativeVal);
+-  if (!isFinite(n) || n <= 0) { return nativeVal; }
+-  if (!FUDGE_LIMIT_KEYS[key]) { return nativeVal; }
+-  // Multiplicative [0.99, 1.0) — silence-safe style; integer round-down.
+-  var fudge = 0.99 + ((hashStr("lim:" + key) % 1000) / 100000);
+-  var out = Math.floor(n * fudge);
+-  if (out < 1) { out = 1; }
+-  if (out > n) { out = n; }
+-  return out;
+-}
+-function wrapLimits(nativeLimits) {
+-  if (!nativeLimits) { return nativeLimits; }
+-  // Soft residual (0038 Proof FAIL fix): return a PLAIN eager snapshot object —
+-  // Proxy(GPUSupportedLimits) is Xray-transparent under Marionette probes, so
+-  // farbled max* never surface. Plain object matches wrapFeatures success path.
+-  var snapped = Object.create(null);
+-  var snapKeys = Object.keys(FUDGE_LIMIT_KEYS).concat([
+-    "minUniformBufferOffsetAlignment",
+-    "minStorageBufferOffsetAlignment",
+-    "maxBindGroupsPlusVertexBuffers",
+-    "maxDynamicUniformBuffersPerPipelineLayout",
+-    "maxDynamicStorageBuffersPerPipelineLayout",
+-    "maxComputeWorkgroupSizeX",
+-    "maxComputeWorkgroupSizeY",
+-    "maxComputeWorkgroupSizeZ",
+-    "maxInterStageShaderVariables",
+-    "maxColorAttachmentBytesPerSample"
+-  ]);
+-  for (var si = 0; si < snapKeys.length; si++) {
+-    var sk = snapKeys[si];
+-    var sv;
+-    try { sv = nativeLimits[sk]; } catch (_se) { continue; }
+-    if (typeof sv === "number" || typeof sv === "bigint") {
+-      snapped[sk] = fudgeLimit(sk, Number(sv));
+-    }
+-  }
+-  return snapped;
+-}
+-function wrapInfo(nativeInfo) {
+-  // Soft residual (0038 Proof FAIL fix): PLAIN object — Proxy(GPUAdapterInfo) is
+-  // Xray-transparent under Proof Marionette probes (vendor/architecture read as
+-  // empty native strings → familiesCoherent=false). Never invent Chrome brands.
+-  var base = PERSONA_INFO;
+-  var out = {
+-    vendor: String(base.vendor || ""),
+-    architecture: String(base.architecture || ""),
+-    device: String(base.device || ""),
+-    description: String(base.description || "")
+-  };
+-  try {
+-    if (nativeInfo && typeof nativeInfo.isFallbackAdapter === "boolean") {
+-      out.isFallbackAdapter = nativeInfo.isFallbackAdapter;
+-    }
+-  } catch (_e) {}
+-  try {
+-    if (nativeInfo && typeof nativeInfo.subgroupMinSize === "number") {
+-      out.subgroupMinSize = nativeInfo.subgroupMinSize;
+-    }
+-    if (nativeInfo && typeof nativeInfo.subgroupMaxSize === "number") {
+-      out.subgroupMaxSize = nativeInfo.subgroupMaxSize;
+-    }
+-  } catch (_e2) {}
+-  return out;
+-}
+-// 0038 Proof FAIL fix: wrapDevice MUST reuse adapter farbled features/limits/info
+-// plainAdapterInfo + a2dDefineProperty (0038 re-XOR)
+-// (sharedFeatCache) — native default requestDevice() exposes a reduced set (n=1).
+-// Soft residual (0038 re-XOR): Proxy(GPUDevice) is Xray-transparent under
+-// Marionette — defineProperty overlay first so features/limits/adapterInfo are
+-// own plain values; Proxy fallback still returns plain shared caches.
+-function wrapDevice(device, sharedFeatures, sharedLimits, sharedInfo) {
+-  if (!device) { return device; }
+-  var featCache = sharedFeatures || null;
+-  var limCache = sharedLimits || null;
+-  var infoCache = sharedInfo || null;
+-  function ensureFeat() {
+-    if (!featCache) { featCache = wrapFeatures(device.features); }
+-    return featCache;
+-  }
+-  function ensureLim() {
+-    if (!limCache) { limCache = wrapLimits(device.limits); }
+-    return limCache;
+-  }
+-  function ensureInfo() {
+-    if (!infoCache) { infoCache = wrapInfo(device.adapterInfo); }
+-    return infoCache;
+-  }
+-  var overlaid = false;
+-  try {
+-    var f = ensureFeat();
+-    var l = ensureLim();
+-    var i = ensureInfo();
+-    Object.defineProperty(device, "features", {
+-      configurable: true, enumerable: true, get: function() { return f; }
+-    });
+-    Object.defineProperty(device, "limits", {
+-      configurable: true, enumerable: true, get: function() { return l; }
+-    });
+-    Object.defineProperty(device, "adapterInfo", {
+-      configurable: true, enumerable: true, get: function() { return i; }
+-    });
+-    overlaid = true;
+-  } catch (_defErr) {
+-    overlaid = false;
+-  }
+-  if (overlaid) { return device; }
+-  return new Proxy(device, {
+-    get: function(target, prop, receiver) {
+-      if (typeof prop === "symbol") {
+-        return Reflect.get(target, prop, target);
+-      }
+-      var key = String(prop);
+-      if (key === "features") { return ensureFeat(); }
+-      if (key === "limits") { return ensureLim(); }
+-      if (key === "adapterInfo") { return ensureInfo(); }
+-      var raw;
+-      try { raw = target[prop]; } catch (_e) { return undefined; }
+-      if (typeof raw === "function") {
+-        return raw.bind(target);
+-      }
+-      return raw;
+-    }
+-  });
+-}
+-function wrapAdapter(adapter) {
+-  if (!adapter) { return adapter; }
+-  var featCache = null;
+-  var limCache = null;
+-  var infoCache = null;
+-  function getFeat() {
+-    if (!featCache) { featCache = wrapFeatures(adapter.features); }
+-    return featCache;
+-  }
+-  function getLim() {
+-    if (!limCache) { limCache = wrapLimits(adapter.limits); }
+-    return limCache;
+-  }
+-  function getInfo() {
+-    if (!infoCache) { infoCache = wrapInfo(adapter.info); }
+-    return infoCache;
+-  }
+-  return new Proxy(adapter, {
+-    get: function(target, prop, receiver) {
+-      if (typeof prop === "symbol") {
+-        return Reflect.get(target, prop, target);
+-      }
+-      var key = String(prop);
+-      if (key === "features") { return getFeat(); }
+-      if (key === "limits") { return getLim(); }
+-      if (key === "info") { return getInfo(); }
+-      if (key === "requestDevice") {
+-        var origRD = target.requestDevice;
+-        return function(desc) {
+-          var farbled = getFeat();
+-          var newDesc;
+-          if (desc === undefined || desc === null) {
+-            newDesc = {};
+-          } else {
+-            try {
+-              newDesc = Object.assign({}, desc);
+-            } catch (_eAssign) {
+-              newDesc = desc;
+-            }
+-          }
+-          if (newDesc && typeof newDesc === "object") {
+-            var reqIn = newDesc.requiredFeatures;
+-            var reqOut = [];
+-            if (reqIn && typeof reqIn.length === "number" && reqIn.length > 0) {
+-              for (var ri = 0; ri < reqIn.length; ri++) {
+-                var fn = String(reqIn[ri]);
+-                if (!farbled.has(fn)) {
+-                  return Promise.reject(
+-                    new TypeError(
+-                      "Failed to execute 'requestDevice' on 'GPUAdapter': " +
+-                      "Invalid feature call. Missing feature: " + fn
+-                    )
+-                  );
+-                }
+-                reqOut.push(fn);
+-              }
+-              newDesc.requiredFeatures = reqOut;
+-            }
+-            // Soft residual (0038 re-XOR): do NOT force full farbled set as
+-            // requiredFeatures — native rejects large sets and Marionette still
+-            // saw n=1. Overlay sharedFeatCache in wrapDevice instead.
+-          }
+-          function finish(dev) {
+-            return wrapDevice(dev, getFeat(), getLim(), getInfo());
+-          }
+-          return Promise.resolve(origRD.call(target, newDesc)).then(finish);
+-        };
+-      }
+-      var raw;
+-      try { raw = target[prop]; } catch (_e) { return undefined; }
+-      if (typeof raw === "function") {
+-        return raw.bind(target);
+-      }
+-      return raw;
+-    }
+-  });
+-}
+-
+-var hooks = {
+-  requestAdapter: null, origRequestAdapter: null, gpuProto: null,
+-  seed: SEED, personaInfo: PERSONA_INFO
+-};
+-
+-var gpuObj = null;
+-try {
+-  if (typeof navigator !== "undefined" && navigator && navigator.gpu) {
+-    gpuObj = navigator.gpu;
+-  }
+-} catch (_e) {}
+-var gpuProto = null;
+-if (gpuObj) {
+-  gpuProto = Object.getPrototypeOf(gpuObj);
+-}
+-if (!gpuProto && typeof GPU !== "undefined" && GPU.prototype) {
+-  gpuProto = GPU.prototype;
+-}
+-if (gpuProto && typeof gpuProto.requestAdapter === "function") {
+-  var origRA = gpuProto.requestAdapter;
+-  var wrappedRA = function(options) {
+-    var self = this;
+-    return Promise.resolve(origRA.apply(self, arguments)).then(function(adapter) {
+-      if (!adapter) { return null; }
+-      return wrapAdapter(adapter);
+-    });
+-  };
+-  Object.defineProperty(gpuProto, "requestAdapter", {
+-    configurable: true, enumerable: true, writable: true, value: wrappedRA
+-  });
+-  hooks.requestAdapter = wrappedRA;
+-  hooks.origRequestAdapter = origRA;
+-  hooks.gpuProto = gpuProto;
+-}
+-
+-return hooks;`
++        WEBGPU_BODY
+       );
+ 
+       let installedWebGpu;
+@@ -1992,6 +2116,16 @@
+ var noisedBuffers = new WeakMap();
+ // Brave BALANCED-style fudge: [0.999, 1.0). Zero * fudge === 0 (silence-safe).
+ var fudge = 0.999 + (((seed >>> 0) / 4294967295) / 1000);
++// 0057: the analyser's float frequency data is in dB. A signal scaled by fudge
++// reads 20*log10(fudge) dB lower in every bin (silence -Infinity stays), so
++// frequency data stays consistent with the farbled time-domain data and with
++// OfflineAudioContext buffers (multiplying dB values was not).
++var fudgeDb = 20 * Math.log10(fudge);
++function farbleFloatDb(data) {
++  for (var i = 0; i < data.length; i++) {
++    data[i] = data[i] + fudgeDb;
++  }
++}
+ function contentKey(data) {
+   var n = data.length | 0;
+   if (!n) { return "0"; }
+@@ -2113,6 +2247,8 @@
+       if (array && array.length) {
+         if (kind === "float") {
+           farbleFloat(array);
++        } else if (kind === "floatDb") {
++          farbleFloatDb(array);
+         } else if (kind === "byteTime") {
+           farbleByteTimeDomain(array);
+         } else {
+@@ -2130,7 +2266,7 @@
+     analyserHooks.push({ name: name, wrapper: wrapped, original: orig });
+   }
+   wrapAnalyser("getFloatTimeDomainData", "float");
+-  wrapAnalyser("getFloatFrequencyData", "float");
++  wrapAnalyser("getFloatFrequencyData", "floatDb");
+   wrapAnalyser("getByteTimeDomainData", "byteTime");
+   wrapAnalyser("getByteFrequencyData", "byteFreq");
+ }
+@@ -2228,7 +2364,7 @@
+     }
+ 
+ 
+-    installedByWindow.set(rawWindow, { replacements });
++    installedByWindow.set(key, { replacements });
+     return "installed";
+   } catch (error) {
+     for (const replacement of replacements.slice().reverse()) {
+@@ -2255,15 +2391,59 @@
+     }
+   }
+ 
+-  async pullAndInstall(eventType) {
+-    let seeds;
++  /**
++   * 0057: seeds synchronously at DOMWindowCreated (before any page script),
++   * only while the parent says depth is armed (sharedData hint). Returns
++   * undefined when the parent cannot answer yet (async fallback).
++   */
++  _seedsSync() {
+     try {
+-      seeds = await this.sendQuery("DarkstrDepthHooks:GetSeeds");
+-    } catch (error) {
+-      console.error("darkstr depth seed IPC failed", error);
+-      this._report(false, eventType, "seed-query-failed", error);
++      if (Services.cpmm.sharedData.get("darkstr:depthArmed") !== true) {
++        return undefined;
++      }
++      const results = Services.cpmm.sendSyncMessage(
++        "DarkstrDepthHooks:GetSeedsSync",
++        { innerWindowId: this.manager.innerWindowId }
++      );
++      const r = results?.[0];
++      if (!r || r.retry) {
++        return undefined;
++      }
++      return r.seeds || null;
++    } catch (_e) {
++      return undefined;
++    }
++  }
++
++  async pullAndInstall(eventType) {
++    const early =
++      eventType === "DOMWindowCreated" || eventType === "DOMDocElementInserted";
++    if (eventType === "DOMDocElementInserted") {
++      // 0057: covers documents that reuse their initial about:blank inner
++      // window (same-origin iframes), which get no DOMWindowCreated of their
++      // own; for every other document this is a no-op (already installed).
++      try {
++        const w = this.contentWindow;
++        if (!w || depthHooksInstalled(w)) {
++          return;
++        }
++      } catch (_e) {}
++    }
++    let seeds = early ? this._seedsSync() : undefined;
++    if (seeds === undefined && eventType === "DOMDocElementInserted") {
++      // Not armed (off mode) or parent not ready: DOMWindowCreated / pageshow
++      // keep the async path; no extra IPC per document.
+       return;
+     }
++    if (seeds === undefined) {
++      try {
++        seeds = await this.sendQuery("DarkstrDepthHooks:GetSeeds");
++      } catch (error) {
++        console.error("darkstr depth seed IPC failed", error);
++        this._report(false, eventType, "seed-query-failed", error);
++        return;
++      }
++    }
+ 
+     const rawWindow = this.contentWindow;
+     if (!rawWindow) {
+@@ -2295,7 +2475,11 @@
+   }
+ 
+   async handleEvent(event) {
+-    if (event.type !== "DOMWindowCreated" && event.type !== "pageshow") {
++    if (
++      event.type !== "DOMWindowCreated" &&
++      event.type !== "DOMDocElementInserted" &&
++      event.type !== "pageshow"
++    ) {
+       return;
+     }
+     await this.pullAndInstall(event.type);
+--- a/browser/components/DarkstrDepthHooksParent.sys.mjs
++++ b/browser/components/DarkstrDepthHooksParent.sys.mjs
+@@ -15,8 +15,11 @@
+         "moz-src:///browser/components/DarkstrDepthHooks.sys.mjs"
+       );
+       if (message.name === "DarkstrDepthHooks:GetSeeds") {
++        // 0057: seeds for THIS document (its own WindowGlobalParent), not
++        // whatever document the browsing context currently shows.
+         return DarkstrDepthHooks.depthSeedsForBrowsingContext(
+-          this.browsingContext
++          this.browsingContext,
++          this.manager
+         );
+       }
+       if (message.name === "DarkstrDepthHooks:InstallStatus") {
+--- a/browser/components/DarkstrModeXor.sys.mjs
++++ b/browser/components/DarkstrModeXor.sys.mjs
+@@ -14,6 +14,13 @@
+  *
+  * Pollution  → privacy.resistFingerprinting=false,
+  *              privacy.fingerprintingProtection=false,
++ *              privacy.baselineFingerprintingProtection=false (0057r2: its
++ *              canvas randomization would stack engine noise on darkstr's
++ *              per-site farbling, so alternate canvas read paths disagreed),
++ *              privacy.fingerprintingProtection.pbmode=false and
++ *              privacy.resistFingerprinting.pbmode=false (0057r4: FPP is on
++ *              in every private window by default and its canvas randomization
++ *              noised the export paths there, not the reads),
+  *              librewolf.webgl.prompt=false (WebGL without the LibreWolf
+  *              doorhanger; GPU blocklist and webgl.force-enabled untouched)
+  * Homogeneous → hands-off (0053, Fable B5): writes nothing. Leaving Pollution
+@@ -40,6 +47,17 @@
+ const NATIVE_PREF = "darkstr.nativeCompatible";
+ const RFP_PREF = "privacy.resistFingerprinting";
+ const FPP_PREF = "privacy.fingerprintingProtection";
++/** 0057r2: Firefox baseline FPP (default on; canvas randomization among its targets). */
++const BASELINE_FPP_PREF = "privacy.baselineFingerprintingProtection";
++/**
++ * 0057r4: the private-window switches. Gecko: FPP mode in a private window when
++ * privacy.fingerprintingProtection.pbmode (default true; strict "fppPrivate"),
++ * RFP when privacy.resistFingerprinting.pbmode (nsRFPService::IsFPPEnabled /
++ * IsRFPPrefEnabled(aIsPrivateMode)). Either stacks engine canvas noise on
++ * darkstr farbling in private windows only.
++ */
++const FPP_PBMODE_PREF = "privacy.fingerprintingProtection.pbmode";
++const RFP_PBMODE_PREF = "privacy.resistFingerprinting.pbmode";
+ /** ContentBlockingPrefs.PREF_CB_CATEGORY on Firefox/LibreWolf 155.0.1-1 */
+ const CB_CATEGORY_PREF = "browser.contentblocking.category";
+ /** 0029: LibreWolf null-context gates — webgl.disabled + librewolf.webgl.prompt. */
+@@ -63,6 +81,9 @@
+ const POLLUTION_PREFS = Object.freeze([
+   [RFP_PREF, false],
+   [FPP_PREF, false],
++  [BASELINE_FPP_PREF, false],
++  [FPP_PBMODE_PREF, false],
++  [RFP_PBMODE_PREF, false],
+   [LIBREWOLF_WEBGL_PROMPT_PREF, false],
+ ]);
+ /**
+@@ -76,6 +97,17 @@
+ const ETP_INTERACTED_PREF =
+   "privacy.trackingprotection.allow_list.hasUserInteractedWithETPSettings";
+ const RESTORE_ONLY_PREFS = Object.freeze([ETP_INTERACTED_PREF]);
++/**
++ * 0057r2: POLLUTION_PREFS that older builds never wrote. A saved copy made by
++ * such a build lacks them while their current value is still the user's /
++ * stock one, so it is recorded before darkstr takes them over. (RFP / FPP /
++ * the WebGL prompt are never backfilled: an old build may have forced them.)
++ */
++const BACKFILL_PREFS = Object.freeze([
++  BASELINE_FPP_PREF,
++  FPP_PBMODE_PREF, // 0057r4
++  RFP_PBMODE_PREF, // 0057r4
++]);
+ /** Status format written by 0053+ (diagnostics); anything else is pre-0053. */
+ const WEBGL_STATUS_TAG = "v53;";
+ /**
+@@ -250,6 +282,9 @@
+     Services.prefs.addObserver(NATIVE_PREF, this._observer);
+     Services.prefs.addObserver(RFP_PREF, this._observer);
+     Services.prefs.addObserver(FPP_PREF, this._observer);
++    Services.prefs.addObserver(BASELINE_FPP_PREF, this._observer);
++    Services.prefs.addObserver(FPP_PBMODE_PREF, this._observer);
++    Services.prefs.addObserver(RFP_PBMODE_PREF, this._observer);
+     Services.prefs.addObserver(CB_CATEGORY_PREF, this._observer);
+     this.applyModeEffects();
+     // CB category / ContentBlockingPrefs may settle after BrowserGlue init and
+@@ -268,6 +303,9 @@
+       Services.prefs.removeObserver(NATIVE_PREF, this._observer);
+       Services.prefs.removeObserver(RFP_PREF, this._observer);
+       Services.prefs.removeObserver(FPP_PREF, this._observer);
++      Services.prefs.removeObserver(BASELINE_FPP_PREF, this._observer);
++      Services.prefs.removeObserver(FPP_PBMODE_PREF, this._observer);
++      Services.prefs.removeObserver(RFP_PBMODE_PREF, this._observer);
+       Services.prefs.removeObserver(CB_CATEGORY_PREF, this._observer);
+     } catch (_e) {
+       // Observers may already be gone during shutdown.
+@@ -318,6 +356,9 @@
+     if (
+       data === RFP_PREF ||
+       data === FPP_PREF ||
++      data === BASELINE_FPP_PREF ||
++      data === FPP_PBMODE_PREF ||
++      data === RFP_PBMODE_PREF ||
+       data === CB_CATEGORY_PREF
+     ) {
+       // Only re-assert under Pollution (counter CB stomps / category flips).
+@@ -385,8 +426,14 @@
+ 
+       const rfp = Services.prefs.getBoolPref(RFP_PREF, false);
+       const fpp = Services.prefs.getBoolPref(FPP_PREF, false);
++      const baseline = Services.prefs.getBoolPref(BASELINE_FPP_PREF, false);
++      const fppPrivate = Services.prefs.getBoolPref(FPP_PBMODE_PREF, false);
++      const rfpPrivate = Services.prefs.getBoolPref(RFP_PBMODE_PREF, false);
+       // Homogeneous has no constraint: RFP/FPP are whatever the user chose.
+-      const xorSafe = mode === "pollution" ? !rfp && !fpp : true;
++      const xorSafe =
++        mode === "pollution"
++          ? !rfp && !fpp && !baseline && !fppPrivate && !rfpPrivate
++          : true;
+ 
+       return { mode, nativeCompatible, xorSafe };
+     } finally {
+@@ -410,6 +457,8 @@
+   _enterPollution() {
+     if (!Services.prefs.prefHasUserValue(SAVED_PREF)) {
+       this._savePrefs();
++    } else {
++      this._backfillSavedPrefs();
+     }
+     for (const [name, value] of POLLUTION_PREFS) {
+       try {
+@@ -423,6 +472,40 @@
+     }
+   },
+ 
++  /**
++   * 0057r2: a profile already in Pollution under an older build has a saved
++   * copy without records for prefs darkstr owns only since then (baseline
++   * FPP). darkstr never wrote those before, so their current state is still
++   * the user's / stock: record it now, before taking them over, so leaving
++   * Pollution restores them exactly. Existing records are never changed.
++   */
++  _backfillSavedPrefs() {
++    let saved = null;
++    try {
++      saved = JSON.parse(Services.prefs.getStringPref(SAVED_PREF, ""));
++    } catch (_e) {
++      return; // unreadable: leave it (restore skips missing records)
++    }
++    if (!saved || typeof saved !== "object" || !saved.prefs) {
++      return;
++    }
++    let changed = false;
++    for (const name of BACKFILL_PREFS) {
++      if (saved.prefs[name]) {
++        continue;
++      }
++      if (Services.prefs.getPrefType(name) === Services.prefs.PREF_INVALID) {
++        continue;
++      }
++      const user = Services.prefs.prefHasUserValue(name);
++      saved.prefs[name] = { user, value: user ? readUserValue(name) : null };
++      changed = true;
++    }
++    if (changed) {
++      Services.prefs.setStringPref(SAVED_PREF, JSON.stringify(saved));
++    }
++  },
++
+   /** 0053: exact restore of what _savePrefs recorded; no-op without it. */
+   _leavePollution() {
+     if (!Services.prefs.prefHasUserValue(SAVED_PREF)) {
+--- a/browser/components/DarkstrNativePersona.sys.mjs
++++ b/browser/components/DarkstrNativePersona.sys.mjs
+@@ -857,8 +857,40 @@
+     );
+     this._etldSeedMap.set(key, seed);
+     return seed;
++  },
++
++  /**
++   * 0057 (Fable B2): the persisted per-site seed from the 0056 store for
++   * (persona context, eTLD+1); 0 when a fixed test seed is set or the store
++   * is unavailable. Depth farbling (DarkstrDepthHooks) arms only on this.
++   */
++  _storeSeedForEtld(etld, ctx) {
++    if (!etld || this._fixedSeedSet()) {
++      return 0;
++    }
++    const store = this._activateSeedStore();
++    if (!store) {
++      return 0;
++    }
++    try {
++      return store.seedFor(String(ctx || "0"), etld) >>> 0;
++    } catch (_e) {
++      return 0;
++    }
+   },
+ 
++  /**
++   * 0057: per-site rotation runs on the 0056 store (Pollution + hooks,
++   * rotatePerSite, no snapshot lock, no fixed test seed).
++   */
++  _storeRotationActive(plan) {
++    try {
++      return this._rotationActive(plan || this.getPlan()) && !this._fixedSeedSet();
++    } catch (_e) {
++      return false;
++    }
++  },
++
+   _writeEffectiveDiag(etld, seed) {
+     try {
+       if (etld) {
+--- a/browser/components/DarkstrWorkerHooks.sys.mjs
++++ b/browser/components/DarkstrWorkerHooks.sys.mjs
+@@ -123,6 +123,11 @@
+   return {
+     canvasSeed,
+     audioSeed,
++    // 0057: worker OffscreenCanvas measureText uses the document's fontSeed.
++    fontSeed:
++      typeof seeds.fontSeed === "number"
++        ? seeds.fontSeed >>> 0
++        : (canvasSeed ^ Math.imul(audioSeed, 0x9e3779b9)) >>> 0,
+     webgpuSeed: readWebGpuSeed(seeds, seeds.speechSeed ?? canvasSeed, audioSeed),
+     gpu: normalizeGpu(seeds.gpu) || { vendor: "Apple", renderer: "Apple M1" },
+   };
+--- a/browser/components/DarkstrWorkerHooksChild.sys.mjs
++++ b/browser/components/DarkstrWorkerHooksChild.sys.mjs
+@@ -26,6 +26,159 @@
+ const TOPIC = "darkstr-worker-persona-resolve";
+ const MSG_RESOLVE = "DarkstrWorkerHooks:Resolve";
+ 
++// 0057r4: Gecko's WebGL renderer sanitizer (dom/canvas/SanitizeRenderer.cpp,
++// Firefox 156) ported 1:1. A persona's RENDERER and UNMASKED_RENDERER_WEBGL are
++// what Gecko reports for that GPU's raw GL_RENDERER: the same bucket plus the
++// ", or similar" suffix. Byte-identical in DarkstrDepthHooksChild and
++// DarkstrWorkerHooksChild (tests/webgl-renderer-0057r4 checks).
++function geckoChooseDeviceReplacement(str) {
++  str = String(str);
++  if (str.indexOf("llvmpipe") === 0) return "llvmpipe";
++  if (str.indexOf("Apple") === 0) return "Apple M1";
++  let m;
++  const has = (part) => str.indexOf(part) !== -1;
++  // AMD
++  const RADEON_HD_3000 = "Radeon HD 3200 Graphics";
++  const RADEON_HD_5850 = "Radeon HD 5850";
++  const RADEON_R9_290 = "Radeon R9 200 Series";
++  if (has("REMBRANDT") || has("RENOIR") || has("Vega") || has("VII") || has("Fury")) {
++    return RADEON_R9_290;
++  }
++  m = /Radeon.*?((R[579X]|HD) )?([0-9][0-9][0-9]+)/.exec(str);
++  if (m) {
++    const modelNum = parseInt(m[3], 10);
++    if ((m[2] || "") === "HD") {
++      if (modelNum >= 5000) return RADEON_HD_5850;
++      return RADEON_HD_3000;
++    }
++    return RADEON_R9_290;
++  }
++  m = /FirePro.*?([VDW])[0-9][0-9][0-9]+/.exec(str);
++  if (m) return m[1] === "V" ? RADEON_HD_3000 : RADEON_R9_290;
++  if (has("ARUBA")) return RADEON_HD_5850;
++  if (has("AMD ") || has("FirePro") || has("Radeon")) return RADEON_HD_3000;
++  // NVIDIA
++  const GEFORCE_8800 = "GeForce 8800 GTX";
++  const GEFORCE_480 = "GeForce GTX 480";
++  const GEFORCE_980 = "GeForce GTX 980";
++  if (has("NVIDIA") || has("GeForce") || has("Quadro")) {
++    let ret = GEFORCE_8800;
++    if ((m = /GeForce.*?([0-9][0-9][0-9]+)/.exec(str))) {
++      const modelNum = parseInt(m[1], 10);
++      if (modelNum >= 8000) ret = GEFORCE_8800;
++      else if (modelNum >= 900) ret = GEFORCE_980;
++      else if (modelNum >= 400) ret = GEFORCE_480;
++      else ret = GEFORCE_8800;
++    } else if ((m = /Quadro.*?([KMPVT]?)[0-9][0-9][0-9]+/.exec(str))) {
++      if (has("RTX")) ret = GEFORCE_980;
++      else if (m[1]) ret = "MPVT".indexOf(m[1]) !== -1 ? GEFORCE_980 : GEFORCE_480;
++      else ret = GEFORCE_8800;
++    } else if ((m = /TITAN( [BZXVR])?/.exec(str))) {
++      const letter = m[1] ? m[1][1] : " ";
++      ret = letter === " " || letter === "B" || letter === "Z" ? GEFORCE_480 : GEFORCE_980;
++    }
++    if (str.indexOf("NVIDIA") === 0) ret = "NVIDIA " + ret;
++    return ret;
++  }
++  if ((m = /^NV(1?[0-9A-F][0-9A-F])$/.exec(str))) {
++    const modelNum = parseInt(m[1], 16);
++    if (modelNum >= 0x120) return GEFORCE_980;
++    if (modelNum >= 0xc0) return GEFORCE_480;
++    return GEFORCE_8800;
++  }
++  // Intel
++  if (has("Intel")) {
++    if (has("Intel(R) Arc(TM)")) return "Intel(R) Arc(TM) A750 Graphics";
++    if ((m = /Intel.*Graphics( P?([0-9][0-9][0-9]+))?/.exec(str))) {
++      if (!m[1]) return "Intel(R) HD Graphics";
++      const modelNum = parseInt(m[2], 10);
++      if (modelNum >= 5000) return "Intel(R) HD Graphics 400";
++      if (modelNum >= 1000) return "Intel(R) HD Graphics";
++      return "Intel(R) HD Graphics 400";
++    }
++    return "Intel 945GM";
++  }
++  if ((m = /Adreno.*?([A-Z]?[0-9]-?[0-9]+)/.exec(str))) {
++    const modelName = m[1];
++    if (modelName[0] === "A") return "Adreno (TM) A11";
++    if (modelName[0] === "X") return "Adreno (TM) X1-45";
++    const modelNum = parseInt(modelName, 10);
++    if (modelNum >= 600) return "Adreno (TM) 650";
++    if (modelNum >= 500) return "Adreno (TM) 540";
++    if (modelNum >= 400) return "Adreno (TM) 430";
++    if (modelNum >= 300) return "Adreno (TM) 330";
++    return "Adreno (TM) 225";
++  }
++  if ((m = /Mali.*?([0-9][0-9]+)/.exec(str))) {
++    const modelNum = parseInt(m[1], 10);
++    if (modelNum >= 800) return "Mali-T880";
++    if (modelNum >= 700) return "Mali-T760";
++    if (modelNum >= 600) return "Mali-T628";
++    if (modelNum >= 400) return "Mali-400 MP";
++    return "Mali-G51";
++  }
++  if (has("PowerVR")) return has("Rogue") ? "PowerVR Rogue G6200" : "PowerVR SGX 540";
++  if (has("Samsung Xclipse")) return "Samsung Xclipse 920";
++  if (has("Vivante")) return "Vivante GC1000";
++  if (has("VideoCore")) return "VideoCore IV HW";
++  if (has("Tegra")) return "NVIDIA Tegra";
++  if (has("Microsoft Basic Render Driver")) return str;
++  return null;
++}
++
++export function geckoSanitizeRenderer(rawRenderer) {
++  const raw = String(rawRenderer);
++  const GENERIC_RENDERER = "Generic Renderer";
++  const device = (() => {
++    let m;
++    if ((m = /^ANGLE [(]([^,]*), ([^,]*)( Direct3D[^,]*), .*[)]$/.exec(raw))) {
++      const r2 = geckoChooseDeviceReplacement(m[2]) || GENERIC_RENDERER;
++      return "ANGLE (" + m[1] + ", " + r2 + m[3] + ")";
++    }
++    if ((m = /^ANGLE [(]+(.*)[)]( on Vulkan) [0-9.]*[)]*$/.exec(raw))) {
++      const r2 = geckoChooseDeviceReplacement(m[1]) || GENERIC_RENDERER;
++      return "ANGLE (" + r2 + ")" + m[2];
++    }
++    if ((m = /^ANGLE [(]([^,]*), ANGLE Metal Renderer: ([^,]*), Version .*[)]$/.exec(raw))) {
++      const r2 = geckoChooseDeviceReplacement(m[2]) || GENERIC_RENDERER;
++      return "ANGLE (" + m[1] + ", ANGLE Metal Renderer: " + r2 + ")";
++    }
++    if (raw.indexOf("ANGLE") !== -1) return null;
++    if ((m = /^(.*) OpenGL Engine$/.exec(raw))) return geckoChooseDeviceReplacement(m[1]);
++    if ((m = /^(.*)(\/PCIe?\/SSE2)$/.exec(raw))) return geckoChooseDeviceReplacement(m[1]);
++    if ((m = /^(.*)( [(].*[)])$/.exec(raw))) return geckoChooseDeviceReplacement(m[1]);
++    return geckoChooseDeviceReplacement(raw);
++  })();
++  if (!device) return GENERIC_RENDERER;
++  return device + ", or similar";
++}
++
++/** webgl.sanitize-unmasked-renderer (Gecko default true). */
++export function sanitizeUnmaskedPref() {
++  try {
++    const prefs = globalThis.Services?.prefs;
++    if (!prefs?.getBoolPref) return true;
++    return prefs.getBoolPref("webgl.sanitize-unmasked-renderer", true) !== false;
++  } catch (_e) {
++    return true;
++  }
++}
++
++/**
++ * RENDERER (0x1F01) / UNMASKED_VENDOR_WEBGL (0x9245) / UNMASKED_RENDERER_WEBGL
++ * (0x9246) for a persona GPU, given what stock returned for the same call.
++ * Stock non-strings (no WEBGL_debug_renderer_info: null + INVALID_ENUM) and
++ * RFP constants ("Mozilla...") pass through; VENDOR (0x1F00) is never touched
++ * (stock "Mozilla").
++ */
++export function personaGlString(param, native, gpu, sanitizeUnmasked = true) {
++  if (typeof native !== "string" || native.indexOf("Mozilla") === 0) return native;
++  if (param === 0x9245) return String(gpu?.vendor || "Apple");
++  const raw = String(gpu?.renderer || "Apple M1");
++  if (param === 0x1f01) return geckoSanitizeRenderer(raw);
++  return sanitizeUnmasked ? geckoSanitizeRenderer(raw) : raw;
++}
++
+ export function buildDepthOverrides(depth) {
+   if (!depth || typeof depth.canvasSeed !== "number") {
+     return "";
+@@ -33,438 +186,267 @@
+   const seed = depth.canvasSeed >>> 0;
+   const vendor = depth.gpu?.vendor || "Apple";
+   const renderer = depth.gpu?.renderer || "Apple M1";
++  // 0057r4: RENDERER / UNMASKED_RENDERER_WEBGL as Gecko reports them.
++  const rendererMasked = geckoSanitizeRenderer(renderer);
++  const rendererUnmasked = sanitizeUnmaskedPref() ? rendererMasked : renderer;
+   return `
+ ;(function(){
+   var __s=${seed};
+   function __pn(s,i,v){var h=s^(i*2654435761);h=(h^(v*2246822519))>>>0;h=Math.imul(h^(h>>>16),0x45d9f3b);h=Math.imul(h^(h>>>16),0x45d9f3b);h=(h^(h>>>16))>>>0;var m=(h>>>1)&3;return(h&1)?m:-m;}
+-  function __an(px,s){for(var i=0;i<px.length;i+=4){px[i]=Math.max(0,Math.min(255,px[i]+__pn(s,i,px[i])));px[i+1]=Math.max(0,Math.min(255,px[i+1]+__pn(s,i+1,px[i+1])));px[i+2]=Math.max(0,Math.min(255,px[i+2]+__pn(s,i+2,px[i+2])));}}
++  // 0057: same noise as DepthHooksChild applyCanvasNoiseRect — keyed by the
++  // absolute surface pixel (sub-rect reads agree with full reads; GL rows
++  // flipped), opaque in-bounds pixels only, so a worker OffscreenCanvas reads
++  // exactly what the page reads for the same pixels.
++  function __ar(px,s,sx,sy,sw,sh,cw,ch,fy){sx=Math.trunc(+sx||0);sy=Math.trunc(+sy||0);sw=Math.trunc(+sw||0);sh=Math.trunc(+sh||0);cw=Math.trunc(+cw||0);ch=Math.trunc(+ch||0);if(sw<0){sx+=sw;sw=-sw;}if(sh<0){sy+=sh;sh=-sh;}if(!sw||!sh||!cw||!ch||px.length<sw*sh*4)return;for(var r=0;r<sh;r++){var y=sy+r;if(y<0||y>=ch)continue;var ay=fy?ch-1-y:y;for(var c=0;c<sw;c++){var x=sx+c;if(x<0||x>=cw)continue;var i=(r*sw+c)*4;if(px[i+3]!==255)continue;var a=(ay*cw+x)*4;px[i]=Math.max(0,Math.min(255,px[i]+__pn(s,a,px[i])));px[i+1]=Math.max(0,Math.min(255,px[i+1]+__pn(s,a+1,px[i+1])));px[i+2]=Math.max(0,Math.min(255,px[i+2]+__pn(s,a+2,px[i+2])));}}}
+   if(typeof OffscreenCanvas!=='undefined'){
+     var _oCtB=OffscreenCanvas.prototype.convertToBlob;
+     var _oGID=(typeof OffscreenCanvasRenderingContext2D!=='undefined')?OffscreenCanvasRenderingContext2D.prototype.getImageData:null;
+-    if(_oGID){OffscreenCanvasRenderingContext2D.prototype.getImageData=function(){var id=_oGID.apply(this,arguments);__an(id.data,__s);return id;};}
+-    OffscreenCanvas.prototype.convertToBlob=function(){try{if(this.width>0&&this.height>0){var c=this.getContext('2d');if(c){var id=_oGID?_oGID.call(c,0,0,this.width,this.height):c.getImageData(0,0,this.width,this.height);__an(id.data,__s);var t=new OffscreenCanvas(this.width,this.height);t.getContext('2d').putImageData(id,0,0);return _oCtB.apply(t,arguments);}}}catch(e){}return _oCtB.apply(this,arguments);};
++    if(_oGID){OffscreenCanvasRenderingContext2D.prototype.getImageData=function(sx,sy,sw,sh){var id=_oGID.apply(this,arguments);try{__ar(id.data,__s,sx,sy,sw,sh,this.canvas.width,this.canvas.height,false);}catch(e){}return id;};}
++    // 0057r3: export a noisy clone drawn from the canvas itself (WebGL / bitmaprenderer
++    // canvases too; no 2D context created on the source); WebGPU canvases stay native.
++    var __gpuC=(typeof WeakSet!=='undefined')?new WeakSet():null;
++    var _oGC=OffscreenCanvas.prototype.getContext;
++    if(__gpuC&&typeof _oGC==='function'&&typeof navigator!=='undefined'&&navigator&&navigator.gpu){OffscreenCanvas.prototype.getContext=function(){var r=_oGC.apply(this,arguments);try{if(r&&String(arguments[0])==='webgpu')__gpuC.add(this);}catch(e){}return r;};}
++    OffscreenCanvas.prototype.convertToBlob=function(){try{var w=this.width,h=this.height;if(w>0&&h>0&&!(__gpuC&&__gpuC.has(this))){var t=new OffscreenCanvas(w,h),c=t.getContext('2d');c.drawImage(this,0,0);var id=_oGID?_oGID.call(c,0,0,w,h):c.getImageData(0,0,w,h);__ar(id.data,__s,0,0,w,h,w,h,false);c.putImageData(id,0,0);return _oCtB.apply(t,arguments);}}catch(e){}return _oCtB.apply(this,arguments);};
+   }
+-  if(typeof WebGLRenderingContext!=='undefined'){var _rp=WebGLRenderingContext.prototype.readPixels;WebGLRenderingContext.prototype.readPixels=function(x,y,w,h,f,t,p){_rp.call(this,x,y,w,h,f,t,p);if(p&&f===0x1908&&t===0x1401)__an(p,__s);};}
+-  if(typeof WebGL2RenderingContext!=='undefined'){var _rp2=WebGL2RenderingContext.prototype.readPixels;WebGL2RenderingContext.prototype.readPixels=function(x,y,w,h,f,t,p){_rp2.call(this,x,y,w,h,f,t,p);if(p&&f===0x1908&&t===0x1401)__an(p,__s);};}
+-  var __gv=${JSON.stringify(vendor)},__gr=${JSON.stringify(renderer)};
+-  if(typeof WebGLRenderingContext!=='undefined'){var _gp=WebGLRenderingContext.prototype.getParameter;WebGLRenderingContext.prototype.getParameter=function(p){if(p===0x9245)return __gv;if(p===0x9246)return __gr;return _gp.call(this,p);};}
+-  if(typeof WebGL2RenderingContext!=='undefined'){var _gp2=WebGL2RenderingContext.prototype.getParameter;WebGL2RenderingContext.prototype.getParameter=function(p){if(p===0x9245)return __gv;if(p===0x9246)return __gr;return _gp2.call(this,p);};}
++  if(typeof WebGLRenderingContext!=='undefined'){var _rp=WebGLRenderingContext.prototype.readPixels;WebGLRenderingContext.prototype.readPixels=function(x,y,w,h,f,t,p){var ret=_rp.apply(this,arguments);if(p&&typeof p==='object'&&arguments.length<=7&&f===0x1908&&t===0x1401){try{__ar(p,__s,x,y,w,h,this.drawingBufferWidth,this.drawingBufferHeight,true);}catch(e){}}return ret;};}
++  if(typeof WebGL2RenderingContext!=='undefined'){var _rp2=WebGL2RenderingContext.prototype.readPixels;WebGL2RenderingContext.prototype.readPixels=function(x,y,w,h,f,t,p){var ret=_rp2.apply(this,arguments);if(p&&typeof p==='object'&&arguments.length<=7&&f===0x1908&&t===0x1401){try{__ar(p,__s,x,y,w,h,this.drawingBufferWidth,this.drawingBufferHeight,true);}catch(e){}}return ret;};}
++  // 0057: fonts parity with the window (DepthHooksChild 0036): OffscreenCanvas
++  // measureText width x the same fontSeed fudge, so page and worker agree.
++  var __fs=${typeof depth.fontSeed === "number" ? (depth.fontSeed >>> 0) : -1};
++  if(__fs>=0&&typeof OffscreenCanvasRenderingContext2D!=='undefined'&&typeof OffscreenCanvasRenderingContext2D.prototype.measureText==='function'){
++    var __ff=0.999+((__fs/4294967295)/1000);
++    var __fw=function(w){return(typeof w!=='number'||!isFinite(w)||w===0)?w:w*__ff;};
++    var _oMT=OffscreenCanvasRenderingContext2D.prototype.measureText;
++    var __props=["actualBoundingBoxLeft","actualBoundingBoxRight","actualBoundingBoxAscent","actualBoundingBoxDescent","fontBoundingBoxAscent","fontBoundingBoxDescent","emHeightAscent","emHeightDescent","hangingBaseline","alphabeticBaseline","ideographicBaseline"];
++    Object.defineProperty(OffscreenCanvasRenderingContext2D.prototype,"measureText",{configurable:true,enumerable:true,writable:true,value:function(text){var m=_oMT.apply(this,arguments);if(!m)return m;var w=m.width,fw=__fw(w);if(fw===w)return m;var out={width:fw};for(var i=0;i<__props.length;i++){var k=__props[i];try{var v=m[k];if(typeof v==='number'){out[k]=(k==="actualBoundingBoxLeft"||k==="actualBoundingBoxRight")?__fw(v):v;}}catch(e){}}return out;}});
++  }
++  var __gv=${JSON.stringify(vendor)},__gr=${JSON.stringify(rendererUnmasked)},__grm=${JSON.stringify(rendererMasked)};
++  function __gs(p,v){if(typeof v!=='string'||v.indexOf('Mozilla')===0)return v;if(p===0x9245)return __gv;if(p===0x1F01)return __grm;return __gr;}
++  if(typeof WebGLRenderingContext!=='undefined'){var _gp=WebGLRenderingContext.prototype.getParameter;WebGLRenderingContext.prototype.getParameter=function(p){if(p===0x9245||p===0x9246||p===0x1F01)return __gs(p,_gp.call(this,p));return _gp.call(this,p);};}
++  if(typeof WebGL2RenderingContext!=='undefined'){var _gp2=WebGL2RenderingContext.prototype.getParameter;WebGL2RenderingContext.prototype.getParameter=function(p){if(p===0x9245||p===0x9246||p===0x1F01)return __gs(p,_gp2.call(this,p));return _gp2.call(this,p);};}
+ })();`;
+ }
+ 
+ 
+ /**
+- * Soft residual (0043): inject 0038-parity WebGPU wrap into worker globals.
+- * Idle when navigator.gpu / requestAdapter absent (LibreWolf dom.webgpu.enabled
+- * default false — no invent). Plain objects + defineProperty overlay (0038
+- * Xray/Marionette lessons). Never invent Chrome adapter brands. AdapterInfo.device
+- * stays "". ServiceWorker NOT claimed here.
++ * 0057r3: WebGPU body, byte-identical to DarkstrDepthHooksChild WEBGPU_BODY
++ * (tests/depth-per-site-0057 checks): real features / limits / device, persona
++ * AdapterInfo; an Intel persona hides only Apple-silicon-only texture formats.
++ * Idle when navigator.gpu is absent (LibreWolf dom.webgpu.enabled default false).
+  */
+-export function buildWebGpuOverrides(depth) {
+-  if (!depth || typeof depth.webgpuSeed !== "number") {
+-    return "";
++const WEBGPU_BODY = `"use strict";
++// 0057r3 (Proof 0057r2): WebGPU keeps its native objects. Limits and device
++// features are the real ones; adapter features are the real setlike (an Intel
++// persona hides only the Apple-silicon-only texture formats); AdapterInfo is the
++// persona's. Canvas exports of WebGPU canvases stay unfarbled (DepthHooksChild /
++// worker prelude), so canvas and buffer readback agree.
++var VENDOR = String(gpuVendor || "Apple");
++var RENDERER = String(gpuRenderer || "Apple M1");
++var hooks = { requestAdapter: null, origRequestAdapter: null, gpuProto: null };
++var gpuObj = null;
++try {
++  if (typeof navigator !== "undefined" && navigator && navigator.gpu) {
++    gpuObj = navigator.gpu;
+   }
+-  const seed = depth.webgpuSeed >>> 0;
+-  const vendor = depth.gpu?.vendor || "Apple";
+-  const renderer = depth.gpu?.renderer || "Apple M1";
+-  // Body mirrors DepthHooksChild installWebGpuInPage (window 0038) — kept in the
+-  // worker compartment via the native 0049 prelude (no chrome Xray channel).
+-  return `
+-;(function(){
++} catch (_e) {}
++if (!gpuObj) { return hooks; }
++// WebGL persona -> Firefox-plausible AdapterInfo. Never Chrome/ANGLE brands.
++function mapAdapterInfo() {
++  var v = VENDOR.toLowerCase();
++  var r = String(RENDERER || "");
++  if (/apple/i.test(v) || /apple/i.test(r)) {
++    return { vendor: "apple", architecture: "common-3", device: "", description: r || "Apple GPU" };
++  }
++  if (/intel/i.test(v) || /intel/i.test(r)) {
++    return { vendor: "intel", architecture: "gen-12lp", device: "", description: r || "Intel Graphics" };
++  }
++  if (/nvidia/i.test(v) || /nvidia/i.test(r)) {
++    return { vendor: "nvidia", architecture: "gpu", device: "", description: r || "NVIDIA GPU" };
++  }
++  if (/amd/i.test(v) || /radeon/i.test(r)) {
++    return { vendor: "amd", architecture: "gcn", device: "", description: r || "AMD GPU" };
++  }
++  return { vendor: "apple", architecture: "common-3", device: "", description: r || "Apple GPU" };
++}
++var PERSONA_INFO = mapAdapterInfo();
++// Metal texture formats only Apple-silicon GPUs have. A non-Apple persona hides
++// them so the feature set is one its renderer could report. Nothing is ever
++// added; every other feature and every limit is the host's own.
++var APPLE_SILICON_ONLY_FEATURES = {
++  "texture-compression-astc": 1,
++  "texture-compression-astc-sliced-3d": 1,
++  "texture-compression-etc2": 1
++};
++var HIDDEN_FEATURES = PERSONA_INFO.vendor === "apple" ? null : APPLE_SILICON_ONLY_FEATURES;
++var featureViews = new WeakMap();
++function named(fn, name) {
++  try { Object.defineProperty(fn, "name", { configurable: true, value: name }); } catch (_n) {}
++  return fn;
++}
++function wrapFeatures(nativeFeatures) {
++  if (!nativeFeatures || typeof nativeFeatures !== "object" || !HIDDEN_FEATURES) {
++    return nativeFeatures;
++  }
++  var known = featureViews.get(nativeFeatures);
++  if (known) { return known; }
++  var visible = new Set();
++  var hidden = false;
+   try {
+-    if (typeof navigator === "undefined" || !navigator || !navigator.gpu ||
+-        typeof navigator.gpu.requestAdapter !== "function") {
+-      return;
+-    }
+-  } catch (_abs) { return; }
+-  var SEED = ${seed} >>> 0;
+-  var VENDOR = ${JSON.stringify(vendor)};
+-  var RENDERER = ${JSON.stringify(renderer)};
+-  function hashStr(s) {
+-    var h = SEED;
+-    var str = String(s || "");
+-    for (var i = 0; i < str.length; i++) {
+-      h = Math.imul(h ^ str.charCodeAt(i), 0x01000193) >>> 0;
+-    }
+-    return h >>> 0;
++    nativeFeatures.forEach(function(name) {
++      name = String(name);
++      if (HIDDEN_FEATURES[name] === 1) { hidden = true; } else { visible.add(name); }
++    });
++  } catch (_e) {
++    return nativeFeatures;
+   }
+-  function mapAdapterInfo() {
+-    var v = VENDOR.toLowerCase();
+-    var r = String(RENDERER || "");
+-    var desc = r;
+-    if (/apple/i.test(v) || /apple/i.test(r)) {
+-      return { vendor: "apple", architecture: "common-3", device: "", description: desc || "Apple GPU" };
+-    }
+-    if (/intel/i.test(v) || /intel/i.test(r)) {
+-      return { vendor: "intel", architecture: "gen-12lp", device: "", description: desc || "Intel Graphics" };
+-    }
+-    if (/nvidia/i.test(v) || /nvidia/i.test(r)) {
+-      return { vendor: "nvidia", architecture: "gpu", device: "", description: desc || "NVIDIA GPU" };
+-    }
+-    if (/amd/i.test(v) || /radeon/i.test(r)) {
+-      return { vendor: "amd", architecture: "gcn", device: "", description: desc || "AMD GPU" };
+-    }
+-    return { vendor: "apple", architecture: "common-3", device: "", description: desc || "Apple GPU" };
++  if (!hidden) {
++    featureViews.set(nativeFeatures, nativeFeatures);
++    return nativeFeatures;
+   }
+-  var PERSONA_INFO = mapAdapterInfo();
+-  var ALWAYS_KEEP_FEATURES = { "core-features-and-limits": 1 };
+-  function wrapFeatures(nativeFeatures) {
+-    if (!nativeFeatures) { return nativeFeatures; }
+-    // Soft residual (0043 re-XOR): idempotent — Window DepthHooks may share
+-    // GPU.prototype with Worker; a second wrapFeatures on plain farbled feats
+-    // dropped timestamp-query (14→13) and broke window↔worker digest parity.
+-    try {
+-      if (nativeFeatures && nativeFeatures.__darkstrFeats) {
+-        return nativeFeatures;
++  // Proxy over the real GPUSupportedFeatures: instanceof, toStringTag and
++  // prototype stay native; the setlike members read a real Set (Set iterators,
++  // native-looking bound functions; keys === values === @@iterator).
++  var values = named(visible.values.bind(visible), "values");
++  var own = {
++    has: named(visible.has.bind(visible), "has"),
++    values: values,
++    keys: values,
++    entries: named(visible.entries.bind(visible), "entries"),
++    forEach: named(visible.forEach.bind(visible), "forEach")
++  };
++  var view = new Proxy(nativeFeatures, {
++    get: function(target, prop) {
++      if (prop === Symbol.iterator) { return values; }
++      if (prop === "size") { return visible.size; }
++      if (typeof prop === "string" && Object.prototype.hasOwnProperty.call(own, prop)) {
++        return own[prop];
+       }
+-      // DepthHooks window wrap may share GPU.prototype and already return a
+-      // plain {has,forEach,size} object (Object.prototype / null). Re-subsetting
+-      // drops another seed-ranked feature (14→13) and breaks digest parity.
+-      var featsProto = Object.getPrototypeOf(nativeFeatures);
+-      if (featsProto === Object.prototype || featsProto === null) {
+-        return nativeFeatures;
+-      }
+-    } catch (_idem) {}
+-    var all = [];
+-    try {
+-      if (typeof nativeFeatures.forEach === "function") {
+-        nativeFeatures.forEach(function(name) { all.push(String(name)); });
+-      } else if (typeof nativeFeatures.values === "function") {
+-        var it = nativeFeatures.values();
+-        var step;
+-        while (!(step = it.next()).done) { all.push(String(step.value)); }
+-      }
+-    } catch (_e) { return nativeFeatures; }
+-    var always = [];
+-    var optional = [];
+-    for (var i = 0; i < all.length; i++) {
+-      if (ALWAYS_KEEP_FEATURES[all[i]]) { always.push(all[i]); }
+-      else { optional.push(all[i]); }
++      return Reflect.get(target, prop, target);
+     }
+-    optional.sort(function(a, b) {
+-      var ra = hashStr("rank:" + a);
+-      var rb = hashStr("rank:" + b);
+-      if (ra !== rb) { return ra < rb ? -1 : 1; }
+-      if (a < b) { return -1; }
+-      if (a > b) { return 1; }
+-      return 0;
+-    });
+-    var drop = 0;
+-    if (optional.length > 0) {
+-      drop = 1 + (SEED % Math.min(3, optional.length));
+-      if (drop > optional.length) { drop = optional.length; }
+-      if (optional.length >= 2 && drop >= optional.length) { drop = optional.length - 1; }
++  });
++  featureViews.set(nativeFeatures, view);
++  return view;
++}
++function wrapInfo(nativeInfo) {
++  // Plain object (a Proxy(GPUAdapterInfo) is Xray-transparent to Marionette).
++  var out = {
++    vendor: String(PERSONA_INFO.vendor || ""),
++    architecture: String(PERSONA_INFO.architecture || ""),
++    device: String(PERSONA_INFO.device || ""),
++    description: String(PERSONA_INFO.description || "")
++  };
++  try {
++    if (nativeInfo && typeof nativeInfo.isFallbackAdapter === "boolean") {
++      out.isFallbackAdapter = nativeInfo.isFallbackAdapter;
+     }
+-    var kept = always.concat(optional.slice(drop));
+-    if (!kept.length && all.length) { kept.push(all[0]); }
+-    var seen = Object.create(null);
+-    var uniq = [];
+-    for (var k = 0; k < kept.length; k++) {
+-      if (!seen[kept[k]]) { seen[kept[k]] = 1; uniq.push(kept[k]); }
++    if (nativeInfo && typeof nativeInfo.subgroupMinSize === "number") {
++      out.subgroupMinSize = nativeInfo.subgroupMinSize;
+     }
+-    kept = uniq;
+-    var set = Object.create(null);
+-    for (var j = 0; j < kept.length; j++) { set[kept[j]] = 1; }
+-    return {
+-      has: function(name) { return !!set[String(name)]; },
+-      values: function() {
+-        var idx = 0;
+-        return {
+-          next: function() {
+-            if (idx >= kept.length) { return { done: true, value: undefined }; }
+-            return { done: false, value: kept[idx++] };
+-          },
+-          [Symbol.iterator]: function() { return this; }
+-        };
+-      },
+-      keys: function() { return this.values(); },
+-      entries: function() {
+-        var idx = 0;
+-        return {
+-          next: function() {
+-            if (idx >= kept.length) { return { done: true, value: undefined }; }
+-            var kk = kept[idx++];
+-            return { done: false, value: [kk, kk] };
+-          },
+-          [Symbol.iterator]: function() { return this; }
+-        };
+-      },
+-      forEach: function(cb, thisArg) {
+-        for (var j2 = 0; j2 < kept.length; j2++) {
+-          cb.call(thisArg, kept[j2], kept[j2], this);
+-        }
+-      },
+-      get size() { return kept.length; },
+-      __darkstrFeats: true
+-    };
+-  }
+-  var FUDGE_LIMIT_KEYS = {
+-    maxTextureDimension1D: 1, maxTextureDimension2D: 1, maxTextureDimension3D: 1,
+-    maxTextureArrayLayers: 1, maxBindGroups: 1,
+-    maxSampledTexturesPerShaderStage: 1, maxSamplersPerShaderStage: 1,
+-    maxStorageBuffersPerShaderStage: 1, maxUniformBuffersPerShaderStage: 1,
+-    maxUniformBufferBindingSize: 1, maxStorageBufferBindingSize: 1,
+-    maxBufferSize: 1, maxVertexBuffers: 1, maxVertexAttributes: 1,
+-    maxColorAttachments: 1, maxComputeWorkgroupStorageSize: 1,
+-    maxComputeInvocationsPerWorkgroup: 1, maxComputeWorkgroupsPerDimension: 1
+-  };
+-  function fudgeLimit(key, nativeVal) {
+-    var n = Number(nativeVal);
+-    if (!isFinite(n) || n <= 0) { return nativeVal; }
+-    if (!FUDGE_LIMIT_KEYS[key]) { return nativeVal; }
+-    var fudge = 0.99 + ((hashStr("lim:" + key) % 1000) / 100000);
+-    var out = Math.floor(n * fudge);
+-    if (out < 1) { out = 1; }
+-    if (out > n) { out = n; }
+-    return out;
+-  }
+-  function wrapLimits(nativeLimits) {
+-    if (!nativeLimits) { return nativeLimits; }
+-    try {
+-      if (nativeLimits && nativeLimits.__darkstrLimits) {
+-        return nativeLimits;
+-      }
+-      var limProto = Object.getPrototypeOf(nativeLimits);
+-      if (limProto === Object.prototype || limProto === null) {
+-        return nativeLimits;
+-      }
+-    } catch (_idemL) {}
+-    var snapped = Object.create(null);
+-    var snapKeys = Object.keys(FUDGE_LIMIT_KEYS).concat([
+-      "minUniformBufferOffsetAlignment", "minStorageBufferOffsetAlignment",
+-      "maxBindGroupsPlusVertexBuffers",
+-      "maxDynamicUniformBuffersPerPipelineLayout",
+-      "maxDynamicStorageBuffersPerPipelineLayout",
+-      "maxComputeWorkgroupSizeX", "maxComputeWorkgroupSizeY", "maxComputeWorkgroupSizeZ",
+-      "maxInterStageShaderVariables", "maxColorAttachmentBytesPerSample"
+-    ]);
+-    for (var si = 0; si < snapKeys.length; si++) {
+-      var sk = snapKeys[si];
+-      var sv;
+-      try { sv = nativeLimits[sk]; } catch (_se) { continue; }
+-      if (typeof sv === "number" || typeof sv === "bigint") {
+-        snapped[sk] = fudgeLimit(sk, Number(sv));
+-      }
++    if (nativeInfo && typeof nativeInfo.subgroupMaxSize === "number") {
++      out.subgroupMaxSize = nativeInfo.subgroupMaxSize;
+     }
+-    snapped.__darkstrLimits = true;
+-    return snapped;
+-  }
+-  function wrapInfo(nativeInfo) {
+-    try {
+-      if (nativeInfo && nativeInfo.__darkstrInfo) {
+-        return nativeInfo;
+-      }
+-      var infoProto = Object.getPrototypeOf(nativeInfo);
+-      if (
+-        nativeInfo &&
+-        typeof nativeInfo.vendor === "string" &&
+-        (infoProto === Object.prototype || infoProto === null)
+-      ) {
+-        return nativeInfo;
+-      }
+-    } catch (_idemI) {}
+-    var base = PERSONA_INFO;
+-    var out = {
+-      vendor: String(base.vendor || ""),
+-      architecture: String(base.architecture || ""),
+-      device: String(base.device || ""),
+-      description: String(base.description || "")
+-    };
+-    try {
+-      if (nativeInfo && typeof nativeInfo.isFallbackAdapter === "boolean") {
+-        out.isFallbackAdapter = nativeInfo.isFallbackAdapter;
+-      }
+-    } catch (_e) {}
+-    try {
+-      if (nativeInfo && typeof nativeInfo.subgroupMinSize === "number") {
+-        out.subgroupMinSize = nativeInfo.subgroupMinSize;
+-      }
+-      if (nativeInfo && typeof nativeInfo.subgroupMaxSize === "number") {
+-        out.subgroupMaxSize = nativeInfo.subgroupMaxSize;
+-      }
+-    } catch (_e2) {}
+-    out.__darkstrInfo = true;
+-    return out;
+-  }
+-  function wrapDevice(device, sharedFeatures, sharedLimits, sharedInfo) {
+-    if (!device) { return device; }
+-    var featCache = sharedFeatures || null;
+-    var limCache = sharedLimits || null;
+-    var infoCache = sharedInfo || null;
+-    function ensureFeat() {
+-      if (!featCache) { featCache = wrapFeatures(device.features); }
+-      return featCache;
+-    }
+-    function ensureLim() {
+-      if (!limCache) { limCache = wrapLimits(device.limits); }
+-      return limCache;
+-    }
+-    function ensureInfo() {
+-      if (!infoCache) { infoCache = wrapInfo(device.adapterInfo); }
+-      return infoCache;
+-    }
+-    var overlaid = false;
+-    try {
+-      var f = ensureFeat();
+-      var l = ensureLim();
+-      var i = ensureInfo();
+-      Object.defineProperty(device, "features", {
+-        configurable: true, enumerable: true, get: function() { return f; }
+-      });
+-      Object.defineProperty(device, "limits", {
+-        configurable: true, enumerable: true, get: function() { return l; }
+-      });
++  } catch (_e) {}
++  return out;
++}
++function overlayDeviceInfo(device, info) {
++  // Device features / limits stay native (what was granted). Only adapterInfo
++  // follows the adapter's persona info.
++  try {
++    if (device && "adapterInfo" in device) {
+       Object.defineProperty(device, "adapterInfo", {
+-        configurable: true, enumerable: true, get: function() { return i; }
++        configurable: true, enumerable: true, get: function() { return info; }
+       });
+-      overlaid = true;
+-    } catch (_defErr) { overlaid = false; }
+-    if (overlaid) { return device; }
+-    return new Proxy(device, {
+-      get: function(target, prop, receiver) {
+-        if (typeof prop === "symbol") { return Reflect.get(target, prop, target); }
+-        var key = String(prop);
+-        if (key === "features") { return ensureFeat(); }
+-        if (key === "limits") { return ensureLim(); }
+-        if (key === "adapterInfo") { return ensureInfo(); }
+-        var raw;
+-        try { raw = target[prop]; } catch (_e) { return undefined; }
+-        if (typeof raw === "function") { return raw.bind(target); }
+-        return raw;
+-      }
+-    });
++    }
++  } catch (_e) {}
++  return device;
++}
++var wrappedAdapters = new WeakMap();
++function wrapAdapter(adapter) {
++  if (!adapter) { return adapter; }
++  var known = wrappedAdapters.get(adapter);
++  if (known) { return known; }
++  var featCache = null;
++  var infoCache = null;
++  var requestDevice = null;
++  function getFeat() {
++    if (!featCache) { featCache = wrapFeatures(adapter.features); }
++    return featCache;
+   }
+-  function wrapAdapter(adapter) {
+-    if (!adapter) { return adapter; }
+-    try {
+-      if (adapter.__darkstrWebGpuWrapped) {
+-        return adapter;
+-      }
+-    } catch (_idemA) {}
+-    try {
+-      Object.defineProperty(adapter, "__darkstrWebGpuWrapped", {
+-        configurable: true, value: true
+-      });
+-    } catch (_mark) {}
+-    var featCache = null;
+-    var limCache = null;
+-    var infoCache = null;
+-    function getFeat() {
+-      if (!featCache) { featCache = wrapFeatures(adapter.features); }
+-      return featCache;
+-    }
+-    function getLim() {
+-      if (!limCache) { limCache = wrapLimits(adapter.limits); }
+-      return limCache;
+-    }
+-    function getInfo() {
+-      if (!infoCache) { infoCache = wrapInfo(adapter.info); }
+-      return infoCache;
+-    }
+-    return new Proxy(adapter, {
+-      get: function(target, prop, receiver) {
+-        if (typeof prop === "symbol") { return Reflect.get(target, prop, target); }
+-        var key = String(prop);
+-        if (key === "features") { return getFeat(); }
+-        if (key === "limits") { return getLim(); }
+-        if (key === "info") { return getInfo(); }
+-        if (key === "requestDevice") {
++  function getInfo() {
++    if (!infoCache) { infoCache = wrapInfo(adapter.info); }
++    return infoCache;
++  }
++  var proxy = new Proxy(adapter, {
++    get: function(target, prop) {
++      if (typeof prop === "symbol") { return Reflect.get(target, prop, target); }
++      if (prop === "features") { return getFeat(); }
++      if (prop === "info") { return getInfo(); }
++      if (prop === "requestDevice") {
++        if (!requestDevice) {
+           var origRD = target.requestDevice;
+-          return function(desc) {
+-            var farbled = getFeat();
+-            var newDesc;
+-            if (desc === undefined || desc === null) { newDesc = {}; }
+-            else {
+-              try { newDesc = Object.assign({}, desc); }
+-              catch (_eAssign) { newDesc = desc; }
+-            }
+-            if (newDesc && typeof newDesc === "object") {
+-              var reqIn = newDesc.requiredFeatures;
+-              var reqOut = [];
+-              if (reqIn && typeof reqIn.length === "number" && reqIn.length > 0) {
+-                for (var ri = 0; ri < reqIn.length; ri++) {
+-                  var fn = String(reqIn[ri]);
+-                  if (!farbled.has(fn)) {
+-                    return Promise.reject(new TypeError(
+-                      "Failed to execute 'requestDevice' on 'GPUAdapter': " +
+-                      "Invalid feature call. Missing feature: " + fn
+-                    ));
+-                  }
+-                  reqOut.push(fn);
++          requestDevice = named(function() {
++            var desc = arguments[0];
++            var feats = getFeat();
++            if (feats !== target.features && desc && desc.requiredFeatures) {
++              var req;
++              try { req = Array.from(desc.requiredFeatures, String); } catch (_r) { req = []; }
++              for (var i = 0; i < req.length; i++) {
++                if (!feats.has(req[i])) {
++                  return Promise.reject(new TypeError(
++                    "GPUAdapter.requestDevice: feature '" + req[i] + "' is not supported by the adapter"
++                  ));
+                 }
+-                newDesc.requiredFeatures = reqOut;
+               }
+             }
+-            function finish(dev) {
+-              return wrapDevice(dev, getFeat(), getLim(), getInfo());
+-            }
+-            return Promise.resolve(origRD.call(target, newDesc)).then(finish);
+-          };
+-        }
+-        var raw;
+-        try { raw = target[prop]; } catch (_e) { return undefined; }
+-        if (typeof raw === "function") { return raw.bind(target); }
+-        return raw;
+-      }
+-    });
+-  }
+-  var gpuObj = null;
+-  try {
+-    if (typeof navigator !== "undefined" && navigator && navigator.gpu) {
+-      gpuObj = navigator.gpu;
+-    }
+-  } catch (_e) {}
+-  var gpuProto = null;
+-  if (gpuObj) { gpuProto = Object.getPrototypeOf(gpuObj); }
+-  if (!gpuProto && typeof GPU !== "undefined" && GPU.prototype) {
+-    gpuProto = GPU.prototype;
+-  }
+-  if (gpuProto && typeof gpuProto.requestAdapter === "function") {
+-    var origRA = gpuProto.requestAdapter;
+-    try {
+-      if (origRA && origRA.__darkstrWebGpuRA) {
+-        // Our RA already on this proto — still ensure instance own-property.
+-        if (gpuObj) {
+-          try {
+-            Object.defineProperty(gpuObj, "requestAdapter", {
+-              configurable: true, enumerable: true, writable: true, value: origRA
++            return Promise.resolve(origRD.apply(target, arguments)).then(function(dev) {
++              return overlayDeviceInfo(dev, getInfo());
+             });
+-          } catch (_reInst) {}
++          }, "requestDevice");
+         }
+-        return;
++        return requestDevice;
+       }
+-    } catch (_have) {}
+-    var wrappedRA = function(options) {
+-      var self = this;
+-      return Promise.resolve(origRA.apply(self, arguments)).then(function(adapter) {
+-        if (!adapter) { return null; }
+-        return wrapAdapter(adapter);
+-      });
+-    };
+-    try { wrappedRA.__darkstrWebGpuRA = true; } catch (_markRA) {}
+-    // Prefer own-property on the navigator.gpu instance (WorkerNavigator.gpu is
+-    // SameObject) so we do not stack on a Window DepthHooks proto wrap when
+-    // GPU.prototype is process-shared with the page.
+-    var instOk = false;
+-    if (gpuObj) {
+-      try {
+-        Object.defineProperty(gpuObj, "requestAdapter", {
+-          configurable: true, enumerable: true, writable: true, value: wrappedRA
+-        });
+-        instOk = true;
+-      } catch (_inst) { instOk = false; }
++      var raw;
++      try { raw = target[prop]; } catch (_e) { return undefined; }
++      if (typeof raw === "function") { return raw.bind(target); }
++      return raw;
+     }
+-    if (!instOk) {
+-      try {
+-        Object.defineProperty(gpuProto, "requestAdapter", {
+-          configurable: true, enumerable: true, writable: true, value: wrappedRA
+-        });
+-      } catch (_def) {
+-        try { gpuProto.requestAdapter = wrappedRA; } catch (_e2) {}
+-      }
+-    }
++  });
++  wrappedAdapters.set(adapter, proxy);
++  return proxy;
++}
++var gpuProto = Object.getPrototypeOf(gpuObj);
++if (!gpuProto && typeof GPU !== "undefined" && GPU.prototype) {
++  gpuProto = GPU.prototype;
++}
++if (gpuProto && typeof gpuProto.requestAdapter === "function") {
++  var origRA = gpuProto.requestAdapter;
++  var wrappedRA = named(function() {
++    return Promise.resolve(origRA.apply(this, arguments)).then(function(adapter) {
++      if (!adapter) { return null; }
++      return wrapAdapter(adapter);
++    });
++  }, "requestAdapter");
++  Object.defineProperty(gpuProto, "requestAdapter", {
++    configurable: true, enumerable: true, writable: true, value: wrappedRA
++  });
++  hooks.requestAdapter = wrappedRA;
++  hooks.origRequestAdapter = origRA;
++  hooks.gpuProto = gpuProto;
++}
++return hooks;
++`;
++
++export function buildWebGpuOverrides(depth) {
++  if (!depth || typeof depth.webgpuSeed !== "number") {
++    return "";
+   }
+-})();`;
++  const seed = depth.webgpuSeed >>> 0;
++  const vendor = depth.gpu?.vendor || "Apple";
++  const renderer = depth.gpu?.renderer || "Apple M1";
++  return `
++;(function(seed,gpuVendor,gpuRenderer){try{(function(){${WEBGPU_BODY}
++}).call(this);}catch(_e){}})(${seed},${JSON.stringify(vendor)},${JSON.stringify(renderer)});`;
+ }
+ 
+ /** Depth prelude for one worker ("" when depth is not armed). */
