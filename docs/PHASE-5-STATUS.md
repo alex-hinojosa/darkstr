@@ -513,7 +513,7 @@ All five 0043 Worker/SharedWorker WebGPU XOR gates passed on Proof tip `cc692641
 | Patch | [`patches/0055-darkstr-persona-ff156.patch`](../patches/0055-darkstr-persona-ff156.patch) + `patches/0055-files/` (DarkstrNativePersona, DarkstrFfi, duppel-persona `lib.rs` / `build.rs` / `gecko-milestone.txt`, duppel-ffi `lib.rs` + `SHA256SUMS`) |
 | Apply | `scripts/apply-0055-persona-ff156-mini.sh` (Rust gkrust + chrome JS → libxul relinks; restores the 0049 hooks C++ on a tree that has r1) |
 | Tests | `tests/persona-ff156-0055.test.mjs`; `cargo test` (`n6_*`, goldens `fixtures/persona-goldens-0055.json`); 0049/0051 tests updated (persona UA == native UA on Mac is now expected) |
-| DMG | `~/AgentDocs/builds/darkstr-0055-859635f7.dmg` (+ `.sha256`) |
+| DMG | `~/AgentDocs/builds/darkstr-0055-a89d3e83.dmg` (+ `.sha256`): respin = 0055 r2 + 0053r2. r1 was `darkstr-0055-859635f7.dmg` |
 | Evidence | `~/AgentDocs/proof/darkstr-0055-persona-ff156-20261009-022132/` |
 
 ### Bug
@@ -585,9 +585,10 @@ All five 0043 Worker/SharedWorker WebGPU XOR gates passed on Proof tip `cc692641
 
 **Cause.** Stock Gecko's `UrlClassifierExceptionListService` sets the flag on **any**
 `browser.contentblocking.category` change. Under Pollution, FPP=false makes
-`ContentBlockingPrefs.matchCBCategory` flip the category (strict → custom on entry,
-back on exit), so the flag is set as a side effect. The flip can't be avoided:
-the category follows FPP.
+`ContentBlockingPrefs.matchCBCategory` flip the category (strict → custom on entry),
+so the flag is set as a side effect. The flip can't be avoided: the category
+follows FPP. The observers only exist after the service's `lazyInit` (first
+classified page load), so a run that never loads a page doesn't reproduce it.
 
 **Fix.** On entry, ModeXor saves the flag's pre-Pollution state (user value or none)
 in `darkstr.xor.savedPrefs` along with RFP / FPP / `librewolf.webgl.prompt`.
@@ -597,6 +598,18 @@ and once more on idle in case of a late category re-match. Off mode still writes
 nothing. A state saved by 0053 before r2 has no record of the flag; the flag is
 then left alone rather than guessed. A real user interaction *during* Pollution is
 also undone on exit (indistinguishable from the stock side effect).
+
+**Live (sandboxed, port 8299, after a page load).** 0053 DMG `924c6036`: flag
+false → true (Pollution) → true after off → true after restart (bug reproduced).
+Respin `a89d3e83`: false → true → **false** → **false** (default, no user value,
+not in prefs.js). Evidence `~/AgentDocs/proof/darkstr-0055-persona-ff156-20261009-022132/selftest/live-etp-negctl-0053`, `live-r2-etp`.
+
+**Residual (not changed here, same on 0053).** After leaving Pollution,
+`browser.contentblocking.category` stays `custom` for the rest of the session. The
+next startup's `matchCBCategory` puts it back to `strict`. Restoring the category
+from ModeXor would re-trigger the stock observer (the flag restore would have to
+follow it again) and re-apply the category's pref set. Proposed as a small
+follow-up if Proof wants in-session parity.
 
 ## In review — 0053 off mode leaves prefs alone (Fable QA B5)
 
