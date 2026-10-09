@@ -18,7 +18,8 @@ import { dirname, join } from "node:path";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 // 0053r2 (Proof: ETP-interaction flag) ships ModeXor from patches/0053r2-files.
-const F53 = ["0053r2-files", "0053-files"].map((d) => join(root, "patches", d)).find((d) => existsSync(join(d, "DarkstrModeXor.sys.mjs")));
+// 0057r2 (baseline FPP under Pollution) ships the newest ModeXor from patches/0057-files.
+const F53 = ["0057-files", "0053r2-files", "0053-files"].map((d) => join(root, "patches", d)).find((d) => existsSync(join(d, "DarkstrModeXor.sys.mjs")));
 
 // ------------------------------------------------- Gecko-like pref store ---
 // Default branch + user branch. Like libpref, setting a user value equal to
@@ -100,6 +101,7 @@ function freshProfile(userValues = {}) {
     "darkstr.nativePersonaHooks": false,
     "privacy.resistFingerprinting": true,
     "privacy.fingerprintingProtection": false,
+    "privacy.baselineFingerprintingProtection": true,
     "browser.contentblocking.category": "standard",
     "webgl.disabled": false,
     "webgl.force-enabled": false,
@@ -180,6 +182,7 @@ const CASES = {
   "CB strict (FPP=true user value), RFP stock": { "privacy.fingerprintingProtection": true },
   "user RFP=false + FPP=true": { "privacy.resistFingerprinting": false, "privacy.fingerprintingProtection": true },
   "user already lifted the WebGL prompt": { "librewolf.webgl.prompt": false },
+  "0057r2: user turned baseline FPP off": { "privacy.baselineFingerprintingProtection": false },
 };
 // (A user value equal to the default cannot exist in Gecko: libpref drops it,
 // so "explicit RFP=true" is the same state as "no user value".)
@@ -194,6 +197,7 @@ for (const [name, start] of Object.entries(CASES)) {
     assert.equal(get("privacy.resistFingerprinting"), false);
     assert.equal(get("privacy.fingerprintingProtection"), false);
     assert.equal(get("librewolf.webgl.prompt"), false);
+    assert.equal(get("privacy.baselineFingerprintingProtection"), false, "0057r2: baseline FPP off under Pollution");
     assert.ok(user.has("darkstr.xor.savedPrefs"));
     // Restart while in Pollution keeps the original saved state.
     MX.uninit();
@@ -202,6 +206,8 @@ for (const [name, start] of Object.entries(CASES)) {
     // CB / user stomps during Pollution are re-asserted (XOR) ...
     setUser("privacy.fingerprintingProtection", true);
     assert.equal(get("privacy.fingerprintingProtection"), false);
+    setUser("privacy.baselineFingerprintingProtection", true);
+    assert.equal(get("privacy.baselineFingerprintingProtection"), false, "0057r2: baseline stomp re-asserted");
     setUser("darkstr.mode", "homogeneous");
     MX.uninit();
     assert.deepEqual(userSnapshot(OWNED), before, "exact restore");
@@ -353,4 +359,41 @@ test("NativePersona: darkstr.pollutionActive only written while Pollution is act
   const np = readFileSync(existsSync(np55) ? np55 : join(F53, "DarkstrNativePersona.sys.mjs"), "utf8");
   assert.match(np, /if \(pollutionActive\) \{\s*Services\.prefs\.setBoolPref\(POLLUTION_ACTIVE_PREF, true\);\s*\} else if \(Services\.prefs\.prefHasUserValue\(POLLUTION_ACTIVE_PREF\)\) \{\s*Services\.prefs\.clearUserPref\(POLLUTION_ACTIVE_PREF\);/);
   assert.doesNotMatch(np, /setBoolPref\(POLLUTION_ACTIVE_PREF, !!pollutionActive\)/);
+});
+
+// ------------------------------------------- 0057r2: baseline FPP backfill ---
+const BASE = "privacy.baselineFingerprintingProtection";
+test("0057r2: Pollution entered under an older build: baseline FPP recorded on next start, restored exactly", () => {
+  for (const startBase of [undefined, false]) {
+    const old = { v: 1, prefs: { "privacy.resistFingerprinting": { user: false, value: null },
+      "privacy.fingerprintingProtection": { user: false, value: null }, "librewolf.webgl.prompt": { user: false, value: null } } };
+    freshProfile({ "darkstr.mode": "pollution", "privacy.resistFingerprinting": false, "librewolf.webgl.prompt": false,
+      ...(startBase === undefined ? {} : { [BASE]: startBase }), "darkstr.xor.savedPrefs": JSON.stringify(old) });
+    MX.init();
+    const saved = JSON.parse(get("darkstr.xor.savedPrefs"));
+    assert.deepEqual(saved.prefs[BASE], startBase === undefined ? { user: false, value: null } : { user: true, value: false });
+    assert.deepEqual(saved.prefs["privacy.resistFingerprinting"], old.prefs["privacy.resistFingerprinting"], "RFP record never rewritten");
+    assert.equal(get(BASE), false);
+    setUser("darkstr.mode", "homogeneous");
+    for (const f of idle.splice(0)) f();
+    MX.uninit();
+    assert.equal(user.has(BASE), startBase !== undefined, "baseline back to its pre-Pollution state");
+    assert.equal(get(BASE), startBase === undefined ? true : false);
+  }
+});
+test("0057r2: off mode never touches baseline FPP (user off or stock on)", () => {
+  for (const v of [undefined, false]) {
+    freshProfile(v === undefined ? {} : { [BASE]: v });
+    for (let i = 0; i < 3; i++) session({ cbSettle: false });
+    MX.init(); setUser(BASE, true); setUser(BASE, false); MX.uninit();
+    assert.deepEqual(writes.filter(([, k]) => k !== BASE), []);
+  }
+});
+test("0057r2: xorSafe requires baseline FPP off under Pollution", () => {
+  freshProfile();
+  MX.init();
+  setUser("darkstr.mode", "pollution");
+  assert.equal(MX.applyModeEffects().xorSafe, true);
+  setUser("darkstr.mode", "homogeneous");
+  MX.uninit();
 });

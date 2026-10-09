@@ -178,13 +178,13 @@ test("0057 sync seed pull: parent listener + child sync path with async fallback
 
 test("0057 files: sums, baseline, patch headers", () => {
   const sums = readFileSync(join(F, "SHA256SUMS"), "utf8").trim().split("\n");
-  assert.equal(sums.length, 6);
+  assert.equal(sums.length, 7); // 0057r2: + DarkstrModeXor
   for (const l of sums) {
     const [h, n] = l.split(/\s+/);
     assert.equal(createHash("sha256").update(readFileSync(join(F, n))).digest("hex"), h, n);
   }
   const base = readFileSync(join(F, "BASE_SHA256SUMS"), "utf8");
-  const baseOf = { "DarkstrDepthHooksChild.sys.mjs": "0039-files" };
+  const baseOf = { "DarkstrDepthHooksChild.sys.mjs": "0039-files", "DarkstrModeXor.sys.mjs": "0053r2-files" };
   for (const l of base.trim().split("\n")) {
     const [h, p] = l.split(/\s+/); const n = p.split("/").pop();
     if (n === "DarkstrDepthHooksParent.sys.mjs") continue; // baseline = 0017 patch (no -files pin)
@@ -192,7 +192,7 @@ test("0057 files: sums, baseline, patch headers", () => {
     assert.equal(createHash("sha256").update(readFileSync(join(root, "patches", dir, n))).digest("hex"), h, `baseline ${n}`);
   }
   const patch = readFileSync(join(root, "patches", "0057-darkstr-depth-per-site.patch"), "utf8");
-  assert.equal((patch.match(/^\+\+\+ b\//gm) || []).length, 6);
+  assert.equal((patch.match(/^\+\+\+ b\//gm) || []).length, 7);
   assert.ok(readdirSync(join(root, "scripts")).includes("apply-0057-depth-per-site-mini.sh"));
 });
 
@@ -240,4 +240,12 @@ test("0057 replaceMethod never stacks on its own wrapper (waiver-safe identity)"
   Object.defineProperty(proto, "getImageData", { value: plain1, configurable: true, writable: true });
   const o2 = env.replaceMethod({}, proto, "getImageData", function () { return "w2"; }, recs);
   assert.equal(o2, native, "second install wraps the native, not our first wrapper");
+});
+
+test("0057r2: ModeXor owns baseline FPP only under Pollution (saved/restored with RFP/FPP)", () => {
+  const MXs = src("DarkstrModeXor.sys.mjs");
+  assert.match(MXs, /\[BASELINE_FPP_PREF, false\],/);
+  assert.match(MXs, /const BACKFILL_PREFS = Object\.freeze\(\[BASELINE_FPP_PREF\]\);/);
+  assert.match(MXs, /addObserver\(BASELINE_FPP_PREF/);
+  assert.match(MXs, /removeObserver\(BASELINE_FPP_PREF/);
 });

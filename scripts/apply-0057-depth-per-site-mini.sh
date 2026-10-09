@@ -10,6 +10,8 @@
 #    offset by 20*log10(fudge) (consistent with the scaled signal).
 #  - seeds resolved for the requesting document's own WindowGlobalParent (sync pull + DepthHooksParent),
 #    not bc.currentWindowGlobal (still the previous / initial about:blank document at DOMWindowCreated).
+#  - 0057r2: ModeXor also turns privacy.baselineFingerprintingProtection off under Pollution (saved +
+#    restored exactly like RFP/FPP; off mode hands-off), so darkstr's farbling is the only canvas noise.
 #  - WorkerHooksChild prelude: same rect noise + readPixels flip + OffscreenCanvas measureText fudge.
 # Needs 0052 + 0053 + 0053r2 + 0055r2 + 0056r3 applied. Chrome JS only (no C++).
 # usage: scripts/apply-0057-depth-per-site-mini.sh   (needs DARKSTR_GECKO_ROOT)
@@ -23,6 +25,7 @@ MAP=(
  "DarkstrDepthHooks.sys.mjs:browser/components/DarkstrDepthHooks.sys.mjs"
  "DarkstrDepthHooksChild.sys.mjs:browser/components/DarkstrDepthHooksChild.sys.mjs"
  "DarkstrDepthHooksParent.sys.mjs:browser/components/DarkstrDepthHooksParent.sys.mjs"
+ "DarkstrModeXor.sys.mjs:browser/components/DarkstrModeXor.sys.mjs"
  "DarkstrNativePersona.sys.mjs:browser/components/DarkstrNativePersona.sys.mjs"
  "DarkstrWorkerHooks.sys.mjs:browser/components/DarkstrWorkerHooks.sys.mjs"
  "DarkstrWorkerHooksChild.sys.mjs:browser/components/DarkstrWorkerHooksChild.sys.mjs"
@@ -36,7 +39,7 @@ if [[ $already == 1 ]]; then
   echo "0057 already applied — tree matches patches/0057-files"
 else
   (cd "$R" && shasum -a 256 -c "$F/BASE_SHA256SUMS") \
-    || { echo "error: tree is not the 0056r2 baseline 0057 was cut against" >&2; exit 1; }
+    || { echo "error: tree is not the 0056r3 + 0053r2 baseline 0057 was cut against" >&2; exit 1; }
   (cd "$R" && patch -p1 --forward --batch < "$PATCH")
 fi
 for e in "${MAP[@]}"; do
@@ -45,5 +48,6 @@ done
 grep -Fq 'DarkstrDepthHooks:GetSeedsSync' "$R/browser/components/DarkstrDepthHooks.sys.mjs"
 grep -Fq 'this.manager' "$R/browser/components/DarkstrDepthHooksParent.sys.mjs"
 grep -Fq '_storeSeedForEtld' "$R/browser/components/DarkstrNativePersona.sys.mjs"
+grep -Fq 'privacy.baselineFingerprintingProtection' "$R/browser/components/DarkstrModeXor.sys.mjs"
 echo "0057 applied. Build (objdir pinned; never a bare mach build):"
 echo "  cd \$DARKSTR_GECKO_ROOT && MOZ_OBJDIR=\$DARKSTR_GECKO_ROOT/obj-aarch64-apple-darwin25.6.0 ./mach build && MOZ_OBJDIR=\$DARKSTR_GECKO_ROOT/obj-aarch64-apple-darwin25.6.0 ./mach package"

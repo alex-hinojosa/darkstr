@@ -696,6 +696,134 @@
          );
        }
        if (message.name === "DarkstrDepthHooks:InstallStatus") {
+--- a/browser/components/DarkstrModeXor.sys.mjs
++++ b/browser/components/DarkstrModeXor.sys.mjs
+@@ -14,6 +14,9 @@
+  *
+  * Pollution  → privacy.resistFingerprinting=false,
+  *              privacy.fingerprintingProtection=false,
++ *              privacy.baselineFingerprintingProtection=false (0057r2: its
++ *              canvas randomization would stack engine noise on darkstr's
++ *              per-site farbling, so alternate canvas read paths disagreed),
+  *              librewolf.webgl.prompt=false (WebGL without the LibreWolf
+  *              doorhanger; GPU blocklist and webgl.force-enabled untouched)
+  * Homogeneous → hands-off (0053, Fable B5): writes nothing. Leaving Pollution
+@@ -40,6 +43,8 @@
+ const NATIVE_PREF = "darkstr.nativeCompatible";
+ const RFP_PREF = "privacy.resistFingerprinting";
+ const FPP_PREF = "privacy.fingerprintingProtection";
++/** 0057r2: Firefox baseline FPP (default on; canvas randomization among its targets). */
++const BASELINE_FPP_PREF = "privacy.baselineFingerprintingProtection";
+ /** ContentBlockingPrefs.PREF_CB_CATEGORY on Firefox/LibreWolf 155.0.1-1 */
+ const CB_CATEGORY_PREF = "browser.contentblocking.category";
+ /** 0029: LibreWolf null-context gates — webgl.disabled + librewolf.webgl.prompt. */
+@@ -63,6 +68,7 @@
+ const POLLUTION_PREFS = Object.freeze([
+   [RFP_PREF, false],
+   [FPP_PREF, false],
++  [BASELINE_FPP_PREF, false],
+   [LIBREWOLF_WEBGL_PROMPT_PREF, false],
+ ]);
+ /**
+@@ -76,6 +82,13 @@
+ const ETP_INTERACTED_PREF =
+   "privacy.trackingprotection.allow_list.hasUserInteractedWithETPSettings";
+ const RESTORE_ONLY_PREFS = Object.freeze([ETP_INTERACTED_PREF]);
++/**
++ * 0057r2: POLLUTION_PREFS that older builds never wrote. A saved copy made by
++ * such a build lacks them while their current value is still the user's /
++ * stock one, so it is recorded before darkstr takes them over. (RFP / FPP /
++ * the WebGL prompt are never backfilled: an old build may have forced them.)
++ */
++const BACKFILL_PREFS = Object.freeze([BASELINE_FPP_PREF]);
+ /** Status format written by 0053+ (diagnostics); anything else is pre-0053. */
+ const WEBGL_STATUS_TAG = "v53;";
+ /**
+@@ -250,6 +263,7 @@
+     Services.prefs.addObserver(NATIVE_PREF, this._observer);
+     Services.prefs.addObserver(RFP_PREF, this._observer);
+     Services.prefs.addObserver(FPP_PREF, this._observer);
++    Services.prefs.addObserver(BASELINE_FPP_PREF, this._observer);
+     Services.prefs.addObserver(CB_CATEGORY_PREF, this._observer);
+     this.applyModeEffects();
+     // CB category / ContentBlockingPrefs may settle after BrowserGlue init and
+@@ -268,6 +282,7 @@
+       Services.prefs.removeObserver(NATIVE_PREF, this._observer);
+       Services.prefs.removeObserver(RFP_PREF, this._observer);
+       Services.prefs.removeObserver(FPP_PREF, this._observer);
++      Services.prefs.removeObserver(BASELINE_FPP_PREF, this._observer);
+       Services.prefs.removeObserver(CB_CATEGORY_PREF, this._observer);
+     } catch (_e) {
+       // Observers may already be gone during shutdown.
+@@ -318,6 +333,7 @@
+     if (
+       data === RFP_PREF ||
+       data === FPP_PREF ||
++      data === BASELINE_FPP_PREF ||
+       data === CB_CATEGORY_PREF
+     ) {
+       // Only re-assert under Pollution (counter CB stomps / category flips).
+@@ -385,8 +401,9 @@
+ 
+       const rfp = Services.prefs.getBoolPref(RFP_PREF, false);
+       const fpp = Services.prefs.getBoolPref(FPP_PREF, false);
++      const baseline = Services.prefs.getBoolPref(BASELINE_FPP_PREF, false);
+       // Homogeneous has no constraint: RFP/FPP are whatever the user chose.
+-      const xorSafe = mode === "pollution" ? !rfp && !fpp : true;
++      const xorSafe = mode === "pollution" ? !rfp && !fpp && !baseline : true;
+ 
+       return { mode, nativeCompatible, xorSafe };
+     } finally {
+@@ -410,6 +427,8 @@
+   _enterPollution() {
+     if (!Services.prefs.prefHasUserValue(SAVED_PREF)) {
+       this._savePrefs();
++    } else {
++      this._backfillSavedPrefs();
+     }
+     for (const [name, value] of POLLUTION_PREFS) {
+       try {
+@@ -423,6 +442,40 @@
+     }
+   },
+ 
++  /**
++   * 0057r2: a profile already in Pollution under an older build has a saved
++   * copy without records for prefs darkstr owns only since then (baseline
++   * FPP). darkstr never wrote those before, so their current state is still
++   * the user's / stock: record it now, before taking them over, so leaving
++   * Pollution restores them exactly. Existing records are never changed.
++   */
++  _backfillSavedPrefs() {
++    let saved = null;
++    try {
++      saved = JSON.parse(Services.prefs.getStringPref(SAVED_PREF, ""));
++    } catch (_e) {
++      return; // unreadable: leave it (restore skips missing records)
++    }
++    if (!saved || typeof saved !== "object" || !saved.prefs) {
++      return;
++    }
++    let changed = false;
++    for (const name of BACKFILL_PREFS) {
++      if (saved.prefs[name]) {
++        continue;
++      }
++      if (Services.prefs.getPrefType(name) === Services.prefs.PREF_INVALID) {
++        continue;
++      }
++      const user = Services.prefs.prefHasUserValue(name);
++      saved.prefs[name] = { user, value: user ? readUserValue(name) : null };
++      changed = true;
++    }
++    if (changed) {
++      Services.prefs.setStringPref(SAVED_PREF, JSON.stringify(saved));
++    }
++  },
++
+   /** 0053: exact restore of what _savePrefs recorded; no-op without it. */
+   _leavePollution() {
+     if (!Services.prefs.prefHasUserValue(SAVED_PREF)) {
 --- a/browser/components/DarkstrNativePersona.sys.mjs
 +++ b/browser/components/DarkstrNativePersona.sys.mjs
 @@ -857,8 +857,40 @@
