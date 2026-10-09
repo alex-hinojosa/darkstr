@@ -92,6 +92,41 @@ const SAVED_PEERCONNECTION_HAD_USER_PREF =
 const PERSONA_LAST_ERROR_PREF = "darkstr.persona.lastError";
 /** 0051 diag: last top-level document decision {site, armed, ua, al}. */
 const LAST_DECISION_PREF = "darkstr.persona.lastDecision";
+
+/**
+ * 0052 (Fable B1 / O7): diagnostics stay in memory. They reach prefs.js only
+ * while darkstr.debug.diagPrefs is true (default false; QA / Proof harnesses
+ * set it in user.js). Chrome callers read the same values through
+ * getDiagnostics(). Stale values are swept at startup by DarkstrModeXor.
+ */
+const DIAG_PREFS_PREF = "darkstr.debug.diagPrefs";
+const gDiag = new Map();
+const diagPrefs = {
+  _write(setter, name, value) {
+    gDiag.set(name, value);
+    let on = false;
+    try {
+      on = Services.prefs.getBoolPref(DIAG_PREFS_PREF, false);
+    } catch (_e) {
+      on = false;
+    }
+    if (on === true) {
+      Services.prefs[setter](name, value);
+    }
+  },
+  setBoolPref(name, value) {
+    this._write("setBoolPref", name, value);
+  },
+  setIntPref(name, value) {
+    this._write("setIntPref", name, value);
+  },
+  setStringPref(name, value) {
+    this._write("setStringPref", name, value);
+  },
+  snapshot() {
+    return Object.fromEntries(gDiag);
+  },
+};
 const ACTOR_NAME = "DarkstrNativePersona";
 const MSG_INSTALL = "DarkstrNativePersona:Install";
 const MSG_REFRESH = "DarkstrNativePersona:Refresh";
@@ -206,6 +241,11 @@ function detectHostOs() {
 }
 
 export var DarkstrNativePersona = {
+  /** 0052: in-memory diagnostics (what used to be darkstr.*.last* prefs). */
+  getDiagnostics() {
+    return diagPrefs.snapshot();
+  },
+
   _inited: false,
   _actorRegistered: false,
   _httpObserver: null,
@@ -391,7 +431,7 @@ export var DarkstrNativePersona = {
   _syncPhaseMirrorFromCount(n) {
     const phase = n <= 1 ? "first_document" : "subsequent_nav";
     try {
-      Services.prefs.setStringPref(DOCSHELL_PHASE_MIRROR_PREF, phase);
+      diagPrefs.setStringPref(DOCSHELL_PHASE_MIRROR_PREF, phase);
     } catch (_e) {}
     this._syncStrictNextNavArmedDiag(phase);
   },
@@ -603,9 +643,9 @@ export var DarkstrNativePersona = {
   _writeEffectiveDiag(etld, seed) {
     try {
       if (etld) {
-        Services.prefs.setStringPref(LAST_ETLD_PREF, String(etld));
+        diagPrefs.setStringPref(LAST_ETLD_PREF, String(etld));
       }
-      Services.prefs.setIntPref(EFFECTIVE_SEED_PREF, seed >>> 0);
+      diagPrefs.setIntPref(EFFECTIVE_SEED_PREF, seed >>> 0);
     } catch (_e) {}
   },
 
@@ -674,8 +714,8 @@ export var DarkstrNativePersona = {
       if (!snapshot?.userAgent) {
         return;
       }
-      Services.prefs.setStringPref(UA_MIRROR_PREF, snapshot.userAgent);
-      Services.prefs.setStringPref(
+      diagPrefs.setStringPref(UA_MIRROR_PREF, snapshot.userAgent);
+      diagPrefs.setStringPref(
         PLATFORM_MIRROR_PREF,
         snapshot.platform || "MacIntel"
       );
@@ -684,7 +724,7 @@ export var DarkstrNativePersona = {
           Services.prefs.clearUserPref(HW_MIRROR_PREF);
         }
       } catch (_eHw) {}
-      Services.prefs.setIntPref(
+      diagPrefs.setIntPref(
         HW_MIRROR_PREF,
         Number(snapshot.hardwareConcurrency) || 8
       );
@@ -792,7 +832,7 @@ export var DarkstrNativePersona = {
     // not clear here while applyNativeBase (would race multi-tab sites).
     try {
       if (this._plan.applyNativeBase && snapshot?.userAgent) {
-        Services.prefs.setStringPref(UA_MIRROR_PREF, snapshot.userAgent);
+        diagPrefs.setStringPref(UA_MIRROR_PREF, snapshot.userAgent);
       } else if (
         !this._plan.applyNativeBase &&
         Services.prefs.prefHasUserValue(UA_MIRROR_PREF)
@@ -868,6 +908,7 @@ export var DarkstrNativePersona = {
     }
     this._planSignature = signature;
     this._docDecisions = new WeakMap();
+    this._workerSiteDecisions = new Map();
     if (p.applyNativeBase) {
       this._registerActor();
     }
@@ -1114,7 +1155,7 @@ export var DarkstrNativePersona = {
   _syncStrictNextNavArmedDiag(phase) {
     try {
       const armed = this.strictNextNavArmed(phase);
-      Services.prefs.setBoolPref(STRICT_NEXT_NAV_ARMED_PREF, armed);
+      diagPrefs.setBoolPref(STRICT_NEXT_NAV_ARMED_PREF, armed);
     } catch (_e) {}
   },
 
@@ -1341,7 +1382,8 @@ export var DarkstrNativePersona = {
    * 0051 (N2/N3): decision for one request — the top-level document load
    * itself (tab phase after counting, its own site) or the requesting
    * document's top-level decision. No browsing context (Shared/Service
-   * worker) → null: native headers (worker scope 0049).
+   * worker) → 0049: the owning site's worker decision (top-level site of the
+   * request's partition), the same one the worker's navigator got.
    */
   decisionForChannel(channel) {
     const plan = this.getPlan();
@@ -1375,9 +1417,21 @@ export var DarkstrNativePersona = {
     if (wgp) {
       return this.documentDecision(wgp);
     }
+    // 0049r2: a request made by a dedicated worker (importScripts, module
+    // imports, fetch, XHR — also from nested workers) carries the browsing
+    // context of the window that created the worker. Use that document's
+    // decision: the same one ResolveWorkerPersona gave the worker's
+    // navigator (and its script load, via innerWindowID), so navigator,
+    // timezone, script load and all subresources come from ONE source —
+    // also in popups and in native first documents of an otherwise armed
+    // site. Shared/Service workers carry 0 and keep the site rule.
+    const workerOwner = this._workerOwnerDecisionForChannel(li);
+    if (workerOwner) {
+      return workerOwner;
+    }
     const top = bc?.top;
     if (!top) {
-      return null;
+      return this._windowlessDecisionForChannel(li);
     }
     if (top.currentWindowGlobal) {
       return this.documentDecision(top.currentWindowGlobal);
@@ -1387,6 +1441,152 @@ export var DarkstrNativePersona = {
 
   shouldApplyForChannel(channel) {
     return !!this.decisionForChannel(channel)?.snapshot;
+  },
+
+  // -------------------------------------------------------------------------
+  // 0049: workers. Dedicated workers use their creating document's decision
+  // (documentDecision). Shared/Service workers have no window: they use the
+  // owning site's decision (top-level site of their partition).
+  // -------------------------------------------------------------------------
+
+  /** Navigator fields a worker reports (page surface + 0028 timezone). */
+  workerPersonaFields(snap) {
+    const child = this._childSnapshot(snap);
+    if (!child) {
+      return null;
+    }
+    const timezone = snap?.timezone ? String(snap.timezone).trim() : "";
+    return { ...child, timezone };
+  },
+
+  /**
+   * Top-level site URI that owns a windowless worker / request: the
+   * partitionKey "(scheme,host[,port][,f])" when present, else the
+   * principal's own origin (first-party).
+   */
+  topSiteUriForWorker(principalOrigin, partitionKey) {
+    const pk = String(partitionKey || "").trim();
+    if (pk.startsWith("(") && pk.endsWith(")")) {
+      const fields = pk.slice(1, -1).split(",");
+      const scheme = fields[0];
+      const host = fields[1];
+      let port = "";
+      if (fields[2] && /^\d+$/.test(fields[2])) {
+        port = ":" + fields[2];
+      }
+      if (scheme && host && /^(https?|file)$/i.test(scheme)) {
+        try {
+          return Services.io.newURI(`${scheme}://${host}${port}/`);
+        } catch (_e) {}
+      }
+    }
+    const origin = String(principalOrigin || "").trim();
+    if (!/^(https?|file):/i.test(origin)) {
+      return null;
+    }
+    try {
+      return Services.io.newURI(origin.endsWith("/") ? origin : origin + "/");
+    } catch (_e) {
+      return null;
+    }
+  },
+
+  /**
+   * Decision for a windowless worker (or its requests) owned by the
+   * top-level site of `uri`. Armed when a live top-level document of that
+   * site is armed (same snapshot — one persona per site); once armed it
+   * stays armed for this plan so the worker's navigator and its later
+   * requests agree. No live document (service worker wake-up): armed unless
+   * strictFirstDoc. Returns { decision, browsingContext }.
+   */
+  workerSiteDecision(uri) {
+    const plan = this.getPlan();
+    const site = uri ? this._etldPlus1FromUri(uri) : null;
+    if (!plan.applyNativeBase || !uri || !site) {
+      return { decision: NATIVE_DECISION, browsingContext: null };
+    }
+    if (!this._workerSiteDecisions) {
+      this._workerSiteDecisions = new Map();
+    }
+    let liveNative = false;
+    for (const wgp of this._liveTopDocuments()) {
+      const d = this.documentDecision(wgp);
+      if (d.site !== site) {
+        continue;
+      }
+      if (d.snapshot) {
+        this._workerSiteDecisions.set(site, d);
+        return { decision: d, browsingContext: wgp.browsingContext };
+      }
+      liveNative = true;
+    }
+    const sticky = this._workerSiteDecisions.get(site);
+    if (sticky) {
+      return { decision: sticky, browsingContext: null };
+    }
+    if (liveNative) {
+      return { decision: { armed: false, site, snapshot: null }, browsingContext: null };
+    }
+    const d = this._decisionFor(uri, !plan.strictFirstDoc);
+    if (d.snapshot) {
+      this._workerSiteDecisions.set(site, d);
+    }
+    return { decision: d, browsingContext: null };
+  },
+
+  /**
+   * 0049r2: decision for a dedicated-worker request via
+   * loadInfo.associatedBrowsingContext (set by Gecko for every request a
+   * dedicated worker makes; 0 for Shared/Service workers). Null when absent.
+   */
+  _workerOwnerDecisionForChannel(li) {
+    let id = 0;
+    try {
+      id = li.associatedBrowsingContextID || 0;
+    } catch (_e) {}
+    if (!id) {
+      return null;
+    }
+    let abc = null;
+    try {
+      abc = li.associatedBrowsingContext;
+    } catch (_e) {}
+    if (!abc) {
+      return null;
+    }
+    let wgp = null;
+    try {
+      wgp = abc.currentWindowGlobal;
+    } catch (_e) {}
+    if (wgp) {
+      return this.documentDecision(wgp);
+    }
+    const top = abc.top || abc;
+    return this._decisionFor(top.currentURI, this._tabArmed(top));
+  },
+
+  _windowlessDecisionForChannel(li) {
+    let principal = null;
+    try {
+      principal = li.triggeringPrincipal || li.loadingPrincipal;
+    } catch (_e) {}
+    if (!principal?.isContentPrincipal) {
+      return null;
+    }
+    let partitionKey = "";
+    try {
+      partitionKey = li.originAttributes?.partitionKey || "";
+    } catch (_e) {}
+    if (!partitionKey) {
+      try {
+        partitionKey = li.cookieJarSettings?.partitionKey || "";
+      } catch (_e) {}
+    }
+    const uri = this.topSiteUriForWorker(principal.originNoSuffix, partitionKey);
+    if (!uri) {
+      return null;
+    }
+    return this.workerSiteDecision(uri).decision;
   },
 
   /**
@@ -1479,7 +1679,7 @@ export var DarkstrNativePersona = {
       }
     } catch (e) {
       try {
-        Services.prefs.setStringPref(
+        diagPrefs.setStringPref(
           PERSONA_LAST_ERROR_PREF,
           ("timezoneOverride: " + String(e?.message || e)).slice(0, 200)
         );
@@ -1508,7 +1708,7 @@ export var DarkstrNativePersona = {
 
   _writeDecisionDiag(channel, decision, ua, al) {
     try {
-      Services.prefs.setStringPref(
+      diagPrefs.setStringPref(
         LAST_DECISION_PREF,
         JSON.stringify({
           site: decision?.site || "",

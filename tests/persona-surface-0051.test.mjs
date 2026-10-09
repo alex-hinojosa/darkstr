@@ -1,6 +1,8 @@
 /**
  * 0051: persona surface (Rowan QA N2–N5) — behavioural tests against the
  * shipped modules in patches/0051-files with minimal XPCOM / DOM stubs.
+ * 0052: DarkstrNativePersona ships from patches/0052-files (the stale 0051
+ * copy was removed); every other module still ships from 0051-files.
  *
  *   N2  HTTP User-Agent phase is per tab / per document, never a global pref:
  *       a new tab cannot flip other tabs; redirects are not extra navigations.
@@ -13,13 +15,16 @@
  */
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join } from "node:path";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const FILES = join(root, "patches/0051-files");
-const src = (f) => readFileSync(join(FILES, f), "utf8");
+const FILES52 = join(root, "patches/0052-files");
+// Newest shipped copy of a module (0052 supersedes 0051 where it has one).
+const shipped = (f) => (existsSync(join(FILES52, f)) ? join(FILES52, f) : join(FILES, f));
+const src = (f) => readFileSync(shipped(f), "utf8");
 
 const NATIVE_UA =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:156.0) Gecko/20100101 Firefox/156.0";
@@ -105,7 +110,7 @@ globalThis.JSWindowActorParent = class {};
 const wgById = new Map();
 globalThis.WindowGlobalParent = { getByInnerWindowId: (id) => wgById.get(id) || null };
 
-const personaMod = await import(pathToFileURL(join(FILES, "DarkstrNativePersona.sys.mjs")));
+const personaMod = await import(pathToFileURL(shipped("DarkstrNativePersona.sys.mjs")));
 const childMod = await import(pathToFileURL(join(FILES, "DarkstrNativePersonaChild.sys.mjs")));
 const P = personaMod.DarkstrNativePersona;
 const { prepareAcceptLanguages } = personaMod;
@@ -266,8 +271,10 @@ test("N2: opening a new tab never flips existing tabs to the native UA", () => {
   const c1 = navigate(t3, "https://gamma.test/");
   assert.equal(c1.ch.ua(), NATIVE_UA);
   assert.equal(c1.page.nav.userAgent, NATIVE_UA);
-  assert.equal(prefs.get("darkstr.persona.docShellPhase"), "first_document",
-    "global diag pref says first_document (proves nobody reads it)");
+  assert.equal(P.getDiagnostics()["darkstr.persona.docShellPhase"], "first_document",
+    "global diag mirror says first_document (proves nobody reads it)");
+  assert.equal(prefs.has("darkstr.persona.docShellPhase"), false,
+    "0052: diag mirror stays in memory (darkstr.debug.diagPrefs off)");
 
   // Tabs 1 and 2 keep their persona on every later request.
   for (const [p, wg, host] of [[a2.page, a2.wg, "alpha.test"], [b2.page, b2.wg, "beta.test"]]) {
@@ -645,4 +652,14 @@ test("0051r2 popup: user-initiated new tabs keep strictFirstDoc (no opener, no c
   assert.equal(d.ch.ua(), NATIVE_UA, "first document of a user-opened tab stays native");
   assert.equal(d.page.nav.userAgent, NATIVE_UA);
   liveTabs();
+});
+
+test("0052: no persona diagnostic reaches prefs while darkstr.debug.diagPrefs is off", async () => {
+  const { DARKSTR_DIAG_PREFS } = await import(pathToFileURL(join(FILES52, "DarkstrModeXor.sys.mjs")));
+  const leaked = writes.filter((k) => DARKSTR_DIAG_PREFS.includes(k));
+  assert.deepEqual([...new Set(leaked)], [], "diag prefs written during this file's flows");
+  for (const k of DARKSTR_DIAG_PREFS) {
+    assert.equal(prefs.has(k), false, k);
+  }
+  assert.ok(Object.keys(P.getDiagnostics()).length > 0, "diagnostics still recorded in memory");
 });
