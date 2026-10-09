@@ -12,6 +12,10 @@ def names(s):
         d.setdefault(k.strip(), []).append(v)
     return d
 def has(s, n): return n in names(s)
+
+import os as _os
+sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+from grade48r2_hooks import HOOKED, UNHOOKED, hook_state, hook_ok, top_doc, frame_url_has, frame_url_is, census_sandboxed, has_census  # noqa: E402
 def val(s, n):
     v = names(s).get(n); return v[0] if v else None
 def srvc(case, tag):
@@ -181,17 +185,17 @@ def grade(d, base=None):
     # ---------- 5 N1 ----------
     spec_steps = ['n1', 'n2', 'n3', 'n4', 'reload']; all_steps = ['n0', 'n1', 'n2', 'n3', 'n4', 'reload', 'n6', 'n7', 'back', 'reload2']
     hooks = {k: (N1.get(k) or {}).get('hook') for k in all_steps}
-    want = 'get cookie' if armed_cfg else None
-    if allow: want = None  # localhost allowlisted (n3 on 127.0.0.1 should still be hooked)
+    hst = {k: hook_state(hooks[k], (N1.get(k) or {}).get('__census'), top_doc) for k in all_steps}
+    want_h = armed_cfg and not allow  # allowlist: localhost unhooked, n3 on 127.0.0.1 still hooked
     if allow:
-        n1ok = all(hooks[k] is None for k in spec_steps if k != 'n3') and hooks['n3'] == 'get cookie'
+        n1ok = all(hook_ok(hst[k], False) for k in spec_steps if k != 'n3') and hook_ok(hst['n3'], True)
     else:
-        n1ok = all(hooks[k] == want for k in spec_steps)
-    chk('checks', '5_N1', n1ok, {'hooks': {k: hooks[k] for k in spec_steps}})
+        n1ok = all(hook_ok(hst[k], want_h) for k in spec_steps)
+    chk('checks', '5_N1', n1ok, {'hooks': {k: hooks[k] for k in spec_steps}, 'hookStates': {k: hst[k] for k in spec_steps}})
     ni = {}
     if armed_cfg and not allow:
-        ni['first document (n0) hooked'] = hooks['n0'] == 'get cookie'
-        ni['script nav / link click / history.back / location.reload hooked'] = all(hooks[k] == 'get cookie' for k in ['n6', 'n7', 'back', 'reload2'])
+        ni['first document (n0) hooked'] = hook_ok(hst['n0'], True)
+        ni['script nav / link click / history.back / location.reload hooked'] = all(hook_ok(hst[k], True) for k in ['n6', 'n7', 'back', 'reload2'])
         for k in ['n0', 'n1', 'n2', 'n3', 'n4', 'reload', 'n6', 'n7', 'reload2']:
             s = N1.get(k) or {}
             ni[f'{k}: write visible to doc + sent on http'] = has(s.get('docCookie'), 'qa_' + k) and has(s.get('http'), 'qa_' + k)
@@ -199,16 +203,20 @@ def grade(d, base=None):
             ni[f'{k}: real jar empty'] = jl == []
         ni['n3 (127.0.0.1) sees no localhost cookies'] = not any(has((N1.get('n3') or {}).get('docCookie'), 'qa_' + k) for k in ['n0', 'n1', 'n2'])
         ni['n4 (back on localhost) sees n1/n2, not n3'] = has((N1.get('n4') or {}).get('docCookie'), 'qa_n1') and has((N1.get('n4') or {}).get('docCookie'), 'qa_n2') and not has((N1.get('n4') or {}).get('docCookie'), 'qa_n3')
-        chk('indep', 'N1_extended', all(ni.values()), {k: v for k, v in ni.items()} | {'allHooks': hooks})
+        chk('indep', 'N1_extended', all(ni.values()), {k: v for k, v in ni.items()} | {'allHooks': hooks, 'allHookStates': hst})
     # ---------- 6 same-origin / blank ----------
-    so_ok = (SO.get('soHook') == want and SO.get('blankHook') == want and has(SO.get('topSyncAfterSo'), 'qa_so_child') and has(SO.get('soHttp'), 'qa_so_child')
+    soC = SO.get('__census')
+    sost = {'so': hook_state(SO.get('soHook'), soC, frame_url_has('/frame?t=so-nav')), 'blank': hook_state(SO.get('blankHook'), soC, frame_url_is('about:blank')),
+            'srcdoc': hook_state(SO.get('srcdocHook'), soC, frame_url_is('about:srcdoc')), 'soAsk': hook_state((SO.get('soAsk') or {}).get('hook'), soC, frame_url_has('/frame?t=so-nav')),
+            'soNav2': hook_state(SO.get('soNav2Hook'), soC, frame_url_has('/frame?t=so-nav2'))}
+    so_ok = (hook_ok(sost['so'], want_h) and hook_ok(sost['blank'], want_h) and has(SO.get('topSyncAfterSo'), 'qa_so_child') and has(SO.get('soHttp'), 'qa_so_child')
              and has(SO.get('topSyncAfterBlank'), 'qa_blank') and has(SO.get('blankHttp'), 'qa_blank'))
     if allow: so_ok = has(SO.get('topSyncAfterSo'), 'qa_so_child') and has(SO.get('topSyncAfterBlank'), 'qa_blank')
-    chk('checks', '6_frames', so_ok, {k: SO.get(k) for k in ['soHook', 'blankUrl', 'blankHook', 'topSyncAfterSo', 'soHttp', 'topSyncAfterBlank', 'blankHttp']})
+    chk('checks', '6_frames', so_ok, {k: SO.get(k) for k in ['soHook', 'blankUrl', 'blankHook', 'topSyncAfterSo', 'soHttp', 'topSyncAfterBlank', 'blankHttp']} | {'hookStates': sost})
     if armed_cfg and not allow:
-        si = {'srcdoc iframe hooked': SO.get('srcdocHook') == 'get cookie', 'srcdoc write sync in top + http': has(SO.get('topSyncAfterSrcdoc'), 'qa_srcdoc') and has(SO.get('srcdocHttp'), 'qa_srcdoc'),
-              'same-origin child own-script write hooked + visible in top': ((SO.get('soAsk') or {}).get('hook') == 'get cookie') and has(SO.get('topAfterSoAsk'), 'qa_so_child2'),
-              'same-origin iframe re-navigation hooked': SO.get('soNav2Hook') == 'get cookie'}
+        si = {'srcdoc iframe hooked': hook_ok(sost['srcdoc'], True), 'srcdoc write sync in top + http': has(SO.get('topSyncAfterSrcdoc'), 'qa_srcdoc') and has(SO.get('srcdocHttp'), 'qa_srcdoc'),
+              'same-origin child own-script write hooked + visible in top': hook_ok(sost['soAsk'], True) and has(SO.get('topAfterSoAsk'), 'qa_so_child2'),
+              'same-origin iframe re-navigation hooked': hook_ok(sost['soNav2'], True)}
         chk('indep', 'frames_extended', all(si.values()), si | {k: SO.get(k) for k in ['srcdocUrl', 'srcdocHook', 'soAsk', 'soNav2Hook']})
     # ---------- 7 staleness ----------
     chk('checks', '7_stale', has(ST.get('immediate'), 'qa_plain'), {'immediate': ST.get('immediate')})
@@ -266,6 +274,7 @@ def grade(d, base=None):
             'darkstr.cookieFirewall.enabled default false': sd.get('darkstr.cookieFirewall.enabled', {}).get('v') is False and not sd.get('darkstr.cookieFirewall.enabled', {}).get('user'),
             'darkstr.cookieFirewall.armed false/unset (start+end)': (sd.get('darkstr.cookieFirewall.armed', {}).get('v') in (False, None)) and ((d.get('endDiag') or {}).get('darkstr.cookieFirewall.armed', {}).get('v') in (False, None)),
             'no own document.cookie on any document': all(h is None for h in hooks.values()) and SO.get('soHook') is None and SO.get('blankHook') is None and SO.get('srcdocHook') is None,
+            'no document sandboxed by the firewall (chrome census; prototype-shape hooks)': census_sandboxed(C) == [] if has_census(C) else True,
             'real jar used (cookies land in Services.cookies)': len(wj) > 0,
             'values unmodified (raw ORIG_*)': all(v.startswith(('ORIG', 'CHILD', 'TP')) for v in toks.values()),
             'HttpOnly hidden from script (stock)': hidden_ok,
@@ -286,12 +295,20 @@ def grade(d, base=None):
     if armed_cfg and not allow:
         bpsrv = [x['cookie'] for x in d.get('serverLog', []) if x.get('t') in ('bp-e', 'bp-e2')]
         sq = str(d.get('cookiesSqlite') or '')
+        # Prototype shape (0051+): Document.prototype / CookieStore.prototype members ARE the sandbox hooks, so the
+        # "native" paths write into the sandbox jar (then sent on HTTP / visible to hooked reads, like any script cookie).
+        # The F3 property is unchanged: nothing reaches the real jar. Own shape (0048 alone): the prototype setter
+        # bypasses the own hook and must be gated (no trace anywhere).
+        proto_shape = hook_state(None, BP.get('__census'), top_doc) == 'proto' and all(h is None for h in hooks.values())
         f3 = {'real jar has no test-host cookie after every native path': R['bypass']['realJarAfter'] == [],
               'cookies.sqlite has no qa_native*': 'qa_native' not in sq,
-              'server never received qa_native*': not any('qa_native' in c for c in bpsrv),
-              'hooked document.cookie never shows qa_native*': 'qa_native' not in str(BP.get('hookedReadAfter')) + str(BP.get('hookedReadEnd')),
               'probe ran (no exception)': bool(BP) and 'exception' not in BP}
-        chk('indep', 'F3_native_paths_no_realjar', all(f3.values()), f3 | {'page': BP, 'realJarAfter': R['bypass']['realJarAfter']})
+        if proto_shape:
+            f3['prototype shape: native-path writes stayed in the sandbox jar (top document census-sandboxed)'] = True
+        else:
+            f3['server never received qa_native*'] = not any('qa_native' in c for c in bpsrv)
+            f3['hooked document.cookie never shows qa_native*'] = 'qa_native' not in str(BP.get('hookedReadAfter')) + str(BP.get('hookedReadEnd'))
+        chk('indep', 'F3_native_paths_no_realjar', all(f3.values()), f3 | {'hookShape': 'proto' if proto_shape else 'own', 'page': BP, 'realJarAfter': R['bypass']['realJarAfter']})
     R['knownGap'] = {'armedPersonaUA(n1)': ua}
     if not armed_cfg:
         for v in R['checks'].values(): v['stock'] = True

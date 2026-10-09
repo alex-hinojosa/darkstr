@@ -1,13 +1,33 @@
 #!/usr/bin/env python3
 """Proof XOR harness for darkstr 0048 cookie firewall (independent of Builder's rck48.py).
 usage: xor48.py <config> <outdir>
-env: XOR_BIN (librewolf binary), XOR_LAN (non-loopback IPv4 of this Mac, for insecure-origin Secure tests)
+env: XOR_BIN (librewolf binary), XOR_LAN (non-loopback IPv4 of this Mac, for insecure-origin Secure tests;
+     "auto" = IPv4 of the default-route interface; a non-IP name = network.dns.localDomains stand-in -> 127.0.0.1)
+     XOR_SB (Seatbelt profile; its "localhost" rule also matches this Mac's own interface addresses, so a real
+     own-LAN-IP origin works inside the loopback-only sandbox while other LAN hosts and the internet stay blocked)
+     XOR_F1=<docs> F1 stress; XOR_F1_FPD fetches/doc; XOR_F1_LAN_ONLY=1 puts every F1 document on the real LAN origin
+     XOR_CENSUS=0 disables the chrome hook census attached to each page step (default on; see grade48r2.hook_state)
 Disposable mktemp profile; local fixture served on localhost / 127.0.0.1 / [::1] / LAN IP; only kills the browser PID it started."""
 import http.server, json, os, socket, subprocess, sys, tempfile, threading, time, urllib.parse, shutil
 from pathlib import Path
 CFG, OUT = sys.argv[1], Path(sys.argv[2]); OUT.mkdir(parents=True, exist_ok=True)
 OUTNAME = os.environ.get('XOR_TAG', CFG)
 BIN = os.environ['XOR_BIN']; LAN = os.environ.get('XOR_LAN', '')
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import xor48r2_net as _net  # noqa: E402
+_is_ipv4 = _net.is_ipv4
+def _auto_lan():
+    """IPv4 of the default-route interface (macOS: route + ipconfig); must be bindable, i.e. this host's own address."""
+    r = subprocess.run(['route', '-n', 'get', 'default'], capture_output=True, text=True).stdout
+    ifc = next((l.split(':', 1)[1].strip() for l in r.splitlines() if l.strip().startswith('interface:')), '')
+    ip = subprocess.run(['ipconfig', 'getifaddr', ifc], capture_output=True, text=True).stdout.strip() if ifc else ''
+    return ip
+if LAN == 'auto': LAN = _auto_lan()
+LAN_REAL = _is_ipv4(LAN)
+if LAN_REAL:
+    with socket.socket() as _s: _s.bind((LAN, 0))  # raises unless LAN is one of this host's own addresses
+LOOPBACK_HOSTS = _net.LOOPBACK_HOSTS
+SELF_HOSTS = LOOPBACK_HOSTS | ({LAN, '::ffff:' + LAN} if LAN_REAL else set())
 SRV_LOG = []; LK = threading.Lock()
 
 PAGE = r'''<!doctype html><meta charset="utf-8"><title>XOR48</title><body>xor48 fixture<script>
@@ -32,6 +52,12 @@ window.cs=async(name)=>{try{if(!window.cookieStore)return 'n/a';if(name){const c
 class H(http.server.BaseHTTPRequestHandler):
     protocol_version = 'HTTP/1.1'
     def log_message(self, *a): pass
+    def _foreign(self):
+        """The fixture binds :: (all interfaces) so the LAN origin works; refuse any client that is not this host."""
+        c = (self.client_address or ('',))[0]
+        if c in SELF_HOSTS: return False
+        with LK: SRV_LOG.append({'ts': time.time(), 'rejectedClient': c, 'path': self.path, 't': ''})
+        self.send_response(403); self.send_header('Content-Length', '0'); self.end_headers(); return True
     def _rec(self, method):
         u = urllib.parse.urlparse(self.path); q = urllib.parse.parse_qs(u.query)
         rec = {'ts': time.time(), 'method': method, 'host': self.headers.get('Host'), 'path': u.path, 'query': u.query,
@@ -45,10 +71,12 @@ class H(http.server.BaseHTTPRequestHandler):
         for k, v in extra: self.send_header(k, v)
         self.end_headers(); self.wfile.write(d)
     def do_POST(self):
+        if self._foreign(): return
         n = int(self.headers.get('Content-Length') or 0)
         if n: self.rfile.read(n)
         u, q, rec = self._rec('POST'); self._send(200, 'text/html', PAGE, [])
     def do_GET(self):
+        if self._foreign(): return
         u, q, rec = self._rec('GET'); p = u.path
         extra = [('Set-Cookie', c) for c in q.get('c', [])]
         if p.startswith('/redir'):
@@ -133,6 +161,16 @@ class M:
             else: stable = 0
             time.sleep(0.25)
         return None
+    CENSUS = r'''let FW=null;try{FW=ChromeUtils.importESModule("moz-src:///browser/components/DarkstrCookieFirewall.sys.mjs").DarkstrCookieFirewall}catch(e){return {err:"no-module: "+e}}
+const live=new Set();for(const a of (FW._liveActors||[])){try{live.add(a.manager.innerWindowId)}catch(e){}}
+const out=[];const walk=(bc,depth)=>{const w=bc.currentWindowGlobal;out.push({depth,url:w&&w.documentURI?w.documentURI.spec:null,id:w?w.innerWindowId:0,sandboxed:!!(w&&live.has(w.innerWindowId))});for(const c of bc.children)walk(c,depth+1);};
+walk(gBrowser.selectedBrowser.browsingContext,0);return out;'''
+    def census(s):
+        """Which documents of the selected tab the cookie firewall sandboxed (parent _liveActors), per frame.
+        0048 alone hooks with an own document.cookie accessor (hk() == 'get cookie'); from 0051 on the hook replaces the
+        Document.prototype accessor with a native-shaped one, so only this privileged census can tell hooked from native."""
+        try: return s.js(s.CENSUS, 'chrome')
+        except Exception as e: return {'err': repr(e)}
     def page(s, code, tag, t=60):
         """Run code as *page* script (inserted <script>), so it sees the page's own document.cookie hook, not the Xray/native one."""
         inj = r'''const code=arguments[0],tag=arguments[1];const s=document.createElement('script');
@@ -142,7 +180,10 @@ document.documentElement.appendChild(s);s.remove();return true;'''
         dl = time.monotonic() + t
         while time.monotonic() < dl:
             v = s.js('const w=window.wrappedJSObject||window;return (w.__qa&&typeof w.__qa[arguments[0]]==="string")?w.__qa[arguments[0]]:null;', 'content', [tag])
-            if v is not None: return json.loads(v)
+            if v is not None:
+                r = json.loads(v)
+                if isinstance(r, dict) and os.environ.get('XOR_CENSUS', '1') != '0': r['__census'] = s.census()
+                return r
             time.sleep(0.3)
         return {'harnessTimeout': True}
 
@@ -173,7 +214,7 @@ if LAN and not LAN.replace('.', '').isdigit():
     prefs['network.dns.localDomains'] = LAN
 prof = Path(tempfile.mkdtemp(prefix='xor48-prof-')); mport = free_port(); prefs['marionette.port'] = mport
 (prof / 'user.js').write_text(''.join('user_pref(' + json.dumps(k) + ',' + json.dumps(v) + ');\n' for k, v in prefs.items()))
-out = {'config': CFG, 'userjs': prefs, 'profile': str(prof), 'serverPort': P, 'lan': LAN, 'origins': {'A': A, 'B': B, 'C': C, 'D': D}, 'cases': {}, 'jar': {}, 'started': time.strftime('%Y-%m-%d %H:%M:%S %Z')}
+out = {'config': CFG, 'userjs': prefs, 'profile': str(prof), 'serverPort': P, 'lan': LAN, 'lanReal': LAN_REAL, 'f1LanOnly': os.environ.get('XOR_F1_LAN_ONLY') == '1', 'origins': {'A': A, 'B': B, 'C': C, 'D': D}, 'cases': {}, 'jar': {}, 'started': time.strftime('%Y-%m-%d %H:%M:%S %Z')}
 log = (OUT / f'{OUTNAME}.browser.log').open('w')
 CMD = [BIN, '-headless', '-no-remote', '--marionette', '-remote-allow-system-access', '-profile', str(prof)]; PENV = dict(os.environ)
 if os.environ.get('XOR_SB'):  # OS-level loopback-only (Seatbelt); nested sandboxing needs Gecko's own sandboxes off
@@ -192,13 +233,18 @@ DIAGK = ['darkstr.mode', 'darkstr.nativePersonaHooks', 'darkstr.nativeCompatible
 DIAG = 'const n=' + json.dumps(DIAGK) + ''';const o={};for(const k of n){const t=Services.prefs.getPrefType(k);let v=null;try{v=t===32?Services.prefs.getStringPref(k):t===64?Services.prefs.getIntPref(k):t===128?Services.prefs.getBoolPref(k):null;}catch(e){v='err:'+e}o[k]={v,user:Services.prefs.prefHasUserValue(k)};}return o;'''
 JAR = "return Services.cookies.cookies.map(c=>({host:c.host,name:c.name,value:c.value,httpOnly:c.isHttpOnly,pk:c.originAttributes.partitionKey||''}));"
 LSOF = []
+def lsof_peer_class(line): return _net.lsof_peer_class(line, LAN if LAN_REAL else '', SELF_HOSTS)
 def _lsof_loop():
     while proc.poll() is None:
         try:
             pids = [str(proc.pid)] + subprocess.run(['pgrep', '-P', str(proc.pid)], capture_output=True, text=True).stdout.split()
             r = subprocess.run(['lsof', '-a', '-p', ','.join(pids), '-i', '-n', '-P'], capture_output=True, text=True).stdout
-            ext = [l for l in r.splitlines()[1:] if not any(x in l for x in ('127.0.0.1', '[::1]', 'localhost', LAN + ':' if LAN else '127.0.0.1'))]
-            LSOF.append({'t': time.strftime('%H:%M:%S'), 'nonLoopback': ext})
+            ext, selfLan = [], 0
+            for l in r.splitlines()[1:]:
+                k = lsof_peer_class(l)
+                if k == 'external': ext.append(l)
+                elif k == 'lan-self': selfLan += 1
+            LSOF.append({'t': time.strftime('%H:%M:%S'), 'nonLoopback': ext, 'lanSelf': selfLan})
         except Exception as e: LSOF.append({'err': repr(e)})
         time.sleep(3)
 threading.Thread(target=_lsof_loop, daemon=True).start()
@@ -223,6 +269,12 @@ try:
     if os.environ.get('XOR_F1'):
         # r2 F1 retest: heavy, multi-cookie-per-response; extra same-partition actors (2 same-origin iframes + 1 noopener-free popup) and a cross-site iframe
         ND = int(os.environ['XOR_F1']); FPD = int(os.environ.get('XOR_F1_FPD', '10')); origins = [D, B, C, A] if D else [B, C, A]; res = []
+        if os.environ.get('XOR_F1_LAN_ONLY') == '1':
+            if not LAN_REAL: raise RuntimeError('XOR_F1_LAN_ONLY=1 needs XOR_LAN=<own IPv4>|auto')
+            origins = [D]
+        if LAN_REAL:  # the real LAN origin must load inside this browser (and sandbox) before the stress counts
+            m.nav(D + '/?f1lanpre'); out['f1LanPreflight'] = {'url': m.url(), 'srv': [x.get('host') for x in SRV_LOG if x.get('query', '').startswith('f1lanpre')]}
+            if not out['f1LanPreflight']['srv']: raise RuntimeError('LAN origin %s not reachable from the browser' % D)
         F1JS = r"""
 const it=ITER, fpd=FPD, out={o:location.origin,hook:hk(),iters:[],conc:[]};
 const so1=await addFrame('/frame?t=f1so1'), so2=await addFrame('/frame?t=f1so2'); await addFrame('XS/frame?t=f1xs');
@@ -473,7 +525,7 @@ finally:
     try: proc.wait(timeout=15)
     except subprocess.TimeoutExpired: proc.kill(); proc.wait(timeout=5)
     out['browserExit'] = proc.returncode
-    out['lsof'] = {'samples': len(LSOF), 'samplesWithNonLoopback': sum(1 for x in LSOF if x.get('nonLoopback')), 'nonLoopbackLines': sorted({l for x in LSOF for l in x.get('nonLoopback', [])})[:50]}
+    out['lsof'] = {'samples': len(LSOF), 'samplesWithNonLoopback': sum(1 for x in LSOF if x.get('nonLoopback')), 'samplesWithLanSelf': sum(1 for x in LSOF if x.get('lanSelf')), 'nonLoopbackLines': sorted({l for x in LSOF for l in x.get('nonLoopback', [])})[:50]}
     try:
         if (prof / 'cookies.sqlite').exists():
             r = subprocess.run(['sqlite3', '-json', str(prof / 'cookies.sqlite'), 'select host,name,value,isHttpOnly,originAttributes from moz_cookies'], capture_output=True, text=True)
