@@ -24,7 +24,7 @@ const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const FILES = join(root, "patches/0051-files");
 const FILES52 = join(root, "patches/0052-files");
 // Newest shipped copy of a module (later pins supersede earlier ones).
-const NEWER = ["0053-files", "0052-files"].map((d) => join(root, "patches", d));
+const NEWER = ["0055-files", "0053-files", "0052-files"].map((d) => join(root, "patches", d));
 const newest = (f, fallbackDir) => {
   for (const d of NEWER) {
     if (existsSync(join(d, f))) return join(d, f);
@@ -34,8 +34,13 @@ const newest = (f, fallbackDir) => {
 const shipped = (f) => newest(f, FILES);
 const src = (f) => readFileSync(shipped(f), "utf8");
 
-const NATIVE_UA =
+// 0055 (N6): a macOS persona now claims the engine's own UA, byte-identical
+// to the real native one. The stub's native value carries a marker so these
+// tests can still see which layer answered (persona vs native); the real
+// equality is asserted in persona-ff156-0055.test.mjs.
+const REAL_NATIVE_UA =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:156.0) Gecko/20100101 Firefox/156.0";
+const NATIVE_UA = REAL_NATIVE_UA + " (test: native header)";
 const NATIVE_LANGS = ["en-US", "en"];
 const NATIVE_AL = "en-US,en;q=0.9";
 const PID = 4242;
@@ -54,6 +59,8 @@ const setP = (k, v) => prefs.set(k, v);
 const ppmmListeners = {};
 const writes = [];
 globalThis.Services = {
+  // 0055: personas derive their Firefox version from the engine.
+  appinfo: { version: "156.0.1", name: "LibreWolf" },
   prefs: {
     getBoolPref: getP,
     getStringPref: getP,
@@ -520,7 +527,7 @@ test("N5: a seed with rotation off does not write darkstr.persona.snapshot", () 
   assert.equal(P.getPlan().snapshot, null);
 });
 
-test("N5: locking is explicit — a pasted snapshot locks and is used verbatim", () => {
+test("N5: locking is explicit — a pasted snapshot locks and is used verbatim (0055: Firefox version = engine)", () => {
   const pasted = {
     userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:139.0) Gecko/20100101 Firefox/139.0",
     platform: "MacIntel",
@@ -533,9 +540,12 @@ test("N5: locking is explicit — a pasted snapshot locks and is used verbatim",
   const t2 = newTab();
   const a = navigate(t1, "https://alpha.test/");
   const b = navigate(t2, "https://beta.test/");
+  // 0055 (N6): the lock keeps its OS token and fields; the 139 claim becomes
+  // the engine's version.
+  const lockedUa = pasted.userAgent.replace(/139\.0/g, "156.0");
   for (const d of [a, b]) {
-    assert.equal(d.ch.ua(), pasted.userAgent);
-    assert.equal(d.page.nav.userAgent, pasted.userAgent);
+    assert.equal(d.ch.ua(), lockedUa);
+    assert.equal(d.page.nav.userAgent, lockedUa);
     assert.equal(d.ch.al(), "en-GB,en;q=0.9");
   }
   assert.equal(prefs.get("darkstr.persona.snapshot"), JSON.stringify(pasted), "pref untouched");

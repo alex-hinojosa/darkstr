@@ -1,0 +1,5 @@
+# darkstr 0055: copy of the pinned train's config/milestone.txt (LibreWolf
+# 156.0.1-1 / FIREFOX_156_0_1_RELEASE). Only used when the crate is built
+# outside the Gecko tree (CI cargo test); the shipped build reads the tree's
+# config/milestone.txt. tests check the two agree when DARKSTR_GECKO_ROOT is set.
+156.0.1

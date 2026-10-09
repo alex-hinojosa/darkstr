@@ -6,12 +6,14 @@
 |-------|------|
 | `duppel-persona::generate_persona` | **Rust SoT** for correlated snapshot fields |
 | `darkstr.persona.snapshot` JSON | What chrome `DarkstrNativePersona` prefers when hooks apply |
-| `darkstr.persona.seed` fallback | Thinner chrome-only RNG path in `0003` — **not** Proof-SoT |
+| `darkstr.persona.seed` fallback | Chrome RNG path when the native library is missing; since **0055** an exact port of `generate_persona` (goldens `fixtures/persona-goldens-0055.json`) |
 | Gecko Rust FFI | **Boundary crate** `duppel-ffi` (C ABI) — live Gecko link **not claimed** |
 
 ## Why seed-only can drift
 
-Chrome `_generateFromSeed` uses fewer UA/GPU/screen picks and different `CORES` / `MEMORY` / `LANGUAGES` tables than Rust. Same numeric seed ⇒ **different** UA/hw/lang is expected until a dedicated parity patch.
+Before 0055, chrome `_generateFromSeed` used fewer UA/GPU/screen picks and different `CORES` / `MEMORY` / `LANGUAGES` tables than Rust, with no timezone. **0055 (O9)** made it an exact port (same tables, same mulberry32 draw order, timezone included), so a seed gives the same persona with or without the native library.
+
+**Version (0055, N6):** no UA literals. Rust builds every UA from Gecko's `config/milestone.txt` (`build.rs`; CI fallback `crates/duppel-persona/gecko-milestone.txt`), and chrome builds it from `Services.appinfo.version`. `fixtures/seed-goldens.json` was regenerated for 156: only `userAgent` changed, hardware / languages / timezone per seed are unchanged.
 
 ## Operator XOR
 

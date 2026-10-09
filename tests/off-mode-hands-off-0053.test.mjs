@@ -12,7 +12,7 @@
  */
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join } from "node:path";
 
@@ -73,6 +73,8 @@ const prefs = {
 };
 const idle = [];
 globalThis.Services = {
+  // 0055: personas derive their Firefox version from the engine.
+  appinfo: { version: "156.0.1", name: "LibreWolf" },
   prefs,
   tm: { dispatchToMainThread: (f) => idle.push(f), idleDispatchToMainThread: (f) => idle.push(f) },
   obs: { addObserver() {}, removeObserver() {}, notifyObservers() {} },
@@ -283,7 +285,9 @@ test("ModeXor source: no WebGL force / blocklist / lock writes, Homogeneous has 
 });
 
 test("NativePersona: darkstr.pollutionActive only written while Pollution is active", () => {
-  const np = readFileSync(join(F53, "DarkstrNativePersona.sys.mjs"), "utf8");
+  // Newest shipped copy (0055 carries the same pollutionActive rule).
+  const np55 = join(root, "patches/0055-files/DarkstrNativePersona.sys.mjs");
+  const np = readFileSync(existsSync(np55) ? np55 : join(F53, "DarkstrNativePersona.sys.mjs"), "utf8");
   assert.match(np, /if \(pollutionActive\) \{\s*Services\.prefs\.setBoolPref\(POLLUTION_ACTIVE_PREF, true\);\s*\} else if \(Services\.prefs\.prefHasUserValue\(POLLUTION_ACTIVE_PREF\)\) \{\s*Services\.prefs\.clearUserPref\(POLLUTION_ACTIVE_PREF\);/);
   assert.doesNotMatch(np, /setBoolPref\(POLLUTION_ACTIVE_PREF, !!pollutionActive\)/);
 });

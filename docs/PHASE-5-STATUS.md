@@ -504,6 +504,72 @@ All five 0043 Worker/SharedWorker WebGPU XOR gates passed on Proof tip `cc692641
 - Evidence: `~/AgentDocs/proof/darkstr-pr74-0043-xor-20260928-084400/`
 - Apply log: `~/AgentDocs/proof/darkstr-pr74-0043-xor-20260928-084400/darkstr-apply-0043-20260928-084400.log`
 
+## In review — 0055 personas claim the engine's Firefox version (Fable N6 + O9 + O12)
+
+| | |
+|---|---|
+| Pin | **0055**: Fable **N6** (decided by Alex: personas claim Firefox 156, the engine's own version), **O9** (seed fallback table: timezone, must match Rust), **O12** (worker locale = persona) |
+| Branch | `builder/0055-persona-ff156` from `builder/0053-off-mode-hands-off` @ `09062b32` (stacked; needs 0052 + 0053) |
+| Patch | [`patches/0055-darkstr-persona-ff156.patch`](../patches/0055-darkstr-persona-ff156.patch) + `patches/0055-files/` (DarkstrNativePersona, DarkstrFfi, DarkstrNavigatorHooks.cpp, duppel-persona `lib.rs` / `build.rs` / `gecko-milestone.txt`, duppel-ffi `lib.rs` + `SHA256SUMS`) |
+| Apply | `scripts/apply-0055-persona-ff156-mini.sh` (C++ `dom/base` + Rust gkrust + chrome JS → libxul relinks) |
+| Tests | `tests/persona-ff156-0055.test.mjs`; `cargo test` (`n6_*`, goldens `fixtures/persona-goldens-0055.json`); 0049/0051 tests updated (persona UA == native UA on Mac is now expected) |
+| DMG | `~/AgentDocs/builds/darkstr-0055-859635f7.dmg` (+ `.sha256`) |
+| Evidence | `~/AgentDocs/proof/darkstr-0055-persona-ff156-20261009-022132/` |
+
+### Bug
+
+- **N6.** Rust (`crates/duppel-persona/src/lib.rs:406-453`), the chrome seed fallback
+  (`DarkstrNativePersona` 147-171) and the extension (`extension/lib/profiles.js`)
+  hard-coded Firefox **139 / 140** UAs on a 156 engine. Every persona claimed a
+  version the engine's features, headers and JS behaviour contradict.
+- **O9.** The chrome fallback (used when the native library fails to load) had its
+  own smaller tables, no timezone, and a different draw order. The same seed gave a
+  different persona with and without the library.
+- **O12.** Persona workers got `navigator.languages` from the persona, but their JS
+  locale (`Intl.*().resolvedOptions().locale`, `toLocaleString`) stayed the host's.
+
+### Fix
+
+- **One source of truth for the version: the engine.**
+  - Rust: `build.rs` reads Gecko's `config/milestone.txt` (from `DARKSTR_MILESTONE_TXT`,
+    then any ancestor `config/milestone.txt`, then `$DARKSTR_GECKO_ROOT`). Outside a
+    Gecko tree (CI) it uses `crates/duppel-persona/gecko-milestone.txt` with a
+    `cargo:warning`. It generates `firefox_ua!(os)`, and every UA table entry is
+    `firefox_ua!("<OS token>")`. `Persona::app_version()` returns Firefox's
+    `navigator.appVersion` ("5.0 (Macintosh)" / "5.0 (Windows)" / "5.0 (X11)"), and the
+    FFI JSON carries it (`DarkstrFfi` passes it through).
+  - Chrome: the version comes from `Services.appinfo.version` at runtime.
+    - An FFI snapshot that claims any other version is not used; the engine-derived
+      fallback is used instead.
+    - An operator-locked `darkstr.persona.snapshot` keeps its OS token and fields, but
+      its Firefox UA is rewritten to the engine version.
+  - Tables: Windows `Windows NT 10.0; Win64; x64`; macOS `Macintosh; Intel Mac OS X 10.15`;
+    Linux `X11; Linux x86_64` and `X11; Ubuntu; Linux x86_64`. The RNG draw order is
+    unchanged, so a seed keeps its hardware / languages / timezone, and only the UA
+    string changes (`fixtures/seed-goldens.json`: only `userAgent` moved, 140 → 156).
+- **O9.** `generatePersonaFallback(seed, os)` is an exact port of `generate_persona`:
+  the same tables (cores, memory, languages, **timezones**), the same mulberry32 draws
+  (gpu / screen / colour depth consumed), and the same clamp. Rust writes and checks
+  `fixtures/persona-goldens-0055.json`, and the JS test checks the same file.
+- **O12.** `ResolveWorkerPersona` also sets `WorkerLoadInfo.mLanguageOverrideLocale =
+  languages[0]`. The worker realm's default locale is the persona's primary language,
+  the same tag as `navigator.language`; nested workers inherit it.
+
+### Notes for Proof
+
+- **On macOS a persona UA is now byte-identical to the native UA** (same OS token, same
+  version). Persona differentiation on Mac comes from `hardwareConcurrency`,
+  `navigator.languages` and timezone (plus depth seeds), not the UA. "UA != native" is
+  no longer an "armed" signal; the 0049/0051 tests use a marked stub native UA for that.
+- **Page Intl locale is not persona-driven** (unchanged since 0051 N3 removed the
+  BrowsingContext `languageOverride`). After 0055 the worker Intl locale follows the
+  persona, but the page's stays the host's. For an `en-GB` persona: page `en-US`,
+  worker `en-GB`. This is a known tradeoff, recorded in the self-test.
+- The extension is **not bundled** (the app ships only uBlock through policies). It was
+  updated anyway: UAs come from the real engine version, `appVersion` is per OS, and the
+  bootstrap was regenerated with esbuild. Chromium UA groups are unchanged.
+- Rust `mode_pref_effects` is untouched (0053).
+
 ## In review — 0053 off mode leaves prefs alone (Fable QA B5)
 
 | | |

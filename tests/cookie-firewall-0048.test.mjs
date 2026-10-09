@@ -29,7 +29,7 @@ const CHILD_FILES = existsSync(join(root, "patches/0051-files/DarkstrCookieFirew
   ? join(root, "patches/0051-files")
   : FILES;
 const FW_FILE =
-  ["0053-files", "0052-files"]
+  ["0055-files", "0053-files", "0052-files"]
     .map((d) => join(root, "patches", d, "DarkstrCookieFirewall.sys.mjs"))
     .find((f) => existsSync(f)) || join(FILES, "DarkstrCookieFirewall.sys.mjs");
 const FW_URL = "moz-src:///browser/components/DarkstrCookieFirewall.sys.mjs";
@@ -76,6 +76,8 @@ function eTLDBase(host) {
 const sent = [];
 const observers = {};
 globalThis.Services = {
+  // 0055: personas derive their Firefox version from the engine.
+  appinfo: { version: "156.0.1", name: "LibreWolf" },
   prefs: {
     getBoolPref: getP,
     getStringPref: getP,
