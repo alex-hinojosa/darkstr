@@ -1440,7 +1440,11 @@ All five cookie-firewall XOR gates passed on Proof tip `d35c5fd8fdec6fba20cf1c08
 - PR #66 **MERGED** as `79f2e59c6a8bdbd2f3891fc649011698a639c351`; Proof XOR **PASS** on tip `d35c5fd8fdec6fba20cf1c08c1f270b8f550ecf3`.
 
 
-## 0058: OS-derived navigator fields follow the persona's OS (queue item c)
+## 0057b: OS-derived navigator fields follow the persona's OS (queue item c)
+
+Naming: this snapshot-platform fix is **0057b**. Pin number 0058 is reserved for the first-page policy (Fable B4).
+The files keep the names they shipped under and are not renamed: `patches/0058-files/`, `patches/0058-darkstr-snapshot-platform.patch`,
+`scripts/apply-0058-snapshot-platform-mini.sh`, `tests/snapshot-platform-0058.test.mjs` and the DMG `darkstr-0058-63669a43.dmg` are all 0057b.
 
 Proof's 0055r2 note: a pasted Win32 lock (`locked42`, no `appVersion`) reported `navigator.platform` Win32 but
 `appVersion` "5.0 (Macintosh)" (taken from the host). Seeded personas are host-OS since 0055, so this only affects pasted locks.
@@ -1454,10 +1458,10 @@ Proof's 0055r2 note: a pasted Win32 lock (`locked42`, no `appVersion`) reported 
   - `_childSnapshot` and `workerPersonaFields` carry appVersion and oscpu.
 - NativePersonaChild hooks `appVersion` and `oscpu` the same way as `platform`. Workers get appVersion through the resolve bag →
   `DarkstrWorkerPersona::mAppVersion` → `WorkerNavigator::GetAppVersion`, checked before RFP and the override, like GetPlatform (C++).
-- Live on darkstr-0058-63669a43.dmg (loopback only, own port 8358; each profile opened by one build only):
+- Live on darkstr-0058-63669a43.dmg (= 0057b; loopback only, own port 8358; each profile opened by one build only):
   - `pasted_win32`: **33/33** checks. Page, iframe, dedicated worker, shared worker and HTTP all report Windows (UA, platform Win32,
     appVersion "5.0 (Windows)", oscpu "Windows NT 10.0; Win64; x64"), on load 1 and load 2.
   - `seeded_host` (Mac values) 16/16; `off_mode` hands-off 5/5.
   - Negative control on the 0057r2 app: 12 failures, appVersion "5.0 (Macintosh)" and a Mac oscpu, which reproduces Proof's note.
-  - 0057 regression on the 0058 app: armed PASS (alt-path mismatch 0 px, no canvas permission), fixed_seed PASS, off_mode with the permission granted PASS.
+  - 0057 regression on the 0057b app: armed PASS (alt-path mismatch 0 px, no canvas permission), fixed_seed PASS, off_mode with the permission granted PASS.
 - Evidence: `~/AgentDocs/proof/darkstr-0058-20261009-103755/`.
