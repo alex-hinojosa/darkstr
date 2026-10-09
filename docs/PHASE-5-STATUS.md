@@ -510,11 +510,11 @@ All five 0043 Worker/SharedWorker WebGPU XOR gates passed on Proof tip `cc692641
 |---|---|
 | Pin | **0057**: canvas / audio / WebGL readPixels / fonts / WebGPU depth farbling, seeded per (container, site) from the 0056 store |
 | Branch | `builder/0057-depth-per-site`, stacked on `builder/0056-persona-seed-store` (0056r3 merged in, not rebased) |
-| Patch | [`patches/0057-darkstr-depth-per-site.patch`](../patches/0057-darkstr-depth-per-site.patch) + `patches/0057-files/` (DepthHooks, DepthHooksChild, DepthHooksParent, NativePersona, WorkerHooks, WorkerHooksChild; `SHA256SUMS`, `BASE_SHA256SUMS`: NativePersona base = 0056r3) |
+| Patch | [`patches/0057-darkstr-depth-per-site.patch`](../patches/0057-darkstr-depth-per-site.patch) + `patches/0057-files/` (DepthHooks, DepthHooksChild, DepthHooksParent, NativePersona, WorkerHooks, WorkerHooksChild, **ModeXor** (0057r2, base 0053r2); `SHA256SUMS`, `BASE_SHA256SUMS`: NativePersona base = 0056r3) |
 | Apply | `scripts/apply-0057-depth-per-site-mini.sh` (chrome JS only) |
 | Tests | `tests/depth-per-site-0057.test.mjs` |
-| DMG | `~/AgentDocs/builds/darkstr-0057-35247c01.dmg` (+ `.sha256`), sha256 `35247c01797681cec6534fc5e219e77186e5131c60f8c90146247bad668c07a0` (r5 = 0057 on 0056r3); omni matches `patches/0057-files`, 0056 store / CookieFirewall / ClearDataService, 0053r2 ModeXor, 0055 Ffi. Superseded: `darkstr-0057-75174927` (r1), `darkstr-0057-c2f8cece` (r4 on 0056r2) |
-| Evidence | `~/AgentDocs/proof/darkstr-0057-r5-20261009-101325/` (`selftest/live-final`, negative control `live-negctl-0056r3`, 0056 suite on this app `run-0056-on-0057r5.log`, `live-rfp-baseline`, `rfpcheck/`); r1–r4: `~/AgentDocs/proof/darkstr-0057-20261009-092626/` |
+| DMG | **0057r2:** `~/AgentDocs/builds/darkstr-0057r2-f0595dd2.dmg` (+ `.sha256`), sha256 `f0595dd28963056bcf8fda0341792cfec5520332f9432f4e652bdf6f340f114a` (baseline FPP off under Pollution). Before: `~/AgentDocs/builds/darkstr-0057-35247c01.dmg`, sha256 `35247c01797681cec6534fc5e219e77186e5131c60f8c90146247bad668c07a0` (r5 = 0057 on 0056r3); omni matches `patches/0057-files`, 0056 store / CookieFirewall / ClearDataService, 0053r2 ModeXor, 0055 Ffi. Superseded: `darkstr-0057-75174927` (r1), `darkstr-0057-c2f8cece` (r4 on 0056r2) |
+| Evidence | **0057r2:** `~/AgentDocs/proof/darkstr-0057r2-20261009-102504/` (`selftest/live-final`, `live-off-granted`, negative controls `live-negctl-0057r5` + `live-negctl-xor-0057r5`, `ROUNDTRIP-ADDENDUM.json`, `dmg-verify.log`); r5: `~/AgentDocs/proof/darkstr-0057-r5-20261009-101325/` (`selftest/live-final`, negative control `live-negctl-0056r3`, 0056 suite on this app `run-0056-on-0057r5.log`, `live-rfp-baseline`, `rfpcheck/`); r1–r4: `~/AgentDocs/proof/darkstr-0057-20261009-092626/` |
 
 ### Design
 
@@ -537,9 +537,28 @@ r5 app: `armed` 63/63, `off_mode` and `fixed_seed` PASS.
 
 Negative control (0056r3 app): `armed` FAILs on every farbling check. The 0056 driver's 12 scenarios also PASS on the 0057 r5 app (`run-0056-on-0057r5.log`).
 
+### 0057r2: darkstr's farbling is the only canvas noise under Pollution
+
+ModeXor now also turns `privacy.baselineFingerprintingProtection` off under Pollution. It is a POLLUTION_PREF:
+- saved on entry together with RFP, FPP, the WebGL prompt and the ETP flag;
+- re-asserted when stomped;
+- restored exactly on exit.
+
+A saved copy left by an older build is backfilled for baseline only (RFP, FPP and the prompt are never backfilled), and off mode stays hands-off.
+
+Live results (no `canvas` permission anywhere):
+- **`armed`:** all checks PASS. Alternate canvas/GL paths disagree on **0 px** in total, against 4470 px on the r5 app (which also loses restart stability to per-session engine noise).
+- **`xor_roundtrip`** (runtime `darkstr.mode`, three starts: stock, user baseline off, user RFP off):
+  - under Pollution, RFP, FPP and baseline are false, and the saved copy has a baseline record;
+  - alternate canvas paths agree (0 px);
+  - on leave and after a restart, every owned pref and the ETP flag equal the start state exactly (`ROUNDTRIP-ADDENDUM.json`).
+- **`off_mode`:** baseline keeps its stock value with no user value, nothing is saved, and DepthHooks are idle. Without the permission, Firefox's own baseline canvas noise is present (stock, hands-off). With the permission (`live-off-granted`), the canvas is native.
+
+**Pre-existing (0053r2, same on r5):** right after leaving Pollution, `browser.contentblocking.category` stays `custom`. It returns to `strict` at the next start, when `ContentBlockingPrefs.init` re-matches it. Proposed fix (not done): re-run `matchCBCategory()` in ModeXor's idle restore pass, before re-restoring the ETP flag.
+
 ### Residual / for Proof
 
-- **Engine canvas noise under Pollution = baseline FPP.** ModeXor sets RFP and FPP to false, but `privacy.baselineFingerprintingProtection` stays true (Firefox default). Its canvas randomization adds per-session engine noise on top of darkstr's layer, so `toDataURL`/`toBlob`/`convertToBlob` vs `getImageData` and GL sub-rect/`toDataURL` disagree (`engine_rfp`: 94/2944 URL pixels).
+- **(Fixed in 0057r2, see above.) Engine canvas noise under Pollution = baseline FPP.** ModeXor sets RFP and FPP to false, but `privacy.baselineFingerprintingProtection` stays true (Firefox default). Its canvas randomization adds per-session engine noise on top of darkstr's layer, so `toDataURL`/`toBlob`/`convertToBlob` vs `getImageData` and GL sub-rect/`toDataURL` disagree (`engine_rfp`: 94/2944 URL pixels).
   - With `privacy.baselineFingerprintingProtection=false` and no canvas permission, every check passes (`engine_rfp_nobaseline`: 0/2944).
   - The self-test grants the `canvas` permission to its probe origins to isolate darkstr's layer.
   - **Proposed follow-up (not in this PR):** ModeXor also turns baseline FPP off under Pollution, with the same save/restore as RFP/FPP.
