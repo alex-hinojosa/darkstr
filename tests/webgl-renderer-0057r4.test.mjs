@@ -155,3 +155,12 @@ test("0057r4: the sanitizer block is byte-identical in every shipped child modul
   assert.ok(blocks.length >= 2);
   for (const b of blocks) assert.equal(b, blocks[0]);
 });
+
+test("0057r4: page getExtension('WEBGL_debug_renderer_info') is the native object, never a stub", () => {
+  const src = readFileSync(new URL("../patches/0057-files/DarkstrDepthHooksChild.sys.mjs", import.meta.url), "utf8");
+  const stubbed = src.match(/const STUBBED_EXTENSIONS = new Set\(\[([^\]]*)\]\)/);
+  assert.ok(stubbed, "STUBBED_EXTENSIONS present");
+  assert.ok(!stubbed[1].includes("WEBGL_debug_renderer_info"), "debug_renderer_info not stubbed");
+  assert.ok(!/UNMASKED_VENDOR_WEBGL:\s*0x9245/.test(src), "no plain-object WEBGL_debug_renderer_info stub");
+  assert.match(src, /if \(want === "WEBGL_debug_renderer_info"\) \{[^}]*Reflect\.apply\(origGetExtension, this, \[want\]\)/);
+});

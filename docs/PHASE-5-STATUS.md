@@ -618,6 +618,7 @@ Live results (no `canvas` permission anywhere):
   - UNMASKED_VENDOR is the persona's raw vendor;
   - VENDOR is never touched.
 - WebGL1 and WebGL2 prototypes are both hooked, so OffscreenCanvas WebGL in the page and in dedicated / shared / service workers is covered.
+- The page hook no longer stubs `WEBGL_debug_renderer_info`. The live self-test caught the old stub: page `getExtension` returned a plain `{UNMASKED_VENDOR_WEBGL, UNMASKED_RENDERER_WEBGL}` object, which is not a `WebGLDebugRendererInfo` (a tell of its own). It also never enabled the native extension, so with native-first the UNMASKED_* calls returned null + INVALID_ENUM in the page while workers answered. The extension is now advertised only when native has it, and `getExtension` returns the native object.
 
 | Persona GPU (raw) | RENDERER = UNMASKED_RENDERER | UNMASKED_VENDOR |
 |---|---|---|

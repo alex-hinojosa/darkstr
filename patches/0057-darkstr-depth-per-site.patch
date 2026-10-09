@@ -939,15 +939,24 @@
          return id;
        },
        replacements
-@@ -499,11 +996,16 @@
+@@ -402,8 +899,10 @@
+       "WEBGL_draw_buffers",
+       "WEBGL_lose_context",
+     ];
++    // 0057r4: WEBGL_debug_renderer_info is never stubbed: advertised only when
++    // native has it, and getExtension hands back the native object, which also
++    // enables the extension so UNMASKED_* answer like stock (Proof #88 r3 5a).
+     const STUBBED_EXTENSIONS = new Set([
+-      "WEBGL_debug_renderer_info",
+       "EXT_texture_filter_anisotropic",
+     ]);
+     // Always keep when native/stub allows — coherent Apple/Firefox surface.
+@@ -499,12 +998,17 @@
            proto,
            "getParameter",
            function (param) {
 -            if (param === 0x9245) {
 -              return gpu.vendor;
--            }
--            if (param === 0x9246) {
--              return gpu.renderer;
 +            if (param === 0x1f01 || param === 0x9245 || param === 0x9246) {
 +              // 0057r4: stock first (null + INVALID_ENUM without the
 +              // extension, "Mozilla" under RFP), then the persona's string
@@ -959,9 +968,13 @@
 +                sanitizeUnmasked
 +              );
              }
+-            if (param === 0x9246) {
+-              return gpu.renderer;
+-            }
              if (Object.prototype.hasOwnProperty.call(activeGlCaps, param)) {
                return activeGlCaps[param];
-@@ -547,10 +1049,27 @@
+             }
+@@ -547,10 +1051,27 @@
              ]);
              if (
                pixels &&
@@ -990,7 +1003,24 @@
              }
              return result;
            },
-@@ -705,72 +1224,89 @@
+@@ -619,13 +1140,9 @@
+               return null;
+             }
+             if (want === "WEBGL_debug_renderer_info") {
+-              return Cu.cloneInto(
+-                {
+-                  UNMASKED_VENDOR_WEBGL: 0x9245,
+-                  UNMASKED_RENDERER_WEBGL: 0x9246,
+-                },
+-                pageWindow
+-              );
++              // 0057r4: the native WebGLDebugRendererInfo (enables the
++              // extension); never a plain-object stub.
++              return Reflect.apply(origGetExtension, this, [want]);
+             }
+             if (want === "EXT_texture_filter_anisotropic") {
+               // Prefer native object when present; else coherent stub (MAX=16).
+@@ -705,74 +1222,91 @@
      }
  
      // OffscreenCanvas window parity with HTMLCanvasElement depth (Phase 1 webgl.js).
@@ -1088,8 +1118,8 @@
            replacements
          );
        }
-+    }
-+
+     }
+ 
 +    // 0057r3: record canvases that get a WebGPU context (only when WebGPU is
 +    // exposed) so their exports stay native (see webgpuCanvases).
 +    if (pageWindow.navigator?.gpu) {
@@ -1118,10 +1148,12 @@
 +      };
 +      trackWebGpu(canvasProto, "canvas.getContext");
 +      trackWebGpu(pageWindow.OffscreenCanvas?.prototype, "offscreencanvas.getContext");
-     }
- 
++    }
++
      // Soft residual (0036)+0039: fonts coherence / fingerprint farbling.
-@@ -1509,425 +2045,15 @@
+     // Brave-inspired, Firefox/LibreWolf/Gecko persona only — no Chrome font lists.
+     // Surfaces: measureText width (Canvas2D + OffscreenCanvas2D), document.fonts.check,
+@@ -1509,425 +2043,15 @@
        }
      }
  
@@ -1551,7 +1583,7 @@
        );
  
        let installedWebGpu;
-@@ -1992,6 +2118,16 @@
+@@ -1992,6 +2116,16 @@
  var noisedBuffers = new WeakMap();
  // Brave BALANCED-style fudge: [0.999, 1.0). Zero * fudge === 0 (silence-safe).
  var fudge = 0.999 + (((seed >>> 0) / 4294967295) / 1000);
@@ -1568,7 +1600,7 @@
  function contentKey(data) {
    var n = data.length | 0;
    if (!n) { return "0"; }
-@@ -2113,6 +2249,8 @@
+@@ -2113,6 +2247,8 @@
        if (array && array.length) {
          if (kind === "float") {
            farbleFloat(array);
@@ -1577,7 +1609,7 @@
          } else if (kind === "byteTime") {
            farbleByteTimeDomain(array);
          } else {
-@@ -2130,7 +2268,7 @@
+@@ -2130,7 +2266,7 @@
      analyserHooks.push({ name: name, wrapper: wrapped, original: orig });
    }
    wrapAnalyser("getFloatTimeDomainData", "float");
@@ -1586,7 +1618,7 @@
    wrapAnalyser("getByteTimeDomainData", "byteTime");
    wrapAnalyser("getByteFrequencyData", "byteFreq");
  }
-@@ -2228,7 +2366,7 @@
+@@ -2228,7 +2364,7 @@
      }
  
  
@@ -1595,7 +1627,7 @@
      return "installed";
    } catch (error) {
      for (const replacement of replacements.slice().reverse()) {
-@@ -2255,15 +2393,59 @@
+@@ -2255,15 +2391,59 @@
      }
    }
  
@@ -1661,7 +1693,7 @@
  
      const rawWindow = this.contentWindow;
      if (!rawWindow) {
-@@ -2295,7 +2477,11 @@
+@@ -2295,7 +2475,11 @@
    }
  
    async handleEvent(event) {
