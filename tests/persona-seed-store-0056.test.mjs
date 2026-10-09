@@ -454,3 +454,38 @@ test("0056r2: top-level loads are held while the store loads, decided after read
   }
   assert.match(NP, /if \(this\._holdForSeedStore\(channel, plan\)\) \{\n\s+return;\n\s+\}\n\s+this\._applyChannelPersona\(channel\);/);
 });
+
+test("0056r4: a partitioned clear never resets a kept site's seed (shutdown sanitizer, A framed under non-kept B)", async () => {
+  wipe(); lwDefaults();
+  perms.push({ type: "persist-data-on-shutdown", capability: 1, host: "a56.test" });
+  await restart();
+  const a = S.seedFor("0", "a56.test");
+  S.seedFor("0", "b56.test");
+  await S.flush();
+  assert.equal(fileJSON().e.length, 1);
+  // What Sanitizer's maybeSanitizeSessionPrincipals hands the cleaner for A's data partitioned under B
+  // (partitionKey site b56.test has no exception), plus the partition patterns ClearDataService may use.
+  await CL.deleteByPrincipal({ host: "a56.test", originAttributes: { userContextId: 0, partitionKey: "(http,b56.test)" } });
+  await CL.deleteByHost("a56.test", { partitionKey: "(http,b56.test)" });
+  await CL.deleteBySite("a56.test", '{"partitionKey":"(http,b56.test)"}');
+  await CL.deleteByOriginAttributes('{"partitionKeyPattern":{"baseDomain":"b56.test"}}');
+  assert.equal(fileJSON().e.length, 1, "kept entry still on disk");
+  assert.equal(fileJSON().e[0].s, a);
+  assert.equal(S.seedFor("0", "a56.test"), a, "in-session seed unchanged");
+  await restart();
+  assert.equal(S.seedFor("0", "a56.test"), a, "kept site keeps its persona across the restart");
+  // A's own first-party principal (no partition) still clears it, as before.
+  await CL.deleteByPrincipal({ host: "a56.test", originAttributes: { userContextId: 0, partitionKey: "" } });
+  assert.notEqual(S.seedFor("0", "a56.test"), a);
+});
+
+test("0056r4: isPartitioned", () => {
+  assert.equal(M.isPartitioned({ userContextId: 0, partitionKey: "" }), false);
+  assert.equal(M.isPartitioned({}), false);
+  assert.equal(M.isPartitioned(""), false);
+  assert.equal(M.isPartitioned('{"userContextId":4}'), false);
+  assert.equal(M.isPartitioned({ partitionKey: "(https,example.com)" }), true);
+  assert.equal(M.isPartitioned('{"partitionKey":"(https,example.com)"}'), true);
+  assert.equal(M.isPartitioned({ partitionKeyPattern: { baseDomain: "example.com" } }), true);
+  assert.equal(M.isPartitioned({ partitionKeyPattern: {} }), false);
+});
