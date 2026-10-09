@@ -17,7 +17,8 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join } from "node:path";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
-const F53 = join(root, "patches/0053-files");
+// 0053r2 (Proof: ETP-interaction flag) ships ModeXor from patches/0053r2-files.
+const F53 = ["0053r2-files", "0053-files"].map((d) => join(root, "patches", d)).find((d) => existsSync(join(d, "DarkstrModeXor.sys.mjs")));
 
 // ------------------------------------------------- Gecko-like pref store ---
 // Default branch + user branch. Like libpref, setting a user value equal to
@@ -107,6 +108,7 @@ function freshProfile(userValues = {}) {
     "gfx.blocklist.all": 0,
     "librewolf.webgl.prompt": true,
     "librewolf.webgl.prompt.hide": true,
+    "privacy.trackingprotection.allow_list.hasUserInteractedWithETPSettings": false,
   })) {
     defaults.set(k, v);
   }
@@ -211,6 +213,67 @@ for (const [name, start] of Object.entries(CASES)) {
   });
 }
 
+// ------------------------------------------ 0053r2: ETP interaction flag ---
+// Stock Gecko, simplified: ContentBlockingPrefs.matchCBCategory moves "strict"
+// to "custom" when an FPP/RFP pref leaves the strict set (and back), and
+// UrlClassifierExceptionListService sets the interaction flag on ANY category
+// change. Both are synchronous pref observers.
+const ETP = "privacy.trackingprotection.allow_list.hasUserInteractedWithETPSettings";
+let stockStrict = null;
+function installStockEtpObservers() {
+  stockStrict = null;
+  prefs.addObserver("privacy.fingerprintingProtection", () => {
+    const cat = get("browser.contentblocking.category");
+    const fpp = get("privacy.fingerprintingProtection");
+    if (cat === "strict" && fpp === false) { stockStrict = true; setUser("browser.contentblocking.category", "custom"); }
+    else if (cat === "custom" && fpp === true && stockStrict) { setUser("browser.contentblocking.category", "strict"); }
+  });
+  prefs.addObserver("browser.contentblocking.category", () => setUser(ETP, true));
+}
+for (const [label, start] of Object.entries({ "never interacted (default false)": {}, "user had interacted (true)": { [ETP]: true } })) {
+  test(`0053r2: Pollution round trip leaves ${ETP.split(".").pop()} as it was: ${label}`, () => {
+    freshProfile({ "browser.contentblocking.category": "strict", "privacy.fingerprintingProtection": true, ...start });
+    installStockEtpObservers();
+    const before = { has: user.has(ETP), v: get(ETP) };
+    MX.init();
+    setUser("darkstr.mode", "pollution");
+    assert.equal(get("browser.contentblocking.category"), "custom", "stock flip happened");
+    assert.equal(get(ETP), true, "stock observer set the flag during Pollution");
+    assert.ok(JSON.parse(get("darkstr.xor.savedPrefs")).prefs[ETP], "pre-Pollution state saved");
+    setUser("darkstr.mode", "homogeneous");
+    assert.equal(get("browser.contentblocking.category"), "strict", "stock flip back happened");
+    for (const f of idle.splice(0)) f();
+    MX.uninit();
+    assert.deepEqual({ has: user.has(ETP), v: get(ETP) }, before);
+    assert.equal(user.has("darkstr.xor.savedPrefs"), false);
+  });
+}
+test("0053r2: a deferred stock re-match after leaving is undone once (idle pass)", () => {
+  freshProfile({ "browser.contentblocking.category": "strict", "privacy.fingerprintingProtection": true });
+  installStockEtpObservers();
+  MX.init();
+  setUser("darkstr.mode", "pollution");
+  setUser("darkstr.mode", "homogeneous");
+  setUser(ETP, true); // late category re-match before the idle pass
+  for (const f of idle.splice(0)) f();
+  MX.uninit();
+  assert.equal(user.has(ETP), false);
+});
+test("0053r2: Pollution entered under 0053 (saved state without the flag) leaves the flag alone", () => {
+  freshProfile({ "darkstr.mode": "pollution", [ETP]: true,
+    "darkstr.xor.savedPrefs": JSON.stringify({ v: 1, prefs: { "privacy.resistFingerprinting": { user: false, value: null } } }) });
+  MX.init();
+  setUser("darkstr.mode", "homogeneous");
+  for (const f of idle.splice(0)) f();
+  MX.uninit();
+  assert.equal(get(ETP), true, "unknown pre-Pollution state: not guessed");
+});
+test("0053r2: off mode still writes nothing (flag never touched)", () => {
+  freshProfile();
+  for (let i = 0; i < 3; i++) session({ cbSettle: false });
+  assert.deepEqual(writes, []);
+});
+
 test("Pollution never touches webgl.force-enabled / gfx.blocklist.all / forbid-* / prompt.hide", () => {
   freshProfile({ "darkstr.mode": "pollution", "darkstr.nativePersonaHooks": true });
   session();
@@ -267,7 +330,7 @@ test("fresh profile never gets the migration marker or saved state in off mode",
 
 // -------------------------------------------------------------- static ---
 test("librewolf.cfg: darkstr-0029-webgl block removed; no WebGL / blocklist overrides", () => {
-  const cfg = readFileSync(join(F53, "librewolf.cfg"), "utf8");
+  const cfg = readFileSync(join(root, "patches/0053-files/librewolf.cfg"), "utf8");
   assert.doesNotMatch(cfg, /darkstr-0029-webgl/);
   for (const k of ["webgl.force-enabled", "gfx.blocklist.all", "librewolf.webgl.prompt"]) {
     assert.ok(!cfg.includes(`"${k}"`), k);

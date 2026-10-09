@@ -573,6 +573,31 @@ All five 0043 Worker/SharedWorker WebGPU XOR gates passed on Proof tip `cc692641
   bootstrap was regenerated with esbuild. Chromium UA groups are unchanged.
 - Rust `mode_pref_effects` is untouched (0053).
 
+## In review — 0053r2 ETP-interaction flag restored after Pollution (Proof follow-up to 0053)
+
+| | |
+|---|---|
+| Pin | **0053r2**: after a Pollution round trip, `privacy.trackingprotection.allow_list.hasUserInteractedWithETPSettings=true` stayed set (Proof) |
+| Where | Separate commit in the 0055 respin (PR #86); 0053 itself is merged (#85). The respin DMG carries 0053r2 + 0055 r2 |
+| Patch | [`patches/0053r2-darkstr-etp-interaction.patch`](../patches/0053r2-darkstr-etp-interaction.patch) + `patches/0053r2-files/` (DarkstrModeXor + `SHA256SUMS`) |
+| Apply | `scripts/apply-0053r2-etp-interaction-mini.sh` (after 0053; chrome JS only; independent of 0055) |
+| Tests | `tests/off-mode-hands-off-0053.test.mjs` (loads the newest ModeXor; stock CB-category / allow-list observers simulated) |
+
+**Cause.** Stock Gecko's `UrlClassifierExceptionListService` sets the flag on **any**
+`browser.contentblocking.category` change. Under Pollution, FPP=false makes
+`ContentBlockingPrefs.matchCBCategory` flip the category (strict → custom on entry,
+back on exit), so the flag is set as a side effect. The flip can't be avoided:
+the category follows FPP.
+
+**Fix.** On entry, ModeXor saves the flag's pre-Pollution state (user value or none)
+in `darkstr.xor.savedPrefs` along with RFP / FPP / `librewolf.webgl.prompt`.
+darkstr never *sets* the flag. On leaving, it restores the flag after RFP/FPP are
+back (the stock flip-back has already run, because pref observers are synchronous),
+and once more on idle in case of a late category re-match. Off mode still writes
+nothing. A state saved by 0053 before r2 has no record of the flag; the flag is
+then left alone rather than guessed. A real user interaction *during* Pollution is
+also undone on exit (indistinguishable from the stock side effect).
+
 ## In review — 0053 off mode leaves prefs alone (Fable QA B5)
 
 | | |
