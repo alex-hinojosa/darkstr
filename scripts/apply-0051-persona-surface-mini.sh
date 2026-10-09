@@ -27,7 +27,7 @@ MAP=(
 )
 (cd "$F" && shasum -a 256 -c SHA256SUMS)
 # 0048-applied baseline the patch was cut against.
-BASE_SUMS="1a2e973fdb63c6aba2e1719158df3e33afc0fbdb25f2230cad71542110545338  browser/components/DarkstrCookieFirewallChild.sys.mjs
+BASE_SUMS="feac9fdc4cc63959de4f0ad3e3a65613806a13f5659ca5d9dd4ea9dab0dc8528  browser/components/DarkstrCookieFirewallChild.sys.mjs
 925a38cc6369893e6e4044863e89beb9a373503327640afa8a84b0b2cbb8138f  browser/components/DarkstrNativePersona.sys.mjs
 84c6b35433c8718c28b5a012b058cea68e68216ecea37620784e125180589d36  browser/components/DarkstrNativePersonaChild.sys.mjs
 f466af10e41f56b027f67ccd068070513ce2fbac4598a4717375159fcc81c371  browser/components/DarkstrNativePersonaParent.sys.mjs
