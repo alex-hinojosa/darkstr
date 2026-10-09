@@ -609,6 +609,15 @@ Live results (no `canvas` permission anywhere):
   - WebGL `readPixels` / `toDataURL` agreement and noise on a real GPU;
   - WebGPU (`dom.webgpu.enabled`; `navigator.gpu` is absent headless here);
   - GPU timing.
+- **WebGPU is a user opt-in residual. darkstr never enables it.**
+  - Gecko's built-in default for `dom.webgpu.enabled` is true on Windows and Apple-silicon macOS. LibreWolf's `librewolf.cfg` overrides it with `defaultPref("dom.webgpu.enabled", false)`, which ships unchanged in the DMG.
+  - No darkstr code writes the pref:
+    - ModeXor's `POLLUTION_PREFS` are only RFP, FPP, baseline FPP and the LibreWolf WebGL prompt.
+    - The persona, depth, worker and seed-store modules write only `darkstr.*` diagnostics.
+    - No apply script sets it.
+  - It is on only when a user flips it, or when a test harness sets it (Proof's ARMED prefs; this PR's self-test).
+  - While a user has it on, the WebGPU readback caveat above applies: WebGPU canvases, buffer readback and `copyExternalImageToTexture` are native and unfarbled, so they are a stable cross-site value.
+  - Accepted as user opt-in, the same as any other default-off API a user enables.
 
 ## In review — 0056 persisted per-site persona seeds (Fable N6 follow-up)
 
