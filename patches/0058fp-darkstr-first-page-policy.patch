@@ -1,0 +1,165 @@
+--- a/browser/components/DarkstrNativePersona.sys.mjs
++++ b/browser/components/DarkstrNativePersona.sys.mjs
+@@ -59,7 +59,13 @@
+ const HOOKS_PREF = "darkstr.nativePersonaHooks";
+ /** Content-safe bool mirror of mode===pollution (Fission sanitizes darkstr.mode string). */
+ const POLLUTION_ACTIVE_PREF = "darkstr.pollutionActive";
+-const STRICT_PREF = "darkstr.strictFirstDoc";
++/**
++ * 0058 (first-page policy, Fable B4): the persona decision is per site, not
++ * per tab. darkstr.strictFirstDoc (the per-tab first-document native hold) is
++ * no longer read: a site's persona is the same on every document of that
++ * site, the first page of a new tab, a cold start and a restart included.
++ * The 0056 seed store's startup hold (below) covers the first loads.
++ */
+ /**
+  * 0056r2: longest hold (ms) for a top-level document load while the persisted
+  * seed store is still loading at startup. Default 2000, clamped to 0..10000.
+@@ -467,7 +473,6 @@
+       MODE_PREF,
+       NATIVE_PREF,
+       HOOKS_PREF,
+-      STRICT_PREF,
+       SNAPSHOT_PREF,
+       SEED_PREF,
+       ROTATE_PER_SITE_PREF,
+@@ -499,7 +504,6 @@
+       MODE_PREF,
+       NATIVE_PREF,
+       HOOKS_PREF,
+-      STRICT_PREF,
+       SNAPSHOT_PREF,
+       SEED_PREF,
+       ROTATE_PER_SITE_PREF,
+@@ -665,7 +669,14 @@
+       // 0030: sticky site persona — update C++ mirrors for this eTLD+1 once
+       // counted (SubsequentNav / chrome actor still gate apply separately).
+       try {
+-        if (this._rotationActive()) {
++        // 0058: never resolve while the seed store is loading — that would
++        // hand out a session-random seed; the held channel decides once the
++        // stored seed is known (_holdForSeedStore).
++        let storeLoading = false;
++        try {
++          storeLoading = !this._fixedSeedSet() && !!seedStore()?.loading;
++        } catch (_eStore) {}
++        if (this._rotationActive() && !storeLoading) {
+           const siteSnap = this.resolveSnapshotForUri(
+             uri,
+             this._ctxOfLoadInfo(li)
+@@ -1088,10 +1099,8 @@
+       nativeHooks = Services.prefs.getBoolPref(HOOKS_PREF, false);
+     } catch (_e) {}
+ 
+-    let strictFirstDoc = true;
+-    try {
+-      strictFirstDoc = Services.prefs.getBoolPref(STRICT_PREF, true);
+-    } catch (_e) {}
++    // 0058: per-site policy; kept in the plan (false) for diagnostics only.
++    const strictFirstDoc = false;
+ 
+     const pollutionActive = mode === "pollution" && !nativeCompatible;
+     const mainInjectDisable = nativeHooks && pollutionActive;
+@@ -1249,8 +1258,28 @@
+     if (this._actorRegistered) {
+       this._refreshAllDocuments();
+     }
++    this._refreshDepthPlan();
+   },
+ 
++  /**
++   * 0058: DepthHooks arms per-site depth noise from this module's plan
++   * (_storeRotationActive(getPlan())). Its own pref observer can run before
++   * ours, read the stale plan and stay disarmed — e.g. Native-Compatible
++   * switched off again: persona documents without depth noise, the same
++   * canvas hash as native ones (Fable S1-a7 vs a8). Re-run its plan whenever
++   * ours changes, so both always agree.
++   */
++  _refreshDepthPlan() {
++    try {
++      const { DarkstrDepthHooks } = ChromeUtils.importESModule(
++        "moz-src:///browser/components/DarkstrDepthHooks.sys.mjs"
++      );
++      if (DarkstrDepthHooks?._inited) {
++        DarkstrDepthHooks.refreshPlan();
++      }
++    } catch (_e) {}
++  },
++
+   _refreshAllDocuments() {
+     const seen = new Set();
+     const send = wg => {
+@@ -1495,18 +1524,14 @@
+   },
+ 
+   /**
+-   * duppel_persona::strict_next_nav_armed — persona surfaces arm on SubsequentNav
+-   * when strictFirstDoc (default). Phase 3 / 0020 chrome mirror of C++ SoT.
++   * 0058 (Fable B4): armed for every document while Pollution + hooks are
++   * active — the persona is a property of the site, so the first document in
++   * a tab is armed exactly like later ones. `_phase` is diagnostics only.
++   * Native-Compatible (pollutionActive false) and off mode stay unarmed.
+    */
+-  strictNextNavArmed(phase) {
++  strictNextNavArmed(_phase) {
+     const plan = this.getPlan();
+-    if (!plan.pollutionActive || !plan.nativeHooks) {
+-      return false;
+-    }
+-    if (!plan.strictFirstDoc) {
+-      return true;
+-    }
+-    return phase === "subsequent_nav";
++    return !!(plan.pollutionActive && plan.nativeHooks);
+   },
+ 
+   /** Sync diagnostic pref (darkstr.* only — never privacy.*). */
+@@ -1624,7 +1649,7 @@
+    *    rel=noopener / implicit noopener): the site's live armed decision,
+    *    the 0049 shared-worker rule.
+    *  - Anything else (URL bar, bookmarks, GUI new tab, external): null, so
+-   *    strictFirstDoc is unchanged.
++   *    the site's own decision applies (0058: armed, per site).
+    */
+   _openedContextDecision(bc, uri, ctx) {
+     const c = String(ctx || "0");
+@@ -1698,8 +1723,8 @@
+   /**
+    * Site's live armed decision (0049 shared-worker rule): armed when a live
+    * top-level document of that site (other tab) is armed — same snapshot;
+-   * native when the live ones are native; no live document: armed unless
+-   * strictFirstDoc.
++   * native when the live ones are native; no live document: the site's
++   * persona (0058: per site, armed).
+    */
+   _liveSiteDecision(uri, excludeKey, ctx) {
+     const plan = this.getPlan();
+@@ -1734,7 +1759,7 @@
+       if (liveNative) {
+         return { armed: false, site, ctx: c, snapshot: null };
+       }
+-      return this._decisionFor(uri, !plan.strictFirstDoc, c);
++      return this._decisionFor(uri, true, c);
+     } finally {
+       this._liveDeciding.delete(excludeKey);
+     }
+@@ -1867,8 +1892,8 @@
+    * top-level site of `uri`. Armed when a live top-level document of that
+    * site is armed (same snapshot — one persona per site); once armed it
+    * stays armed for this plan so the worker's navigator and its later
+-   * requests agree. No live document (service worker wake-up): armed unless
+-   * strictFirstDoc. Returns { decision, browsingContext }.
++   * requests agree. No live document (service worker wake-up): the site's
++   * persona (0058: per site, armed). Returns { decision, browsingContext }.
+    */
+   workerSiteDecision(uri, ctx) {
+     const plan = this.getPlan();
+@@ -1904,7 +1929,7 @@
+         browsingContext: null,
+       };
+     }
+-    const d = this._decisionFor(uri, !plan.strictFirstDoc, c);
++    const d = this._decisionFor(uri, true, c);
+     if (d.snapshot) {
+       this._workerSiteDecisions.set(wkey, d);
+     }

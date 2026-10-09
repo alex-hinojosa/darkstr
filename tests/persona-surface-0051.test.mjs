@@ -24,7 +24,7 @@ const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const FILES = join(root, "patches/0051-files");
 const FILES52 = join(root, "patches/0052-files");
 // Newest shipped copy of a module (later pins supersede earlier ones).
-const NEWER = ["0058-files", "0057c-files", "0057-files", "0056-files", "0055-files", "0053r2-files", "0053-files", "0052-files"].map((d) => join(root, "patches", d));
+const NEWER = ["0058fp-files", "0058-files", "0057c-files", "0057-files", "0056-files", "0055-files", "0053r2-files", "0053-files", "0052-files"].map((d) => join(root, "patches", d));
 const newest = (f, fallbackDir) => {
   for (const d of NEWER) {
     if (existsSync(join(d, f))) return join(d, f);
@@ -268,62 +268,54 @@ function fresh(extra = {}) {
 const ARMED = { "darkstr.mode": "pollution", "darkstr.nativePersonaHooks": true };
 
 // ------------------------------------------------------------------ N2 ---
-test("N2: opening a new tab never flips existing tabs to the native UA", () => {
+test("N2 (0058 per-site): the first document of every tab is the site's persona; tabs never flip each other", () => {
   fresh(ARMED);
   const t1 = newTab();
   const a1 = navigate(t1, "https://www.alpha.test/");
-  assert.equal(a1.ch.ua(), NATIVE_UA, "first document of tab 1 native (strictFirstDoc)");
-  assert.equal(a1.page.nav.userAgent, NATIVE_UA);
+  assert.notEqual(a1.ch.ua(), NATIVE_UA, "first document of tab 1 armed (0058: no per-tab first-doc hold)");
+  assert.equal(a1.page.nav.userAgent, a1.ch.ua(), "document UA == navigator UA");
   const a2 = navigate(t1, "https://www.alpha.test/2");
-  assert.notEqual(a2.ch.ua(), NATIVE_UA, "second document armed");
-  assert.equal(a2.page.nav.userAgent, a2.ch.ua(), "document UA == navigator UA");
+  assert.equal(a2.ch.ua(), a1.ch.ua(), "same site, same persona");
+  same(a2.page, a1.page, "alpha 1 vs 2");
 
   const t2 = newTab();
-  navigate(t2, "https://beta.test/");
+  const b1 = navigate(t2, "https://beta.test/");
   const b2 = navigate(t2, "https://beta.test/2");
-  assert.equal(b2.page.nav.userAgent, b2.ch.ua());
+  assert.equal(b1.page.nav.userAgent, b1.ch.ua());
+  same(b2.page, b1.page, "beta 1 vs 2");
 
-  // Third tab: first document, native.
+  // Third tab on alpha: its first document is alpha's persona.
   const t3 = newTab();
-  const c1 = navigate(t3, "https://gamma.test/");
-  assert.equal(c1.ch.ua(), NATIVE_UA);
-  assert.equal(c1.page.nav.userAgent, NATIVE_UA);
+  const c1 = navigate(t3, "https://alpha.test/");
+  assert.equal(c1.ch.ua(), a1.ch.ua(), "new tab first document == the site's persona");
+  same(c1.page, a1.page, "alpha in a new tab");
+  assert.equal(c1.ch.al(), prepareAcceptLanguages(a1.page.nav.languages), "Accept-Language on the first document");
   assert.equal(P.getDiagnostics()["darkstr.persona.docShellPhase"], "first_document",
-    "global diag mirror says first_document (proves nobody reads it)");
+    "phase is still counted (diagnostics only)");
   assert.equal(prefs.has("darkstr.persona.docShellPhase"), false,
     "0052: diag mirror stays in memory (darkstr.debug.diagPrefs off)");
 
-  // Tabs 1 and 2 keep their persona on every later request.
-  for (const [p, wg, host] of [[a2.page, a2.wg, "alpha.test"], [b2.page, b2.wg, "beta.test"]]) {
+  for (const [p, wg, host] of [[a2.page, a2.wg, "alpha.test"], [b2.page, b2.wg, "beta.test"], [c1.page, c1.wg, "alpha.test"]]) {
     for (const url of [`https://${host}/x.js`, "https://cdn.other.test/lib.js"]) {
       const ch = request(wg, url);
       assert.equal(ch.ua(), p.nav.userAgent, `${url} from ${host}: HTTP UA == navigator UA`);
       assert.equal(ch.al(), prepareAcceptLanguages(p.nav.languages));
     }
   }
-  // A new document in tab 1 right after tab 3's first document: still armed.
   const a3 = navigate(t1, "https://alpha.test/3");
-  assert.notEqual(a3.ch.ua(), NATIVE_UA, "tab 1 third document armed after tab 3 opened");
-  assert.equal(a3.page.nav.userAgent, a3.ch.ua());
-  assert.equal(request(a3.wg, "https://alpha.test/z").ua(), a3.page.nav.userAgent);
-  const c2 = request(c1.wg, "https://gamma.test/x.js");
-  assert.equal(c2.ua(), NATIVE_UA, "tab 3 first document stays native");
-  assert.equal(c2.al(), NATIVE_AL);
-  // Tab 3 arms on its own second navigation; tabs 1/2 unaffected.
-  const c3 = navigate(t3, "https://gamma.test/2");
-  assert.notEqual(c3.page.nav.userAgent, NATIVE_UA);
-  assert.equal(request(a2.wg, "https://alpha.test/y").ua(), a2.page.nav.userAgent);
+  same(a3.page, a1.page, "tab 1 later document");
 });
 
-test("N2: redirects (incl. internal) are not counted as navigations", () => {
+test("N2: redirects (incl. internal) are not counted as navigations; the redirect target keeps the site persona", () => {
   fresh(ARMED);
   const t = newTab();
-  navigate(t, "http://alpha.test/");
+  const first = navigate(t, "http://alpha.test/");
   const r = fire(channel("https://alpha.test/", { bc: t, type: 6, redirect: true }));
-  assert.equal(r.ua(), NATIVE_UA, "redirect target of the first document stays native");
+  assert.notEqual(r.ua(), NATIVE_UA, "0058: the first document (and its redirect) is armed");
+  assert.equal(r.ua(), first.ch.ua(), "redirect target == the site's persona");
   assert.equal(P.tabPhase(t), "first_document");
   const n = navigate(t, "https://alpha.test/next");
-  assert.notEqual(n.ch.ua(), NATIVE_UA);
+  assert.equal(n.ch.ua(), first.ch.ua());
 });
 
 test("N2: frames and their requests use the top-level document's decision", () => {
@@ -352,12 +344,15 @@ test("N2: the global phase pref and C++ global UA override are gone from decisio
   assert.doesNotMatch(nav, /DarkstrNavigatorHooks::TryGet/);
 });
 
-test("N2: a fixed persona (strictFirstDoc=false) applies from the first document", () => {
-  fresh({ ...ARMED, "darkstr.strictFirstDoc": false });
-  const t = newTab();
-  const a = navigate(t, "https://alpha.test/");
-  assert.notEqual(a.ch.ua(), NATIVE_UA);
-  assert.equal(a.page.nav.userAgent, a.ch.ua());
+test("N2: a fixed persona applies from the first document; darkstr.strictFirstDoc=true is ignored (0058)", () => {
+  for (const strict of [false, true]) {
+    fresh({ ...ARMED, "darkstr.strictFirstDoc": strict });
+    const t = newTab();
+    const a = navigate(t, "https://alpha.test/");
+    assert.notEqual(a.ch.ua(), NATIVE_UA, `strictFirstDoc=${strict}`);
+    assert.equal(a.page.nav.userAgent, a.ch.ua());
+    assert.equal(P.getPlan().strictFirstDoc, false, "plan reports the per-site policy");
+  }
 });
 
 // ------------------------------------------------------------------ N3 ---
@@ -462,14 +457,18 @@ test("N4: navigator persona has no deviceMemory/userAgentData and no own propert
   assert.ok(Object.isFrozen(nav.languages));
 });
 
-test("N4: native first document keeps the native accessors; refresh restores them", () => {
+test("N4: native documents keep the native accessors (Native-Compatible); refresh after hooks off restores them", () => {
+  fresh({ ...ARMED, "darkstr.nativeCompatible": true });
+  const t0 = newTab();
+  const nat = navigate(t0, "https://alpha.test/");
+  for (const [k, d] of Object.entries(nat.page.window.nativeDescs)) {
+    assert.equal(Object.getOwnPropertyDescriptor(nat.page.window.Navigator.prototype, k).get, d.get, `${k} native (Native-Compatible)`);
+  }
+  assert.equal(nat.ch.ua(), NATIVE_UA, "Native-Compatible: native HTTP UA on the first document");
   fresh(ARMED);
   const t = newTab();
   const first = navigate(t, "https://alpha.test/");
-  const proto = first.page.window.Navigator.prototype;
-  for (const [k, d] of Object.entries(first.page.window.nativeDescs)) {
-    assert.equal(Object.getOwnPropertyDescriptor(proto, k).get, d.get, `${k} native`);
-  }
+  assert.notEqual(first.page.nav.userAgent, NATIVE_UA, "0058: first document armed");
   const second = navigate(t, "https://alpha.test/2");
   assert.notEqual(second.page.nav.userAgent, NATIVE_UA);
   // Hooks switched off → refresh → native again (accessors restored).
@@ -481,6 +480,22 @@ test("N4: native first document keeps the native accessors; refresh restores the
     assert.equal(Object.getOwnPropertyDescriptor(proto2, k).get, d.get, `${k} restored`);
   }
   assert.equal(second.page.nav.userAgent, NATIVE_UA);
+});
+
+test("0058: Native-Compatible escape — every document native (first, later, new tab, popup), no header changes", () => {
+  fresh({ ...ARMED, "darkstr.nativeCompatible": true });
+  const t1 = newTab();
+  const a1 = navigate(t1, "https://alpha.test/");
+  const a2 = navigate(t1, "https://alpha.test/2");
+  const t2 = newTab();
+  const c1 = navigate(t2, "https://alpha.test/");
+  const p1 = navigate(openPopup(t1), "https://alpha.test/?pop");
+  for (const [d, label] of [[a1, "first"], [a2, "second"], [c1, "new tab"], [p1, "popup"]]) {
+    assert.equal(d.ch.ua(), NATIVE_UA, `${label}: native HTTP UA`);
+    assert.equal(d.page.nav.userAgent, NATIVE_UA, `${label}: native navigator`);
+    assert.equal(request(d.wg, "https://alpha.test/x").al(), NATIVE_AL, `${label}: native Accept-Language`);
+  }
+  assert.equal(P.strictNextNavArmed("subsequent_nav"), false);
 });
 
 test("N4: default prefs — no IPC, no hooks, no header changes", () => {
@@ -642,23 +657,22 @@ test("0051r2 popup: window.open('about:blank') inherits the opener's persona (na
   assert.equal(request(n.wg, "https://alpha.test/x").ua(), a2.page.nav.userAgent);
 });
 
-test("0051r2 popup: window.open(same-origin URL) inherits; a native opener gives a native popup", () => {
+test("0051r2 popup: window.open(same-origin URL) inherits the opener's persona, from the opener's first document on (0058)", () => {
   fresh(ARMED);
   const t1 = newTab();
   const a1 = navigate(t1, "https://alpha.test/");
-  const native = navigate(openPopup(t1), "https://alpha.test/?pop");
-  assert.equal(a1.page.nav.userAgent, NATIVE_UA, "opener first document native");
-  assert.equal(native.ch.ua(), NATIVE_UA, "popup of a native opener is native");
-  assert.equal(native.page.nav.userAgent, NATIVE_UA);
+  assert.notEqual(a1.page.nav.userAgent, NATIVE_UA, "opener first document armed (0058)");
+  const p1 = navigate(openPopup(t1), "https://alpha.test/?pop");
+  assert.equal(p1.ch.ua(), a1.page.nav.userAgent, "popup of a first document: same persona");
+  same(p1.page, a1.page, "popup navigator");
   const a2 = navigate(t1, "https://alpha.test/2");
   const pop = openPopup(t1);
   const u = navigate(pop, "https://alpha.test/?pop2");
   assert.equal(u.ch.ua(), a2.page.nav.userAgent, "URL popup document load UA");
   same(u.page, a2.page, "URL popup navigator");
-  // the popup's own second navigation follows the normal per-tab rule (armed)
   const u2 = navigate(pop, "https://alpha.test/next");
   assert.equal(u2.page.nav.userAgent, u2.ch.ua());
-  assert.notEqual(u2.ch.ua(), NATIVE_UA);
+  same(u2.page, a1.page, "popup's own later navigation: still the site persona");
 });
 
 test("0051r2 popup: cross-site popup keeps the opener's armed bit with its own site persona", () => {
@@ -675,7 +689,7 @@ test("0051r2 popup: cross-site popup keeps the opener's armed bit with its own s
   same(x.page, g2.page, "gamma's own per-site persona");
 });
 
-test("0051r2 popup: noopener popups use the site's live armed decision (0049 shared-worker rule)", () => {
+test("0051r2 popup: noopener popups get the site's persona (live or not, 0058)", () => {
   fresh(ARMED);
   const t1 = newTab();
   navigate(t1, "https://alpha.test/");
@@ -684,26 +698,28 @@ test("0051r2 popup: noopener popups use the site's live armed decision (0049 sha
   const g1 = navigate(t2, "https://gamma.test/");
   liveTabs(t1, t2);
   const nA = navigate(openPopup(t1, { noopener: true }), "https://alpha.test/?np");
-  assert.equal(nA.ch.ua(), a2.page.nav.userAgent, "live armed alpha tab → armed, same persona");
+  assert.equal(nA.ch.ua(), a2.page.nav.userAgent, "live armed alpha tab → same persona");
   same(nA.page, a2.page, "noopener alpha popup");
   const nG = navigate(openPopup(t1, { noopener: true }), "https://gamma.test/?np");
-  assert.equal(g1.page.nav.userAgent, NATIVE_UA);
-  assert.equal(nG.ch.ua(), NATIVE_UA, "live gamma tab is native → native");
+  assert.notEqual(g1.page.nav.userAgent, NATIVE_UA, "gamma first document armed (0058)");
+  assert.equal(nG.ch.ua(), g1.page.nav.userAgent, "noopener gamma popup == gamma's persona");
+  same(nG.page, g1.page, "noopener gamma popup");
   const nZ = navigate(openPopup(t1, { noopener: true }), "https://zeta.test/?np");
-  assert.equal(nZ.ch.ua(), NATIVE_UA, "no live document of the site + strictFirstDoc → native");
+  assert.notEqual(nZ.ch.ua(), NATIVE_UA, "no live document of the site → the site's own persona");
+  assert.equal(nZ.page.nav.userAgent, nZ.ch.ua());
   liveTabs();
 });
 
-test("0051r2 popup: user-initiated new tabs keep strictFirstDoc (no opener, no crossGroupOpener)", () => {
+test("0051r2 popup: user-initiated new tabs get the site's persona on their first document (0058)", () => {
   fresh(ARMED);
   const t1 = newTab();
   navigate(t1, "https://alpha.test/");
-  navigate(t1, "https://alpha.test/2");
+  const a2 = navigate(t1, "https://alpha.test/2");
   liveTabs(t1);
   const t2 = newTab(); // URL bar / bookmark / GUI new tab
   const d = navigate(t2, "https://alpha.test/");
-  assert.equal(d.ch.ua(), NATIVE_UA, "first document of a user-opened tab stays native");
-  assert.equal(d.page.nav.userAgent, NATIVE_UA);
+  assert.equal(d.ch.ua(), a2.page.nav.userAgent, "first document of a user-opened tab == the site's persona");
+  same(d.page, a2.page, "user-opened tab navigator");
   liveTabs();
 });
 

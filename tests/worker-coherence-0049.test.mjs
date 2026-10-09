@@ -27,7 +27,7 @@ const FILES = join(root, "patches/0049-files");
 const FILES51 = join(root, "patches/0051-files");
 const FILES52 = join(root, "patches/0052-files");
 // Newest shipped copy of a module (later pins supersede earlier ones).
-const NEWER = ["0058-files", "0057c-files", "0057-files", "0056-files", "0055-files", "0053r2-files", "0053-files", "0052-files"].map((d) => join(root, "patches", d));
+const NEWER = ["0058fp-files", "0058-files", "0057c-files", "0057-files", "0056-files", "0055-files", "0053r2-files", "0053-files", "0052-files"].map((d) => join(root, "patches", d));
 const newest = (f, fallbackDir) => {
   for (const d of NEWER) {
     if (existsSync(join(d, f))) return join(d, f);
@@ -363,12 +363,13 @@ for (const [name, setup] of Object.entries(SETUPS)) {
     fresh(setup);
     const t = newTab();
     const first = navigate(t, "https://www.alpha.test/");
-    // First document of the tab: native page, native worker.
+    // 0058 (per site): the tab's first document is armed; its worker matches.
     const w0 = startWorker({ wg: first.wg });
-    assert.equal(first.nav.userAgent, NATIVE_UA);
-    assert.equal(w0.ua, NATIVE_UA, "first-document worker native like its page");
+    assert.notEqual(first.nav.userAgent, NATIVE_UA, `${name}: first document armed`);
+    assert.deepEqual(pick(w0), first.view(), `${name}: first-document worker == its page`);
     const page = navigate(t, "https://www.alpha.test/2");
     const pv = page.view();
+    assert.deepEqual(pv, first.view(), `${name}: same site, same persona`);
     assert.notEqual(pv.ua, NATIVE_UA, `${name}: page armed`);
     // 0055 (N6): every persona — seed, session or a locked 140 snapshot —
     // claims the engine's version.
@@ -457,8 +458,17 @@ test("windowless worker requests carry the owning site's persona headers", () =>
   assert.equal(sys.ua(), NATIVE_UA);
 });
 
-test("windowless: site with only a native first document stays native", () => {
+test("windowless: site with only a first document — the windowless worker gets that document's persona (0058)", () => {
   fresh(ARMED);
+  const t = newTab();
+  const first = navigate(t, "https://gamma.test/");
+  const w = startWorker({ kind: "shared", origin: "https://gamma.test", partitionKey: "(https,gamma.test)" });
+  assert.notEqual(first.nav.userAgent, NATIVE_UA);
+  assert.deepEqual(pick(w), first.view());
+});
+
+test("windowless: Native-Compatible keeps the first document and its shared worker native", () => {
+  fresh({ ...ARMED, "darkstr.nativeCompatible": true });
   const t = newTab();
   const first = navigate(t, "https://gamma.test/");
   const w = startWorker({ kind: "shared", origin: "https://gamma.test", partitionKey: "(https,gamma.test)" });
@@ -494,7 +504,9 @@ test("depth prelude: 0043 OffscreenCanvas/WebGL/WebGPU only, never navigator", (
   fresh(ARMED);
   depthFor = () => ({ canvasSeed: 7, audioSeed: 9, webgpuSeed: 11, gpu: { vendor: "Apple", renderer: "Apple M2" } });
   const t = newTab();
-  navigate(t, "https://alpha.test/");
+  const first = navigate(t, "https://alpha.test/");
+  // 0058: the first document's worker gets the depth prelude too.
+  assert.match(startWorker({ wg: first.wg }).prelude, /__s=7/);
   const page = navigate(t, "https://alpha.test/2");
   const w = startWorker({ wg: page.wg });
   assert.match(w.prelude, /OffscreenCanvas/);
@@ -504,7 +516,8 @@ test("depth prelude: 0043 OffscreenCanvas/WebGL/WebGPU only, never navigator", (
   // No depth armed → no script at all in the worker.
   depthFor = () => null;
   assert.equal(startWorker({ wg: page.wg }).prelude, "");
-  // Native decision → no prelude even when depth would be available.
+  // Native decision (Native-Compatible) → no prelude even when depth would be available.
+  fresh({ ...ARMED, "darkstr.nativeCompatible": true });
   depthFor = () => ({ canvasSeed: 7, audioSeed: 9 });
   const t2 = newTab();
   const n = navigate(t2, "https://beta.test/");
@@ -677,21 +690,20 @@ test("0049r2: popup's own script (URL popup) creates the worker: same single sou
   assertOneSource(w, workerTraffic("https://alpha.test", pop.wg), "URL popup");
 });
 
-test("0049r2: native first document of an armed site — its dedicated worker's HTTP stays native (was: site rule → armed)", () => {
+test("0049r2 (0058): first document of a user-opened tab on an armed site — its dedicated worker and HTTP == the site persona", () => {
   fresh(ARMED);
   const a = newTab();
   navigate(a, "https://alpha.test/");
   const armedPage = navigate(a, "https://alpha.test/2");
   assert.notEqual(armedPage.nav.userAgent, NATIVE_UA);
-  const b = newTab(); // user-opened tab, first document: native (strictFirstDoc)
+  const b = newTab(); // user-opened tab, first document: the site's persona (0058)
   const first = navigate(b, "https://alpha.test/other");
-  assert.equal(first.nav.userAgent, NATIVE_UA);
+  assert.equal(first.nav.userAgent, armedPage.nav.userAgent);
   const w = startWorker({ wg: first.wg });
-  assert.equal(w.ua, NATIVE_UA);
+  assert.equal(w.ua, armedPage.nav.userAgent);
   const tr = workerTraffic("https://alpha.test", first.wg);
-  assertOneSource(w, tr, "native first doc");
-  assert.equal(tr.fetch.ua(), NATIVE_UA);
-  // ... while the armed tab's worker is armed, from the same site.
+  assertOneSource(w, tr, "first doc of a new tab");
+  assert.equal(tr.fetch.ua(), armedPage.nav.userAgent);
   const wa = startWorker({ wg: armedPage.wg });
   assert.equal(wa.ua, armedPage.nav.userAgent);
   assertOneSource(wa, workerTraffic("https://alpha.test", armedPage.wg), "armed tab");
@@ -756,15 +768,15 @@ test("0049r2: nested worker main script (labelled by C++) == nested navigator ==
   fresh(ARMED);
   const a = newTab();
   navigate(a, "https://alpha.test/");
-  navigate(a, "https://alpha.test/2"); // armed same-site tab
+  const armed = navigate(a, "https://alpha.test/2"); // armed same-site tab
   const b = newTab();
-  const first = navigate(b, "https://alpha.test/other"); // native first doc
+  const first = navigate(b, "https://alpha.test/other"); // first doc: site persona (0058)
   const outer = startWorker({ wg: first.wg });
   const trig = principal("https://alpha.test/");
   const nestedMain = fire(channel("https://alpha.test/w/inner.js", { bc: null, type: 2, triggering: trig, assoc: b }));
   assert.equal(nestedMain.ua(), outer.ua);
-  assert.equal(nestedMain.ua(), NATIVE_UA);
-  // Without the C++ label (stock Gecko) it would fall to the site rule (armed): documents the gap the label closes.
+  assert.equal(nestedMain.ua(), armed.nav.userAgent);
+  // Unlabelled (stock Gecko) falls to the site rule: the same persona under the per-site policy.
   const unlabelled = fire(channel("https://alpha.test/w/inner.js", { bc: null, type: 2, triggering: trig }));
-  assert.notEqual(unlabelled.ua(), NATIVE_UA);
+  assert.equal(unlabelled.ua(), armed.nav.userAgent);
 });
