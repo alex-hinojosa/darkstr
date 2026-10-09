@@ -513,8 +513,8 @@ All five 0043 Worker/SharedWorker WebGPU XOR gates passed on Proof tip `cc692641
 | Patch | [`patches/0056-darkstr-persona-seed-store.patch`](../patches/0056-darkstr-persona-seed-store.patch) + `patches/0056-files/` (new `DarkstrPersonaSeedStore`; NativePersona, CookieFirewall, DepthHooks, WorkerHooks(+Child), `DarkstrNavigatorHooks.cpp`, toolkit `ClearDataService`, `browser/components/moz.build`; `SHA256SUMS`, `BASE_SHA256SUMS`) |
 | Apply | `scripts/apply-0056-persona-seed-store-mini.sh` (C++ dom/base + chrome JS + toolkit JS; moz.build adds the module) |
 | Tests | `tests/persona-seed-store-0056.test.mjs` (store, keep rule, cleaners, atomic write, OSKeyStore failure; mocked Gecko); the 0048–0052 tests load the 0056 copies |
-| DMG | `~/AgentDocs/builds/darkstr-0056-137c3b27.dmg` (+ `.sha256`), sha256 `137c3b27ed3dd0238f8ec46c5a164ea57a900893553ef1d24088c058de20a925`: 0056r2 (startup hold). r1 was `darkstr-0056-72fa1796.dmg`. 0052 + 0053 + 0053r2 + 0055 r2 + 0056; omni files match `patches/0056-files` (and 0053r2 ModeXor, 0055 Ffi) |
-| Evidence | `~/AgentDocs/proof/darkstr-0056-r2-20261009-090046/` (self-test `selftest/live-final`, negative control `selftest/live-negctl-0055`, `dmg-verify.log`, `stale-link-check.txt`); r2 (startup hold): `~/AgentDocs/proof/darkstr-0056-r3-20261009-091625/` (`selftest/live-final`, `live-hold`, negative control `live-hold-negctl-0056r2`) |
+| DMG | **0056r3:** `~/AgentDocs/builds/darkstr-0056r2-0cb9a326.dmg` (+ `.sha256`), sha256 `0cb9a32668e3aec6f604028070690739666c07e6c08503ee2b87ff9e331a39a6` (range-clear flush fix, v2 store). Before: `~/AgentDocs/builds/darkstr-0056-137c3b27.dmg`, sha256 `137c3b27ed3dd0238f8ec46c5a164ea57a900893553ef1d24088c058de20a925`: 0056r2 (startup hold). r1 was `darkstr-0056-72fa1796.dmg`. 0052 + 0053 + 0053r2 + 0055 r2 + 0056; omni files match `patches/0056-files` (and 0053r2 ModeXor, 0055 Ffi) |
+| Evidence | `~/AgentDocs/proof/darkstr-0056-r2-20261009-090046/` (self-test `selftest/live-final`, negative control `selftest/live-negctl-0055`, `dmg-verify.log`, `stale-link-check.txt`); r2 (startup hold): `~/AgentDocs/proof/darkstr-0056-r3-20261009-091625/` (`selftest/live-final`, `live-hold`, negative control `live-hold-negctl-0056r2`); **r3:** `~/AgentDocs/proof/darkstr-0056-r4-20261009-100234/` (`selftest/live-final` + `live-final2`, negative control `live-negctl-0056r2`, `dmg-verify.log`) |
 
 ### Design
 
@@ -609,6 +609,15 @@ Every scenario greps darkstr files and prefs.js (excluding the harness's own use
 hostnames: none. Negative control (0055 DMG app, no store, same driver): keep_restart, clear_one, contexts and
 kill9 all FAIL on the behaviour checks (seeds per session, clears are no-ops).
 
+### 0056r3 live self-test (`darkstr-0056-r4-20261009-100234`, DMG `0cb9a326`)
+
+All 10 scenarios plus two new ones PASS:
+- 10 scenarios (`live-final`): `file_format_v2` (hashed `c`); `contexts` adds `same_site_unlinkable_across_contexts`; `clear_all_range` adds `range_resets_all` and `range_keeps_key`.
+- `range_regression` (Proof #87 2f, `live-final2`): after a Clear Recent History range clear, NP's snapshot cache (`0|a`, `0|b`, `1|a`) is empty and `flushErrors` is 0. The next load of A, B and container-A shows a new persona that matches the new seed, with no restart. The new personas hold after a restart.
+- `v1_migrate` (`live-final2`): a v1 file is adopted on use and rewritten as v2 with the same label. The unused v1 entry is wiped once.
+
+Negative control on the 0056r2 app (`137c3b27`): `range_regression` FAILs, reproducing Proof's finding. The seeds change but the snapshot cache is not flushed, the visible persona stays stale, and the state is inconsistent after restart.
+
 ### Residual
 
 - **Startup (0056r2).** While the store is still loading (file read + Keychain
@@ -625,6 +634,13 @@ kill9 all FAIL on the behaviour checks (seeds per session, clears are no-ops).
 - Container resolution probes contexts up to 4096. An entry whose container
   cannot be resolved is still cleared by a range clear or clear-all, and is
   dropped at load under clear-on-shutdown when its site can't be matched.
+- **Cross-build Keychain prompt (since 0056r1).** macOS ties the Keychain item to
+  the code signature of the build that created it. These are ad-hoc-signed
+  builds, so a different build opening the same profile triggers a Keychain
+  access prompt; seen in r3 testing, when a 0056r2-created store was opened by
+  the r3 app. Until the prompt is answered the store stays loading. The startup
+  hold gives up after its cap, and that session uses temporary seeds. A stable
+  Developer ID signature avoids this. **Proof: use a fresh profile per DMG.**
 - The Keychain item is per profile (random label). Deleting the profile folder
   leaves it in the login keychain until a clear-all.
 
