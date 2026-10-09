@@ -654,6 +654,13 @@ Live results (no `canvas` permission anywhere):
 - Off mode never touches either pref.
 - Tests: `tests/off-mode-hands-off-0053.test.mjs` (round trips with user values, stomps, backfill, off mode, xorSafe).
 
+**Rebuilt DMG `darkstr-0057r4-49dbb327.dmg`** (0056r5 + 0057 at this fix; supersedes `789d970b`). dmgverify: 9/9 omni files MATCH the pins.
+- Private windows (`selftest-pbm2`, armed, default prefs, fresh profile): **71/71**. Every window is 0 px export vs read (2D, GL, drawImage, OffscreenCanvas in page / dedicated / shared / service): normal, private, private after a runtime FPP-pbmode stomp, and private2 after an RFP-pbmode stomp. Both pbmode prefs read false under Pollution and are back to stock defaults (no user value) after leaving.
+- WebGL strings (`gl57r4`): **605/605**. 0057r3 regression suite: **243/243**.
+- 0056r5 late keep, live (`selftest-latekeep`, no manual flush):
+  - **On r4:** late PASS, readd PASS, remove PASS (re-rolls).
+  - **Negative control on the old `789d970b`:** late FAIL and readd FAIL (empty disk store, persona re-rolls). This reproduces Proof #93.
+
 ### Residual / for Proof
 
 - **(Fixed in 0057r2, see above.) Engine canvas noise under Pollution = baseline FPP.** ModeXor sets RFP and FPP to false, but `privacy.baselineFingerprintingProtection` stays true (Firefox default). Its canvas randomization adds per-session engine noise on top of darkstr's layer, so `toDataURL`/`toBlob`/`convertToBlob` vs `getImageData` and GL sub-rect/`toDataURL` disagree (`engine_rfp`: 94/2944 URL pixels).
