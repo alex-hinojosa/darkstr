@@ -31,6 +31,7 @@ MAP=(
   "DarkstrNavigatorHooks.h:dom/base/DarkstrNavigatorHooks.h"
   "WorkerNavigator.cpp:dom/workers/WorkerNavigator.cpp"
   "WorkerPrivate.cpp:dom/workers/WorkerPrivate.cpp"
+  "ScriptLoader.cpp:dom/workers/ScriptLoader.cpp"
 )
 (cd "$F" && shasum -a 256 -c SHA256SUMS)
 # 0051-applied baseline the patch was cut against.
@@ -41,7 +42,8 @@ BASE_SUMS="65caff30ad138bd6ed63be3dc9c43e7504afa37fb2fdee3a0a9dcb9e6f2b8dcb  bro
 77bcbfa03a6e6a1237c1228e52b9935ceede0417e578ffc31e3509ff540ce48e  dom/base/DarkstrNavigatorHooks.cpp
 d75b5535baf5cc3108a2bd90e5fea4ca97723992aa5d608f13ce7747904aa6bd  dom/base/DarkstrNavigatorHooks.h
 3fac7c4a6dfbf71f869c93b79ec9467e3273fda8a4fe214ce08d5885a210102b  dom/workers/WorkerNavigator.cpp
-9645a1ee3e54a0f5df54437dc9cae6a0161f110acc9ad8c81f398f1c296fb32f  dom/workers/WorkerPrivate.cpp"
+9645a1ee3e54a0f5df54437dc9cae6a0161f110acc9ad8c81f398f1c296fb32f  dom/workers/WorkerPrivate.cpp
+ddfea257402574d3430a7c6bf281c2a8bf8e9da613d0fec6c66c15449bfa8cb1  dom/workers/ScriptLoader.cpp"
 already=1
 for e in "${MAP[@]}"; do cmp -s "$F/${e%%:*}" "$R/${e#*:}" || already=0; done
 if [[ $already == 1 ]]; then
@@ -62,6 +64,7 @@ grep -Fq 'DarkstrWorkerPersonaChild' "$C/DarkstrWorkerHooksChild.sys.mjs"
 grep -Fq 'ResolveWorkerPersona' "$R/dom/workers/WorkerPrivate.cpp"
 grep -Fq 'RunWorkerPrelude' "$R/dom/workers/WorkerPrivate.cpp"
 grep -Fq 'PersonaForWorker' "$R/dom/workers/WorkerNavigator.cpp"
+grep -Fq 'darkstr 0049r2' "$R/dom/workers/ScriptLoader.cpp"  # 0049r2: nested worker main script labelled
 if grep -Eq 'rv:135|Mac OS X 14\.0|UA_GROUPS' "$C/DarkstrWorkerHooks.sys.mjs"; then
   echo "error: separate worker UA list still present" >&2; exit 1
 fi

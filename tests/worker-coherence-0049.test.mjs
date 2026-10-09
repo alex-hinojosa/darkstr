@@ -704,3 +704,35 @@ test("0049r2: defaults — dedicated worker requests untouched (plain Firefox 15
     assert.equal(ch.al(), NATIVE_AL);
   }
 });
+
+test("0049r2 C++: nested worker main script carries the owning window's BC (gated; default stock)", () => {
+  const sl = src("ScriptLoader.cpp");
+  const run = sl.slice(sl.indexOf("class ChannelGetterRunnable"));
+  const body = run.slice(0, run.indexOf("GetResult()"));
+  const iChan = body.indexOf("ChannelFromScriptURLMainThread(");
+  const iGate = body.indexOf("DarkstrNavigatorHooks::PollutionNativeHooksActive()");
+  const iSet = body.indexOf("SetAssociatedBrowsingContextID(bcID)");
+  const iPrin = body.indexOf("SetPrincipalsAndCSPFromChannel(channel)");
+  assert.ok(iChan > 0 && iChan < iGate && iGate < iSet && iSet < iPrin, "channel → gate → label → principals");
+  assert.match(body, /workerPrivate->AssociatedBrowsingContextID\(\)/, "parent worker's owning window BC");
+  assert.match(sl, /#include "DarkstrNavigatorHooks\.h"/);
+  // Only the include and that one block are touched.
+  assert.equal((sl.match(/darkstr 0049r2/g) || []).length, 2);
+});
+
+test("0049r2: nested worker main script (labelled by C++) == nested navigator == owning document", () => {
+  fresh(ARMED);
+  const a = newTab();
+  navigate(a, "https://alpha.test/");
+  navigate(a, "https://alpha.test/2"); // armed same-site tab
+  const b = newTab();
+  const first = navigate(b, "https://alpha.test/other"); // native first doc
+  const outer = startWorker({ wg: first.wg });
+  const trig = principal("https://alpha.test/");
+  const nestedMain = fire(channel("https://alpha.test/w/inner.js", { bc: null, type: 2, triggering: trig, assoc: b }));
+  assert.equal(nestedMain.ua(), outer.ua);
+  assert.equal(nestedMain.ua(), NATIVE_UA);
+  // Without the C++ label (stock Gecko) it would fall to the site rule (armed): documents the gap the label closes.
+  const unlabelled = fire(channel("https://alpha.test/w/inner.js", { bc: null, type: 2, triggering: trig }));
+  assert.notEqual(unlabelled.ua(), NATIVE_UA);
+});

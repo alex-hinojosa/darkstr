@@ -2182,3 +2182,33 @@
    // Gecko contexts always have an explicitly-set default locale (set by
    // XPJSRuntime::Initialize for the main thread, set by
    // WorkerThreadPrimaryRunnable::Run for workers just before running worker
+--- a/dom/workers/ScriptLoader.cpp
++++ b/dom/workers/ScriptLoader.cpp
+@@ -6,6 +6,7 @@
+ 
+ #include <algorithm>
+ 
++#include "DarkstrNavigatorHooks.h"  // darkstr 0049r2
+ #include "WorkerRunnable.h"
+ #include "WorkerScope.h"
+ #include "js/CompilationAndEvaluation.h"
+@@ -350,6 +351,19 @@
+         mLoadInfo.mReferrerInfo, getter_AddRefs(channel));
+     NS_ENSURE_SUCCESS(mResult, true);
+ 
++    // darkstr 0049r2: Gecko labels every request a dedicated worker makes
++    // with the owning window's browsing context (associatedBrowsingContextID)
++    // except a nested worker's main script. Label it too while the persona
++    // hooks are on, so the parent process resolves its UA/Accept-Language
++    // from the same document as the nested worker's navigator (inherited
++    // from this parent) instead of the windowless site rule. Default: stock.
++    if (DarkstrNavigatorHooks::PollutionNativeHooksActive()) {
++      if (uint64_t bcID = workerPrivate->AssociatedBrowsingContextID()) {
++        nsCOMPtr<nsILoadInfo> darkstrLoadInfo = channel->LoadInfo();
++        (void)darkstrLoadInfo->SetAssociatedBrowsingContextID(bcID);
++      }
++    }
++
+     mResult = mLoadInfo.SetPrincipalsAndCSPFromChannel(channel);
+     NS_ENSURE_SUCCESS(mResult, true);
+ 
