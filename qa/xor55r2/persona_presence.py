@@ -35,6 +35,13 @@ def APPLIED(n):
     return _tuple(n) != NATIVE_T
 
 
+def describe(n):
+    """Grade detail: the record's tuple, the native tuple, and which fields differ (never the UA)."""
+    t = _tuple(n)
+    return {'tuple': [t[0], t[1], list(t[2]), t[3]], 'native': [NATIVE_T[0], NATIVE_T[1], list(NATIVE_T[2]), NATIVE_T[3]],
+            'differs': applied_fields(n), 'nativeSource': NATIVE_SOURCE}
+
+
 def applied_fields(n):
     """Which of the four fields differ from native (for grade details)."""
     t = _tuple(n)

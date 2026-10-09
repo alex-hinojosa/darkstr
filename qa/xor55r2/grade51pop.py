@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 # Ported from Proof's r2adapt (darkstr-0055r2-xor-20261009-085907/harness/r2adapt, see PROVENANCE.sha256).
 # Change vs. Proof: the inline Mini NATIVE_T / APPLIED moved to persona_presence (native tuple from env XOR_NATIVE_TUPLE, else the Mini values).
+# 0058r2 (Proof #92): the armed checks are named for what they test -- persona tuple (languages, cores, TZ, platform) != native --
+# and never compare the UA; since 0055r2 / 0058 a persona keeps the real engine UA, so "UA != real" is not a presence signal.
 """grade xor51r2.py XOR_MODE=popup2 runs. usage: grade51pop.py <dir>  (pop_*.json) -> GRADEPOP.txt/json"""
 import json, sys
 from pathlib import Path
@@ -8,7 +10,7 @@ D = Path(sys.argv[1])
 REAL_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:156.0) Gecko/20100101 Firefox/156.0'; DEF_AL = 'en-US,en;q=0.9'
 
 import sys as _sys; _sys.path.insert(0, str(__import__('pathlib').Path(__file__).resolve().parent))
-from persona_presence import APPLIED  # noqa: E402
+from persona_presence import APPLIED, applied_fields  # noqa: E402
 import persona_presence as _pp  # noqa: E402
 def fmtAL(l): return ','.join(t + (f';q=0.{max(10-min(10,i),1)}' if i > 0 and max(10-min(10,i),1) < 10 else '') for i, t in enumerate(l or []))
 def per(n): n = n or {}; return (n.get('userAgent'), n.get('platform'), n.get('hardwareConcurrency'), tuple(n.get('languages') or []))
@@ -24,7 +26,7 @@ for f in sorted(D.glob('pop_*.json')):
     pp = run.get('popup2') or {}; op = pp.get('opener') or {}
     chk('harness', 'popup2 probe ran', pp and 'exception' not in pp and 'harnessTimeout' not in pp, str(pp)[:300])
     ouA, oal = op.get('userAgent'), fmtAL(op.get('languages'))
-    if armed: chk('pop', 'opener t1d2 armed (UA != real 156)', ouA and APPLIED(op), ouA)
+    if armed: chk('pop', 'opener t1d2 armed (persona tuple != native: languages/cores/TZ)', ouA and APPLIED(op), _pp.describe(op))
     else: chk('pop', 'default: opener plain 156', ouA == REAL_UA, ouA)
     def http_ok(name, h, ua, al):
         h = h or {}; chk('pop', f'{name}: HTTP UA == expected', h.get('ua') == ua, f"http={h.get('ua')!r} exp={ua!r}")
@@ -54,7 +56,7 @@ for f in sorted(D.glob('pop_*.json')):
         if armed:
             if tab in ('noop', 'lnk'): chk('pop', f'{label}: navigator == live armed decision for site A (t1d2 persona)', per(n) == per(ref), f'{per(n)} vs {per(ref)}')
             else:
-                chk('pop', f'{label}: keeps opener armed bit (UA != real 156)', APPLIED(n), (ua, n.get('tz'), n.get('hardwareConcurrency')))
+                chk('pop', f'{label}: keeps opener armed bit (persona tuple != native: languages/cores/TZ)', APPLIED(n), _pp.describe(n))
                 chk('info', f'{label}: persona == armed user-tab persona of its own site (t2d2)', per(n) == per((P.get('t2d2') or {}).get('nav')), f"{per(n)} vs {per((P.get('t2d2') or {}).get('nav'))}")
         else: chk('pop', f'default {label}: plain 156', ua == REAL_UA, ua)
         sub = [(t, r) for t, rs in by.items() if t.startswith(tab + 'd1-') for r in rs if r['method'] != 'OPTIONS']
