@@ -641,6 +641,17 @@ Before the fix:
 - `plain` PASSes on 0056r2, 0057r2 and 0057r3;
 - `xframe` FAILs on all three, and so does a direct `deleteDataFromPrincipal` probe with A's partitioned principal.
 
+### 0056r5: keep permission changes reach disk (Proof #93 latekeepnm)
+
+**Proof finding (present since 0056r2).** If a site is marked keep (`persist-data-on-shutdown` ALLOW) after its seed was handed out, and the user quits with no other persona write, the persona re-rolls on the next launch. The keep rule is evaluated at save time, but `flush()` returned early unless a seed write had set `_dirty`. The same thing happened when keep was re-added after a clear-all, because CLEAR_ALL also drops the permission.
+
+**Fix (DarkstrPersonaSeedStore).**
+- While active (Pollution rotation), the store observes `perm-changed`. A change to a permission the keep rule reads (`persist-data-on-shutdown`, `cookie` for ACCESS_SESSION) marks the store dirty and schedules a save: added / changed / deleted, and `cleared` for all permissions. The profile-before-change blocker flushes it at quit.
+- Additions write the newly kept seed; removals and session-cookie grants prune it.
+- During the startup load, the change only marks the store dirty, and `_load()` schedules the save once ready.
+- Unrelated permission types and passive (off-mode) stores never write.
+- Tests: `tests/persona-seed-store-0056.test.mjs`, "0056r5" cases. They cover the late keep with no further write, the old-behaviour control, removal and clear-all pruning, re-add after clear-all, the session-cookie grant, unrelated types, the passive store and the wiring.
+
 ### Residual
 
 - **Startup (0056r2).** While the store is still loading (file read + Keychain

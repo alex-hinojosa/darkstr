@@ -44,6 +44,7 @@ for e in "${MAP[@]}"; do
 done
 grep -Fq 'cleaners: [FingerprintingProtectionStateCleaner, DarkstrPersonaSeedCleaner],' "$R/toolkit/components/cleardata/ClearDataService.sys.mjs"
 grep -Fq '"DarkstrPersonaSeedStore.sys.mjs",' "$R/browser/components/moz.build"
+grep -Fq 'Services.obs.addObserver(this, "perm-changed")' "$R/browser/components/DarkstrPersonaSeedStore.sys.mjs"
 grep -Fq 'u"privateBrowsingId"_ns' "$R/dom/base/DarkstrNavigatorHooks.cpp"
 echo "0056 applied. Build (objdir pinned; never a bare mach build; moz.build changed -> mach build re-runs configure-time backend):"
 echo "  cd \$DARKSTR_GECKO_ROOT && MOZ_OBJDIR=\$DARKSTR_GECKO_ROOT/obj-aarch64-apple-darwin25.6.0 ./mach build && MOZ_OBJDIR=\$DARKSTR_GECKO_ROOT/obj-aarch64-apple-darwin25.6.0 ./mach package"
