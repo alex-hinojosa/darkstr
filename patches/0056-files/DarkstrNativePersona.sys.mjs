@@ -790,11 +790,11 @@ export var DarkstrNativePersona = {
         }
       }
     }
-    try {
-      ChromeUtils.importESModule(
-        "moz-src:///browser/components/DarkstrDepthHooks.sys.mjs"
-      ).DarkstrDepthHooks.flushSeedCopies?.();
-    } catch (_e) {}
+    // 0056r3: a DepthHooks failure is reported to the store (logged and
+    // counted there), not swallowed; the NP maps above are flushed already.
+    ChromeUtils.importESModule(
+      "moz-src:///browser/components/DarkstrDepthHooks.sys.mjs"
+    ).DarkstrDepthHooks.flushSeedCopies?.();
   },
 
   _ctxOfBC(bc) {
