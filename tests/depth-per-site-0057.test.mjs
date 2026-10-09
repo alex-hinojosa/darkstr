@@ -245,7 +245,8 @@ test("0057 replaceMethod never stacks on its own wrapper (waiver-safe identity)"
 test("0057r2: ModeXor owns baseline FPP only under Pollution (saved/restored with RFP/FPP)", () => {
   const MXs = src("DarkstrModeXor.sys.mjs");
   assert.match(MXs, /\[BASELINE_FPP_PREF, false\],/);
-  assert.match(MXs, /const BACKFILL_PREFS = Object\.freeze\(\[BASELINE_FPP_PREF\]\);/);
+  // 0057r4 adds the private-window prefs after baseline FPP.
+  assert.match(MXs, /const BACKFILL_PREFS = Object\.freeze\(\[\s*BASELINE_FPP_PREF,/);
   assert.match(MXs, /addObserver\(BASELINE_FPP_PREF/);
   assert.match(MXs, /removeObserver\(BASELINE_FPP_PREF/);
 });

@@ -634,6 +634,26 @@ Live results (no `canvas` permission anywhere):
 - The Windows pool used Chrome-style `ANGLE (…, OpenGL 4.5)` strings, which Gecko's sanitizer turns into "Generic Renderer". They are now the ANGLE Direct3D11 raw strings Firefox on Windows sees, with the same cap buckets.
 - Tests: `tests/webgl-renderer-0057r4.test.mjs`. It covers the bucket table, every pool entry, pass-through of stock null / "Mozilla", the worker prelude for WebGL1 and WebGL2, the page hook order, and byte-identity across copies.
 
+### 0057r4: private windows get darkstr's canvas noise only (Proof #92 / 0058r2 pbm finding)
+
+**Proof finding.** In a new private window, canvas `toDataURL` / `toBlob` / `convertToBlob` differed from `getImageData` (220 px), and WebGL exports differed from `readPixels` (465 px). Normal windows were at 0 px. It was present since 0057r2.
+
+**Cause.** Gecko 156 picks the protection mode per window: `nsRFPService::GetFingerprintingProtectionType(aIsPrivateMode)`.
+- In a private window, `privacy.fingerprintingProtection.pbmode` (StaticPrefList default **true**; strict's `fppPrivate`) turns on FPP mode, and FPP's CanvasRandomization noises the export paths.
+- `privacy.resistFingerprinting.pbmode` would do the same with RFP.
+- Pollution set only the global RFP / FPP / baseline prefs.
+- Self-test (`selftest-pbm`, same profile): private window 54 px on 2D exports and 230 px on GL exports in the page, OffscreenCanvas and dedicated / shared / service workers. With `privacy.fingerprintingProtection.pbmode=false` actually set at runtime: 0 px everywhere.
+- Proof's `pbmoff` run recorded the pref as default `true` at runtime (no user value), so that control never took effect.
+
+**Fix (DarkstrModeXor).**
+- `privacy.fingerprintingProtection.pbmode` and `privacy.resistFingerprinting.pbmode` join POLLUTION_PREFS (both false). They are saved once on entry and restored exactly on exit, like RFP / FPP / baseline FPP.
+- They are also in BACKFILL_PREFS: a profile already in Pollution under an older build records their current (user / stock) state before darkstr takes them over.
+- Both prefs are observed, and stomps under Pollution are re-asserted.
+- `xorSafe` requires both off.
+- The 0057c category re-match covers them through POLLUTION_PREFS: strict's `fppPrivate` = pbmode true is put back on exit.
+- Off mode never touches either pref.
+- Tests: `tests/off-mode-hands-off-0053.test.mjs` (round trips with user values, stomps, backfill, off mode, xorSafe).
+
 ### Residual / for Proof
 
 - **(Fixed in 0057r2, see above.) Engine canvas noise under Pollution = baseline FPP.** ModeXor sets RFP and FPP to false, but `privacy.baselineFingerprintingProtection` stays true (Firefox default). Its canvas randomization adds per-session engine noise on top of darkstr's layer, so `toDataURL`/`toBlob`/`convertToBlob` vs `getImageData` and GL sub-rect/`toDataURL` disagree (`engine_rfp`: 94/2944 URL pixels).
@@ -790,6 +810,17 @@ A's own first-party principal still clears A.
 Before the fix:
 - `plain` PASSes on 0056r2, 0057r2 and 0057r3;
 - `xframe` FAILs on all three, and so does a direct `deleteDataFromPrincipal` probe with A's partitioned principal.
+
+### 0056r5: keep permission changes reach disk (Proof #93 latekeepnm)
+
+**Proof finding (present since 0056r2).** If a site is marked keep (`persist-data-on-shutdown` ALLOW) after its seed was handed out, and the user quits with no other persona write, the persona re-rolls on the next launch. The keep rule is evaluated at save time, but `flush()` returned early unless a seed write had set `_dirty`. The same thing happened when keep was re-added after a clear-all, because CLEAR_ALL also drops the permission.
+
+**Fix (DarkstrPersonaSeedStore).**
+- While active (Pollution rotation), the store observes `perm-changed`. A change to a permission the keep rule reads (`persist-data-on-shutdown`, `cookie` for ACCESS_SESSION) marks the store dirty and schedules a save: added / changed / deleted, and `cleared` for all permissions. The profile-before-change blocker flushes it at quit.
+- Additions write the newly kept seed; removals and session-cookie grants prune it.
+- During the startup load, the change only marks the store dirty, and `_load()` schedules the save once ready.
+- Unrelated permission types and passive (off-mode) stores never write.
+- Tests: `tests/persona-seed-store-0056.test.mjs`, "0056r5" cases. They cover the late keep with no further write, the old-behaviour control, removal and clear-all pruning, re-add after clear-all, the session-cookie grant, unrelated types, the passive store and the wiring.
 
 ### Residual
 
