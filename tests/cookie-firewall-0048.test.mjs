@@ -6,6 +6,9 @@
  * credentials 'omit', third-party partitioning by top site, N1 (re-hook per
  * document on reload / same-site navigation) and mirror staleness.
  *
+ * The child actor under test is the shipped one: patches/0051-files when
+ * present (0051 N4: prototype-level, native-shaped hooks), else 0048-files.
+ *
  * 0048r2 (Proof FAILED f3f1e748): F1 response ordering (suspend until the
  * content cache acked), F2 A-B-A / cross-site no-cors fetch (Gecko TCP +
  * foreign-ancestor bit), F3 native gate (pref on the default branch, child
@@ -14,12 +17,15 @@
  */
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join } from "node:path";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const FILES = join(root, "patches/0048-files");
+const CHILD_FILES = existsSync(join(root, "patches/0051-files/DarkstrCookieFirewallChild.sys.mjs"))
+  ? join(root, "patches/0051-files")
+  : FILES;
 const FW_URL = "moz-src:///browser/components/DarkstrCookieFirewall.sys.mjs";
 
 // ---------------------------------------------------------------- stubs ---
@@ -106,6 +112,7 @@ globalThis.Ci = {
 };
 globalThis.Cu = {
   waiveXrays: (x) => x,
+  unwaiveXrays: (x) => x,
   exportFunction: (f) => f,
   cloneInto: (v) => v,
 };
@@ -137,7 +144,7 @@ globalThis.WindowGlobalParent = { getByInnerWindowId: (id) => wgById.get(id) || 
 const fwMod = await import(pathToFileURL(join(FILES, "DarkstrCookieFirewall.sys.mjs")));
 registry[FW_URL] = fwMod;
 const childMod = await import(
-  pathToFileURL(join(FILES, "DarkstrCookieFirewallChild.sys.mjs"))
+  pathToFileURL(join(CHILD_FILES, "DarkstrCookieFirewallChild.sys.mjs"))
 );
 const { DarkstrCookieFirewall: FW, DarkstrCookieCore: Core } = fwMod;
 
@@ -516,15 +523,56 @@ function wireSync() {
   const origSend = globalThis.JSWindowActorChild.prototype.sendAsyncMessage;
   return origSend;
 }
+// Native-shaped DOM: `cookie` accessor on Document.prototype (HTMLDocument
+// inherits it), CookieStore methods on CookieStore.prototype. The native
+// members are the "real jar" — the firewall must never reach them.
+const nativeJar = new WeakMap();
+const nativeCalls = [];
+const DocumentProto = {};
+{
+  const acc = {
+    get cookie() {
+      if (!nativeJar.has(this)) throw new TypeError("'get cookie' called on an object that does not implement interface Document.");
+      nativeCalls.push("get cookie");
+      return nativeJar.get(this);
+    },
+    set cookie(v) {
+      if (!nativeJar.has(this)) throw new TypeError("'set cookie' called on an object that does not implement interface Document.");
+      nativeCalls.push("set cookie");
+      nativeJar.set(this, String(v));
+    },
+  };
+  const d = Object.getOwnPropertyDescriptor(acc, "cookie");
+  Object.defineProperty(DocumentProto, "cookie", { get: d.get, set: d.set, enumerable: true, configurable: true });
+}
+const HTMLDocumentProto = Object.create(DocumentProto);
+const CookieStoreProto = {};
+{
+  const natives = {
+    get() { nativeCalls.push("store.get"); return Promise.resolve(null); },
+    getAll() { nativeCalls.push("store.getAll"); return Promise.resolve([]); },
+    set(_nameOrOptions) { nativeCalls.push("store.set"); return Promise.resolve(); },
+    delete(_nameOrOptions) { nativeCalls.push("store.delete"); return Promise.resolve(); },
+  };
+  for (const [k, v] of Object.entries(natives)) {
+    Object.defineProperty(CookieStoreProto, k, { value: v, writable: true, enumerable: true, configurable: true });
+  }
+}
+const NATIVE_COOKIE = Object.getOwnPropertyDescriptor(DocumentProto, "cookie");
+const NATIVE_STORE = Object.getOwnPropertyDescriptors(CookieStoreProto);
 function fakeDoc(url) {
-  return { nodePrincipal: principal(url) };
+  const doc = Object.create(HTMLDocumentProto);
+  Object.defineProperty(doc, "nodePrincipal", { value: principal(url) });
+  nativeJar.set(doc, "");
+  return doc;
 }
 function fakeWindow() {
   return {
     Promise,
-    cookieStore: { get() {}, getAll() {}, set() {}, delete() {} },
+    cookieStore: Object.create(CookieStoreProto),
   };
 }
+const hooked = (doc) => !!childMod.installRecordFor(doc);
 
 test("N1: reload / same-site navigation in the same tab re-hooks document.cookie", () => {
   fresh();
@@ -533,30 +581,62 @@ test("N1: reload / same-site navigation in the same tab re-hooks document.cookie
   const win = fakeWindow(); // same WindowProxy across navigations
   const doc1 = fakeDoc("http://a.test/?n=1");
   childActorFor(t.currentWindowGlobal, doc1, win).handleEvent({ type: "DOMWindowCreated" });
-  assert.ok(Object.getOwnPropertyDescriptor(doc1, "cookie")?.get, "first document hooked");
+  assert.ok(hooked(doc1), "first document hooked");
+  assert.equal(Object.hasOwn(doc1, "cookie"), false, "no own property");
   for (const url of ["http://a.test/?n=2", "http://a.test/?n=2" /* reload */]) {
     const wg = load(t, url);
     const doc = fakeDoc(url);
     childActorFor(wg, doc, win).handleEvent({ type: "DOMWindowCreated" });
-    const d = Object.getOwnPropertyDescriptor(doc, "cookie");
-    assert.ok(d?.get, `document after navigation to ${url} is hooked`);
+    assert.ok(hooked(doc), `document after navigation to ${url} is hooked`);
+    assert.equal(Object.hasOwn(doc, "cookie"), false);
     assert.equal(childMod.installRecordFor(doc)?.ctx.decision, "sandbox");
   }
 });
 
-test("hook names carry no brand string", () => {
+test("0051 N4: cookie hooks are prototype-level and native-shaped (no own props, no brand)", async () => {
   fresh();
   wireSync();
-  const t = tab("http://a.test/");
-  const doc = fakeDoc("http://a.test/");
+  const t = tab("https://a.test/");
+  const doc = fakeDoc("https://a.test/");
   const win = fakeWindow();
   childActorFor(t.currentWindowGlobal, doc, win).handleEvent({ type: "DOMWindowCreated" });
-  const d = Object.getOwnPropertyDescriptor(doc, "cookie");
+  assert.ok(hooked(doc));
+  assert.deepEqual(Object.getOwnPropertyNames(doc), ["nodePrincipal"], "no own cookie property");
+  assert.deepEqual(Object.getOwnPropertyNames(win.cookieStore), [], "no own cookieStore methods");
+  const d = Object.getOwnPropertyDescriptor(DocumentProto, "cookie");
+  assert.notEqual(d.get, NATIVE_COOKIE.get, "hook lives on Document.prototype");
+  assert.equal(Object.getOwnPropertyDescriptor(HTMLDocumentProto, "cookie"), undefined);
   assert.equal(d.get.name, "get cookie");
   assert.equal(d.set.name, "set cookie");
+  assert.equal(d.get.length, 0);
+  assert.equal(d.set.length, 1);
+  assert.equal(d.enumerable, NATIVE_COOKIE.enumerable);
+  assert.equal(d.configurable, NATIVE_COOKIE.configurable);
   for (const m of ["get", "getAll", "set", "delete"]) {
-    assert.equal(win.cookieStore[m].name, m);
+    const sd = Object.getOwnPropertyDescriptor(CookieStoreProto, m);
+    assert.notEqual(sd.value, NATIVE_STORE[m].value, `${m} hooked on CookieStore.prototype`);
+    assert.equal(sd.value.name, m);
+    assert.doesNotMatch(sd.value.name, /darkstr/i);
+    assert.equal(sd.value.length, NATIVE_STORE[m].value.length, `${m}.length native`);
+    assert.equal(sd.writable, true);
+    assert.equal(sd.enumerable, true);
   }
+  // The sandbox answers for this document; the real jar is never touched.
+  nativeCalls.length = 0;
+  doc.cookie = "proto=1; Path=/";
+  assert.match(doc.cookie, /proto=1/);
+  assert.deepEqual((await win.cookieStore.getAll()).map((c) => c.name), ["proto"]);
+  assert.deepEqual(nativeCalls, []);
+  // A receiver that is not a hooked document goes to the native member.
+  assert.throws(() => d.get.call({}), TypeError);
+  const other = fakeDoc("https://b.test/");
+  other.cookie = "native=1";
+  assert.equal(other.cookie, "native=1");
+  assert.deepEqual(nativeCalls, ["set cookie", "get cookie"]);
+  await Object.create(CookieStoreProto).get("x");
+  assert.ok(nativeCalls.includes("store.get"));
+  // Uninstall restores the native members once no document uses them.
+  childMod.uninstallCookieHooks(doc);
 });
 
 test("mirror staleness: same-process documents share writes; HTTP Set-Cookie pushed live", () => {
@@ -618,10 +698,10 @@ test("N1: initial about:blank reused for a same-origin document is re-hooked (DO
   const f = frame(t, "http://a.test/");
   f.currentWindowGlobal.documentURI = uri("about:blank"); // inherits a.test principal
   const win = fakeWindow();
-  const blank = { nodePrincipal: principal("http://a.test/") };
+  const blank = fakeDoc("http://a.test/"); // inherits a.test principal
   const actor = childActorFor(f.currentWindowGlobal, blank, win);
   actor.handleEvent({ type: "DOMWindowCreated" });
-  assert.ok(Object.getOwnPropertyDescriptor(blank, "cookie")?.get, "about:blank hooked");
+  assert.ok(hooked(blank), "about:blank hooked");
   let calls = 0;
   const sync = Services.cpmm.sendSyncMessage;
   Services.cpmm.sendSyncMessage = (...a) => (calls++, sync(...a));
@@ -629,7 +709,7 @@ test("N1: initial about:blank reused for a same-origin document is re-hooked (DO
   actor.document = framed; // same actor / innerWindowId, new document, no DOMWindowCreated
   f.currentWindowGlobal.documentURI = uri("http://a.test/frame"); // WindowGlobalChild::OnNewDocument
   actor.handleEvent({ type: "DOMDocElementInserted" });
-  assert.ok(Object.getOwnPropertyDescriptor(framed, "cookie")?.get, "reused-window document hooked");
+  assert.ok(hooked(framed), "reused-window document hooked");
   assert.equal(childMod.installRecordFor(framed)?.ctx.decision, "sandbox");
   actor.handleEvent({ type: "DOMDocElementInserted" });
   assert.equal(calls, 1, "one sync policy fetch per document");
@@ -651,6 +731,7 @@ test("non-http(s) principal documents are never hooked and cause no IPC", () => 
   actor.handleEvent({ type: "DOMWindowCreated" });
   assert.equal(calls, 0);
   assert.equal(Object.getOwnPropertyDescriptor(doc, "cookie"), undefined);
+  assert.equal(hooked(doc), false);
 });
 
 test("module header claim (line 29) is backed: strip + hook-every-document + residual named", () => {

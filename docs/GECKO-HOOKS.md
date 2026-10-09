@@ -91,7 +91,7 @@ Glue reads cached `PersonaSnapshot` **only** when `pollution_active` (`read_cach
 | Process / profile start seed | Browser chrome init / content process launch | M3 | Enum/plan only — live seed wiring private-fork |
 | HTTP User-Agent | **nsHttp** C++ `UserAgent()` + chrome `http-on-modify-request` | M3 / M3-CPP | Live chrome `0003` + C++ `0005` (`DarkstrNsHttpHooks`); Rust label `OverrideUserAgent` |
 | Client Hints | nsHttp request header policy | M3 / M3-CPP | REMOVE in `0003` + C++ `0005` (never SET); Rust `ClientHintsPolicy::Remove` |
-| `navigator.*` / platform / HW | JSWindowActor child + **C++** `Navigator.cpp` | M3 / M3-CPP-NAV | Live chrome `0003` + C++ `0006` (`DarkstrNavigatorHooks`); `deviceMemory`/`userAgentData` stay chrome on Firefox host |
+| `navigator.*` / platform / HW | JSWindowActor child + **C++** `Navigator.cpp` | M3 / M3-CPP-NAV | **0051:** chrome child only — per-document, on `Navigator.prototype`, native-shaped; window `Navigator.cpp` global-pref hooks removed (`DarkstrNavigatorHooks` kept for `WorkerNavigator`, 0049). No `deviceMemory` / `userAgentData` (Firefox has neither) |
 | Feature flag | `darkstr.nativePersonaHooks` | M3 | Pref + WebExt MAIN inject gate + chrome plan |
 
 **Headed skim:** avoid `general.useragent.override` contamination — nsHttpHandler falls through to it when darkstr hooks are idle; clear it for CreepJS/BrowserLeaks on fork profiles.
