@@ -1,6 +1,6 @@
 /**
  * 0055: personas claim the engine's Firefox version (Fable N6, decided by
- * Alex), seed fallback == Rust (O9), worker locale == persona (O12).
+ * Alex), seed fallback == Rust (O9), worker Intl locale == page (O12 r2).
  *
  *   - Rust: duppel_persona builds its UA tables from Gecko's
  *     config/milestone.txt (build.rs → firefox_ua!); no 139/140.
@@ -8,7 +8,7 @@
  *     fallback is an exact port of generate_persona (incl. timezone) and
  *     matches fixtures/persona-goldens-0055.json, which Rust writes/checks.
  *   - A native snapshot that claims another version is not used.
- *   - C++: persona workers get mLanguageOverrideLocale = languages[0].
+ *   - O12 r2: no C++; worker and page Intl both use the app locale (stock).
  *   - Extension (not bundled in the app; kept in sync): UAs from the real
  *     engine UA, appVersion in Gecko's format.
  */
@@ -177,12 +177,24 @@ test("N6: Rust reads the engine version from Gecko's config/milestone.txt", () =
 });
 
 // ------------------------------------------------------------------ O12 ---
-test("O12: persona workers get the persona's JS locale (== navigator.language)", () => {
-  const cpp = readFileSync(join(F55, "DarkstrNavigatorHooks.cpp"), "utf8");
-  assert.match(cpp, /aLoadInfo\.mLanguageOverride = persona->mLanguages\.Clone\(\);\s*\/\/[^]*?aLoadInfo\.mLanguageOverrideLocale =\s*NS_ConvertUTF16toUTF8\(persona->mLanguages\[0\]\);/);
-  // Only inside the persona (HasNavigator, non-empty languages) branch.
-  const i = cpp.indexOf("mLanguageOverrideLocale");
-  assert.ok(cpp.lastIndexOf("if (!persona->mLanguages.IsEmpty()) {", i) > cpp.lastIndexOf("if (persona->HasNavigator()) {", i));
+// r2 (Proof review of #86): Intl locale is the app locale in pages AND workers,
+// as in stock Firefox (Intl never follows Accept-Language / navigator.languages).
+// r1 set WorkerLoadInfo.mLanguageOverrideLocale = persona languages[0], so an
+// armed worker said en-GB while its page said en-US: a page/worker split stock
+// never shows. 0055 no longer touches DarkstrNavigatorHooks.cpp; workers keep
+// the persona navigator.languages (0049) and the app-locale Intl, like the page.
+test("O12 r2: worker Intl locale == page Intl locale (app locale); 0055 ships no hooks C++", () => {
+  assert.ok(!existsSync(join(F55, "DarkstrNavigatorHooks.cpp")), "0055-files must not carry the r1 C++");
+  const cpp0049 = readFileSync(join(root, "patches/0049-files/DarkstrNavigatorHooks.cpp"), "utf8");
+  assert.doesNotMatch(cpp0049, /mLanguageOverrideLocale/);
+  assert.match(cpp0049, /aLoadInfo\.mLanguageOverride = persona->mLanguages\.Clone\(\);/, "worker navigator.languages still persona (0049)");
+  const patch = readFileSync(join(root, "patches/0055-darkstr-persona-ff156.patch"), "utf8");
+  assert.doesNotMatch(patch, /DarkstrNavigatorHooks|mLanguageOverrideLocale/);
+  const sh = readFileSync(join(root, "scripts/apply-0055-persona-ff156-mini.sh"), "utf8");
+  // Upgrades a tree that has 0055 r1 applied back to the 0049 hooks, and refuses a locale override.
+  assert.match(sh, /2219e76d91536db7116638a650547e46fce722307ff899ae2871dcf701a3cf96/);
+  assert.match(sh, /patches\/0049-files\/DarkstrNavigatorHooks\.cpp/);
+  assert.match(sh, /grep -q 'mLanguageOverrideLocale' "\$H"/);
   // The worker payload carries the same languages the page shows.
   const np = readFileSync(join(F55, "DarkstrNativePersona.sys.mjs"), "utf8");
   assert.match(np, /workerPersonaFields\(snap\) \{\s*const child = this\._childSnapshot\(snap\);/);

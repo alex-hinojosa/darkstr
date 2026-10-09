@@ -227,23 +227,6 @@ diff -ruN a/browser/components/DarkstrNativePersona.sys.mjs b/browser/components
    },
  
    /** Tab key for phase counting: BrowserId is tab-stable across Fission swaps. */
-diff -ruN a/dom/base/DarkstrNavigatorHooks.cpp b/dom/base/DarkstrNavigatorHooks.cpp
---- a/dom/base/DarkstrNavigatorHooks.cpp
-+++ b/dom/base/DarkstrNavigatorHooks.cpp
-@@ -254,6 +254,13 @@
-     // timezone), nested workers inherit them from the parent loadInfo.
-     if (!persona->mLanguages.IsEmpty()) {
-       aLoadInfo.mLanguageOverride = persona->mLanguages.Clone();
-+      // darkstr 0055 (Fable O12): the worker's JS locale (Intl default
-+      // locale, toLocaleString, Intl.*().resolvedOptions().locale) is the
-+      // persona's primary language, the same tag as navigator.language.
-+      // WorkerPrivate passes it to the realm options (and nested workers
-+      // inherit it through GetLoadInfo(aParent)).
-+      aLoadInfo.mLanguageOverrideLocale =
-+          NS_ConvertUTF16toUTF8(persona->mLanguages[0]);
-     }
-     if (!persona->mTimezone.IsEmpty()) {
-       aLoadInfo.mTimezoneOverride = persona->mTimezone;
 diff -ruN a/third_party/darkstr/duppel-ffi/src/lib.rs b/third_party/darkstr/duppel-ffi/src/lib.rs
 --- a/third_party/darkstr/duppel-ffi/src/lib.rs
 +++ b/third_party/darkstr/duppel-ffi/src/lib.rs
