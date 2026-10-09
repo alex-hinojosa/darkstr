@@ -1685,6 +1685,52 @@ Spec (Alex): each site gets one persona that stays the same on that site, so the
 2. Intel persona, same setup: `navigator.gpu` and all `GPU*` globals absent in the page and in all worker kinds. The page diff against stock with `dom.webgpu.enabled=false` must be empty.
 3. Mixed tabs: an Intel-persona site and an Apple-persona site open at the same time; each keeps its own gate across reloads and navigations (fix F).
 
+## 0059 (Fable B7): opaque-origin frames take their top-level site's persona
+
+**Gap (main 789f66c):** the parent already gave every frame its top document's decision (`documentDecision`), so requests and timezone (top BC `timezoneOverride`) carried the persona. Four filters in the content process, however, rejected null (opaque) principals. Sandboxed (no `allow-same-origin`), data:, blob:-from-opaque and sandboxed-srcdoc frames therefore showed:
+- the **real navigator** (`DarkstrNativePersonaChild` `isPersonaPrincipal`);
+- **no depth noise** for data: / srcdoc / blob: (the DepthHooks actor's `matches: http(s)/file` never matched them);
+- **native worker navigators** for the workers they own and for data: workers (C++ `ResolveWorkerPersona` admitted content principals only);
+- **ungated WebGPU** (`WebGpuHiddenFor`, same filter).
+
+**Fix (pin `0059`; chrome JS + C++):**
+- **`isOpaquePersonaDocument(principal, bc)`** (NativePersonaChild, DepthHooksChild):
+  - true for any opaque subframe (the parent decides: the top's decision, or native for a non-web top);
+  - true for a top-level opaque document only with an http(s)/file precursor (sandboxed popup).
+  - Navigator install admits these documents. Parent side unchanged.
+- **DepthHooks actor:** `matches` is removed. The child's `depthDocumentEligible` runs before any IPC and admits exactly what `matches` let through (http / https / file document URIs) plus opaque documents. about:, chrome and moz-extension documents stay out.
+- **C++ `DarkstrNavigatorHooks.cpp`:**
+  - `ResolveWorkerPersona` admits null principals **owned by a window** (`aLoadInfo.mWindow`), resolved through the owning document like any dedicated worker. Nested workers inherit as before.
+  - `WebGpuHiddenFor` admits opaque windows.
+  - Windowless opaque workers still get nothing.
+
+**Self-test** (`~/AgentDocs/proof/darkstr-0059-*/selftest`, own server on port 8471, headless, armed Pollution + rotatePerSite, 4 sites with distinct personas plus a Native-Compatible reference):
+- **20 contexts per visit:**
+  - top page, same-origin worker, data: worker;
+  - same-origin frame and its blob worker;
+  - `sandbox="allow-scripts"` http frame with: its blob worker, a nested worker, a data: worker, a nested sandbox (and its worker), a blob: frame created by the opaque origin, and a data: frame;
+  - cross-site sandboxed frame and its worker;
+  - data: frame and its worker;
+  - sandboxed srcdoc, its worker, and a nested sandboxed srcdoc.
+- **Each context must equal the top document on:** UA, languages, language, platform, hardwareConcurrency, appVersion, Intl timeZone and locale, January / July offsets and the Date string.
+- **Its own `/echo` request must carry** its navigator UA and the top request's Accept-Language.
+- **Depth noise must be present**, with the same canvas bytes as the top page (window contexts) or the top's worker (worker contexts).
+
+| build | result |
+|---|---|
+| **`darkstr-0059-6777ce6b.dmg`** (main + 0059) | **1285/1285 PASS** (20/20 contexts × 4 sites) |
+| **negative control, main's DMG `darkstr-0058b-318ac5b0` (= 789f66c)** | **FAIL 1053/1285 (232)**: every opaque context has the native languages / cores while its own request carries the persona's Accept-Language. data: / srcdoc / blob: frames and all opaque workers have no depth noise. Top and same-origin contexts pass. |
+| superseded `darkstr-0059-15e2d087.dmg` (`.BROKEN.txt`) | FAIL 44. A `*/` inside a comment broke `DarkstrDepthHooksChild` (no window depth noise anywhere); navigator / worker parts already passed. Fixed before 6777ce6b. |
+
+On both builds the Native-Compatible visit stays native in all 20 contexts: no noise, native languages / cores / TZ.
+
+**Regression on `darkstr-0059-6777ce6b`** (`darkstr-0059-*/regress/`), each suite on its own port with fresh profiles:
+- Fable S1 first-page armed suite: PASS, the same 18/18 rows as 0058r3.
+- Private windows (pbm2): 71/71, every export path 0 px in normal and private windows.
+- 0057r4 WebGL strings / depth: 605/605 (18 contexts, frames and workers included).
+- 0058b WebGPU gate: 556/556.
+- Keychain: every item the runs created was deleted (0 `darkstr-persona-seeds-*` left).
+
 ## 0054 (Fable B6): Pollution requires native persona hooks
 - **Gap (main 789f66c):** `darkstr.nativePersonaHooks` defaults to `false`, and ModeXor's `_enterPollution` forced RFP / FPP off whenever `darkstr.mode=pollution`, with or without hooks.
   - Choosing Pollution in the Settings pane (hooks off by default), or hand-editing `darkstr.mode`, gave a bare browser: RFP and FPP off, no persona. Pages saw the host's real hardwareConcurrency, time zone and languages.
