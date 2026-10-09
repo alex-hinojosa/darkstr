@@ -17,6 +17,10 @@
  *              privacy.baselineFingerprintingProtection=false (0057r2: its
  *              canvas randomization would stack engine noise on darkstr's
  *              per-site farbling, so alternate canvas read paths disagreed),
+ *              privacy.fingerprintingProtection.pbmode=false and
+ *              privacy.resistFingerprinting.pbmode=false (0057r4: FPP is on
+ *              in every private window by default and its canvas randomization
+ *              noised the export paths there, not the reads),
  *              librewolf.webgl.prompt=false (WebGL without the LibreWolf
  *              doorhanger; GPU blocklist and webgl.force-enabled untouched)
  * Homogeneous → hands-off (0053, Fable B5): writes nothing. Leaving Pollution
@@ -45,6 +49,15 @@ const RFP_PREF = "privacy.resistFingerprinting";
 const FPP_PREF = "privacy.fingerprintingProtection";
 /** 0057r2: Firefox baseline FPP (default on; canvas randomization among its targets). */
 const BASELINE_FPP_PREF = "privacy.baselineFingerprintingProtection";
+/**
+ * 0057r4: the private-window switches. Gecko: FPP mode in a private window when
+ * privacy.fingerprintingProtection.pbmode (default true; strict "fppPrivate"),
+ * RFP when privacy.resistFingerprinting.pbmode (nsRFPService::IsFPPEnabled /
+ * IsRFPPrefEnabled(aIsPrivateMode)). Either stacks engine canvas noise on
+ * darkstr farbling in private windows only.
+ */
+const FPP_PBMODE_PREF = "privacy.fingerprintingProtection.pbmode";
+const RFP_PBMODE_PREF = "privacy.resistFingerprinting.pbmode";
 /** ContentBlockingPrefs.PREF_CB_CATEGORY on Firefox/LibreWolf 155.0.1-1 */
 const CB_CATEGORY_PREF = "browser.contentblocking.category";
 /** 0029: LibreWolf null-context gates — webgl.disabled + librewolf.webgl.prompt. */
@@ -69,6 +82,8 @@ const POLLUTION_PREFS = Object.freeze([
   [RFP_PREF, false],
   [FPP_PREF, false],
   [BASELINE_FPP_PREF, false],
+  [FPP_PBMODE_PREF, false],
+  [RFP_PBMODE_PREF, false],
   [LIBREWOLF_WEBGL_PROMPT_PREF, false],
 ]);
 /**
@@ -88,7 +103,11 @@ const RESTORE_ONLY_PREFS = Object.freeze([ETP_INTERACTED_PREF]);
  * stock one, so it is recorded before darkstr takes them over. (RFP / FPP /
  * the WebGL prompt are never backfilled: an old build may have forced them.)
  */
-const BACKFILL_PREFS = Object.freeze([BASELINE_FPP_PREF]);
+const BACKFILL_PREFS = Object.freeze([
+  BASELINE_FPP_PREF,
+  FPP_PBMODE_PREF, // 0057r4
+  RFP_PBMODE_PREF, // 0057r4
+]);
 /** Status format written by 0053+ (diagnostics); anything else is pre-0053. */
 const WEBGL_STATUS_TAG = "v53;";
 /**
@@ -264,6 +283,8 @@ export var DarkstrModeXor = {
     Services.prefs.addObserver(RFP_PREF, this._observer);
     Services.prefs.addObserver(FPP_PREF, this._observer);
     Services.prefs.addObserver(BASELINE_FPP_PREF, this._observer);
+    Services.prefs.addObserver(FPP_PBMODE_PREF, this._observer);
+    Services.prefs.addObserver(RFP_PBMODE_PREF, this._observer);
     Services.prefs.addObserver(CB_CATEGORY_PREF, this._observer);
     this.applyModeEffects();
     // CB category / ContentBlockingPrefs may settle after BrowserGlue init and
@@ -283,6 +304,8 @@ export var DarkstrModeXor = {
       Services.prefs.removeObserver(RFP_PREF, this._observer);
       Services.prefs.removeObserver(FPP_PREF, this._observer);
       Services.prefs.removeObserver(BASELINE_FPP_PREF, this._observer);
+      Services.prefs.removeObserver(FPP_PBMODE_PREF, this._observer);
+      Services.prefs.removeObserver(RFP_PBMODE_PREF, this._observer);
       Services.prefs.removeObserver(CB_CATEGORY_PREF, this._observer);
     } catch (_e) {
       // Observers may already be gone during shutdown.
@@ -334,6 +357,8 @@ export var DarkstrModeXor = {
       data === RFP_PREF ||
       data === FPP_PREF ||
       data === BASELINE_FPP_PREF ||
+      data === FPP_PBMODE_PREF ||
+      data === RFP_PBMODE_PREF ||
       data === CB_CATEGORY_PREF
     ) {
       // Only re-assert under Pollution (counter CB stomps / category flips).
@@ -402,8 +427,13 @@ export var DarkstrModeXor = {
       const rfp = Services.prefs.getBoolPref(RFP_PREF, false);
       const fpp = Services.prefs.getBoolPref(FPP_PREF, false);
       const baseline = Services.prefs.getBoolPref(BASELINE_FPP_PREF, false);
+      const fppPrivate = Services.prefs.getBoolPref(FPP_PBMODE_PREF, false);
+      const rfpPrivate = Services.prefs.getBoolPref(RFP_PBMODE_PREF, false);
       // Homogeneous has no constraint: RFP/FPP are whatever the user chose.
-      const xorSafe = mode === "pollution" ? !rfp && !fpp && !baseline : true;
+      const xorSafe =
+        mode === "pollution"
+          ? !rfp && !fpp && !baseline && !fppPrivate && !rfpPrivate
+          : true;
 
       return { mode, nativeCompatible, xorSafe };
     } finally {

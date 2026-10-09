@@ -634,6 +634,26 @@ Live results (no `canvas` permission anywhere):
 - The Windows pool used Chrome-style `ANGLE (…, OpenGL 4.5)` strings, which Gecko's sanitizer turns into "Generic Renderer". They are now the ANGLE Direct3D11 raw strings Firefox on Windows sees, with the same cap buckets.
 - Tests: `tests/webgl-renderer-0057r4.test.mjs`. It covers the bucket table, every pool entry, pass-through of stock null / "Mozilla", the worker prelude for WebGL1 and WebGL2, the page hook order, and byte-identity across copies.
 
+### 0057r4: private windows get darkstr's canvas noise only (Proof #92 / 0058r2 pbm finding)
+
+**Proof finding.** In a new private window, canvas `toDataURL` / `toBlob` / `convertToBlob` differed from `getImageData` (220 px), and WebGL exports differed from `readPixels` (465 px). Normal windows were at 0 px. It was present since 0057r2.
+
+**Cause.** Gecko 156 picks the protection mode per window: `nsRFPService::GetFingerprintingProtectionType(aIsPrivateMode)`.
+- In a private window, `privacy.fingerprintingProtection.pbmode` (StaticPrefList default **true**; strict's `fppPrivate`) turns on FPP mode, and FPP's CanvasRandomization noises the export paths.
+- `privacy.resistFingerprinting.pbmode` would do the same with RFP.
+- Pollution set only the global RFP / FPP / baseline prefs.
+- Self-test (`selftest-pbm`, same profile): private window 54 px on 2D exports and 230 px on GL exports in the page, OffscreenCanvas and dedicated / shared / service workers. With `privacy.fingerprintingProtection.pbmode=false` actually set at runtime: 0 px everywhere.
+- Proof's `pbmoff` run recorded the pref as default `true` at runtime (no user value), so that control never took effect.
+
+**Fix (DarkstrModeXor).**
+- `privacy.fingerprintingProtection.pbmode` and `privacy.resistFingerprinting.pbmode` join POLLUTION_PREFS (both false). They are saved once on entry and restored exactly on exit, like RFP / FPP / baseline FPP.
+- They are also in BACKFILL_PREFS: a profile already in Pollution under an older build records their current (user / stock) state before darkstr takes them over.
+- Both prefs are observed, and stomps under Pollution are re-asserted.
+- `xorSafe` requires both off.
+- The 0057c category re-match covers them through POLLUTION_PREFS: strict's `fppPrivate` = pbmode true is put back on exit.
+- Off mode never touches either pref.
+- Tests: `tests/off-mode-hands-off-0053.test.mjs` (round trips with user values, stomps, backfill, off mode, xorSafe).
+
 ### Residual / for Proof
 
 - **(Fixed in 0057r2, see above.) Engine canvas noise under Pollution = baseline FPP.** ModeXor sets RFP and FPP to false, but `privacy.baselineFingerprintingProtection` stays true (Firefox default). Its canvas randomization adds per-session engine noise on top of darkstr's layer, so `toDataURL`/`toBlob`/`convertToBlob` vs `getImageData` and GL sub-rect/`toDataURL` disagree (`engine_rfp`: 94/2944 URL pixels).
