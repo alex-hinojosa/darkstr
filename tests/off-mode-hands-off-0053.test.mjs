@@ -102,6 +102,9 @@ function freshProfile(userValues = {}) {
     "privacy.resistFingerprinting": true,
     "privacy.fingerprintingProtection": false,
     "privacy.baselineFingerprintingProtection": true,
+    // 0057r4: Gecko 156 StaticPrefList defaults (FPP on in private windows).
+    "privacy.fingerprintingProtection.pbmode": true,
+    "privacy.resistFingerprinting.pbmode": false,
     "browser.contentblocking.category": "standard",
     "webgl.disabled": false,
     "webgl.force-enabled": false,
@@ -183,6 +186,8 @@ const CASES = {
   "user RFP=false + FPP=true": { "privacy.resistFingerprinting": false, "privacy.fingerprintingProtection": true },
   "user already lifted the WebGL prompt": { "librewolf.webgl.prompt": false },
   "0057r2: user turned baseline FPP off": { "privacy.baselineFingerprintingProtection": false },
+  "0057r4: user turned private-window FPP off": { "privacy.fingerprintingProtection.pbmode": false },
+  "0057r4: user turned private-window RFP on": { "privacy.resistFingerprinting.pbmode": true },
 };
 // (A user value equal to the default cannot exist in Gecko: libpref drops it,
 // so "explicit RFP=true" is the same state as "no user value".)
@@ -198,6 +203,8 @@ for (const [name, start] of Object.entries(CASES)) {
     assert.equal(get("privacy.fingerprintingProtection"), false);
     assert.equal(get("librewolf.webgl.prompt"), false);
     assert.equal(get("privacy.baselineFingerprintingProtection"), false, "0057r2: baseline FPP off under Pollution");
+    assert.equal(get("privacy.fingerprintingProtection.pbmode"), false, "0057r4: no FPP in private windows under Pollution");
+    assert.equal(get("privacy.resistFingerprinting.pbmode"), false, "0057r4: no RFP in private windows under Pollution");
     assert.ok(user.has("darkstr.xor.savedPrefs"));
     // Restart while in Pollution keeps the original saved state.
     MX.uninit();
@@ -208,6 +215,10 @@ for (const [name, start] of Object.entries(CASES)) {
     assert.equal(get("privacy.fingerprintingProtection"), false);
     setUser("privacy.baselineFingerprintingProtection", true);
     assert.equal(get("privacy.baselineFingerprintingProtection"), false, "0057r2: baseline stomp re-asserted");
+    setUser("privacy.fingerprintingProtection.pbmode", true);
+    assert.equal(get("privacy.fingerprintingProtection.pbmode"), false, "0057r4: fppPrivate stomp re-asserted");
+    setUser("privacy.resistFingerprinting.pbmode", true);
+    assert.equal(get("privacy.resistFingerprinting.pbmode"), false, "0057r4: RFP pbmode stomp re-asserted");
     setUser("darkstr.mode", "homogeneous");
     MX.uninit();
     assert.deepEqual(userSnapshot(OWNED), before, "exact restore");
@@ -586,4 +597,50 @@ test("0057c: patch artifacts — SHA256SUMS, base pinned to 0057-files, apply sc
   assert.match(sh, /0057c-darkstr-cb-category-rematch\.patch/);
   assert.match(sh, /obj-aarch64-apple-darwin25\.6\.0/);
   assert.doesNotMatch(sh.split("\n").filter((l) => !l.startsWith("#")).join("\n"), /\bmv\b/);
+});
+
+// ------------------------------- 0057r4: private-window FP prefs (Proof #92) ---
+const FPB = "privacy.fingerprintingProtection.pbmode";
+const RPB = "privacy.resistFingerprinting.pbmode";
+test("0057r4: Pollution entered under an older build: both pbmode prefs recorded on next start, restored exactly", () => {
+  for (const start of [{}, { [FPB]: false }, { [RPB]: true }]) {
+    const old = { v: 1, prefs: { "privacy.resistFingerprinting": { user: false, value: null },
+      "privacy.fingerprintingProtection": { user: false, value: null }, "librewolf.webgl.prompt": { user: false, value: null },
+      [BASE]: { user: false, value: null } } };
+    freshProfile({ "darkstr.mode": "pollution", "privacy.resistFingerprinting": false, "librewolf.webgl.prompt": false, [BASE]: false,
+      ...start, "darkstr.xor.savedPrefs": JSON.stringify(old) });
+    MX.init();
+    const saved = JSON.parse(get("darkstr.xor.savedPrefs"));
+    assert.deepEqual(saved.prefs[FPB], FPB in start ? { user: true, value: start[FPB] } : { user: false, value: null });
+    assert.deepEqual(saved.prefs[RPB], RPB in start ? { user: true, value: start[RPB] } : { user: false, value: null });
+    assert.deepEqual(saved.prefs[BASE], old.prefs[BASE], "existing records never rewritten");
+    assert.equal(get(FPB), false);
+    assert.equal(get(RPB), false);
+    setUser("darkstr.mode", "homogeneous");
+    for (const f of idle.splice(0)) f();
+    MX.uninit();
+    assert.equal(user.has(FPB), FPB in start);
+    assert.equal(user.has(RPB), RPB in start);
+    assert.equal(get(FPB), FPB in start ? start[FPB] : true);
+    assert.equal(get(RPB), RPB in start ? start[RPB] : false);
+  }
+});
+test("0057r4: off mode never touches the pbmode prefs", () => {
+  for (const start of [{}, { [FPB]: false }, { [RPB]: true }]) {
+    freshProfile(start);
+    for (let i = 0; i < 3; i++) session({ cbSettle: false });
+    MX.init(); setUser(FPB, true); setUser(FPB, false); setUser(RPB, true); MX.uninit();
+    assert.deepEqual(writes.filter(([, k]) => k !== FPB && k !== RPB), []);
+  }
+});
+test("0057r4: xorSafe requires private-window FPP and RFP off under Pollution", () => {
+  freshProfile();
+  MX.init();
+  setUser("darkstr.mode", "pollution");
+  assert.equal(MX.applyModeEffects().xorSafe, true);
+  setUser("darkstr.mode", "homogeneous");
+  MX.uninit();
+  const src = readFileSync(join(F53, "DarkstrModeXor.sys.mjs"), "utf8");
+  assert.match(src, /!rfp && !fpp && !baseline && !fppPrivate && !rfpPrivate/);
+  assert.match(src, /\[FPP_PBMODE_PREF, false\],\n  \[RFP_PBMODE_PREF, false\],/);
 });

@@ -1,6 +1,6 @@
 --- a/browser/components/DarkstrModeXor.sys.mjs
 +++ b/browser/components/DarkstrModeXor.sys.mjs
-@@ -83,6 +83,15 @@
+@@ -98,6 +98,15 @@
    "privacy.trackingprotection.allow_list.hasUserInteractedWithETPSettings";
  const RESTORE_ONLY_PREFS = Object.freeze([ETP_INTERACTED_PREF]);
  /**
@@ -16,7 +16,7 @@
   * 0057r2: POLLUTION_PREFS that older builds never wrote. A saved copy made by
   * such a build lacks them while their current value is still the user's /
   * stock one, so it is recorded before darkstr takes them over. (RFP / FPP /
-@@ -414,7 +423,11 @@
+@@ -444,7 +453,11 @@
    /** 0053: save the pre-Pollution state of POLLUTION_PREFS (once). */
    _savePrefs({ assumeStock = false } = {}) {
      const saved = { v: 1, prefs: {} };
@@ -29,7 +29,7 @@
        if (Services.prefs.getPrefType(name) === Services.prefs.PREF_INVALID) {
          continue; // e.g. librewolf.webgl.prompt on a non-LibreWolf build
        }
-@@ -512,8 +525,13 @@
+@@ -542,8 +555,13 @@
      for (const name of RESTORE_ONLY_PREFS) {
        restore(name);
      }
@@ -43,7 +43,7 @@
          for (const name of RESTORE_ONLY_PREFS) {
            restore(name);
          }
-@@ -524,6 +542,139 @@
+@@ -554,6 +572,139 @@
      } catch (_e) {}
    },
  

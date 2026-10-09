@@ -489,3 +489,112 @@ test("0056r4: isPartitioned", () => {
   assert.equal(M.isPartitioned({ partitionKeyPattern: { baseDomain: "example.com" } }), true);
   assert.equal(M.isPartitioned({ partitionKeyPattern: {} }), false);
 });
+
+// ---------------------------------- 0056r5: keep permission changes flush ---
+// Proof #93 latekeepnm: keep added after the site was seeded, quit with no other
+// persona write -> the persona re-rolled (flush() returned early, !_dirty).
+const KEEP = (host) => ({ type: "persist-data-on-shutdown", capability: 1, host });
+const permChanged = (type, data = "added") => S.observe(type === null ? null : { type }, "perm-changed", data);
+
+test("0056r5: keep added after the first visit reaches disk at shutdown with no other persona write", async () => {
+  wipe(); lwDefaults();
+  await restart();
+  const a = S.seedFor("0", "a56.test");
+  await S.flush();
+  assert.ok(!fs.has(FILE), "not kept yet: nothing written");
+  perms.push(KEEP("a56.test"));
+  permChanged("persist-data-on-shutdown", "added");
+  await S.flush(); // = the profile-before-change shutdown blocker
+  assert.equal(fileJSON().e.length, 1);
+  await restart();
+  assert.equal(S.seedFor("0", "a56.test"), a, "persona survives the restart");
+  assert.equal(S._stats.permChanges, 0, "counter reset by restart");
+});
+
+test("0056r5 control: without the perm-changed notification the late keep is lost (the old behaviour)", async () => {
+  wipe(); lwDefaults();
+  await restart();
+  const a = S.seedFor("0", "a56.test");
+  await S.flush();
+  perms.push(KEEP("a56.test"));
+  await S.flush();
+  assert.ok(!fs.has(FILE));
+  await restart();
+  assert.notEqual(S.seedFor("0", "a56.test"), a);
+});
+
+test("0056r5: keep removed (deleted) or all permissions cleared prunes the seed at the next flush", async () => {
+  for (const how of ["deleted", "cleared"]) {
+    wipe(); lwDefaults();
+    perms.push(KEEP("a56.test"), KEEP("b56.test"));
+    await restart();
+    const a = S.seedFor("0", "a56.test");
+    const b = S.seedFor("0", "b56.test");
+    await S.flush();
+    assert.equal(fileJSON().e.length, 2);
+    if (how === "deleted") {
+      perms.splice(0, 1); // a56 loses its keep
+      permChanged("persist-data-on-shutdown", "deleted");
+    } else {
+      perms.length = 0;
+      permChanged(null, "cleared");
+    }
+    await S.flush();
+    assert.equal(fileJSON().e.length, how === "deleted" ? 1 : 0, how);
+    await restart();
+    assert.notEqual(S.seedFor("0", "a56.test"), a, how);
+    if (how === "deleted") assert.equal(S.seedFor("0", "b56.test"), b);
+  }
+});
+
+test("0056r5: keep re-added after clear-all persists the new persona across restart", async () => {
+  wipe(); lwDefaults();
+  perms.push(KEEP("a56.test"));
+  await restart();
+  S.seedFor("0", "a56.test");
+  await S.flush();
+  await CL.deleteAll();
+  perms.length = 0; // CLEAR_ALL drops the keep permission too
+  permChanged(null, "cleared");
+  const b = S.seedFor("0", "a56.test");
+  await S.flush();
+  assert.ok(!fs.has(FILE), "nothing kept after the clear");
+  perms.push(KEEP("a56.test"));
+  permChanged("persist-data-on-shutdown", "added");
+  await S.flush();
+  assert.equal(fileJSON().e.length, 1);
+  await restart();
+  assert.equal(S.seedFor("0", "a56.test"), b);
+});
+
+test("0056r5: a cookie ACCESS_SESSION grant prunes a kept seed; unrelated permission types and passive stores do nothing", async () => {
+  wipe(); lwDefaults();
+  perms.push(KEEP("a56.test"));
+  await restart();
+  const a = S.seedFor("0", "a56.test");
+  await S.flush();
+  const writes0 = ops.filter((o) => o[0] === "write").length;
+  permChanged("geo", "added");
+  permChanged("desktop-notification", "deleted");
+  await S.flush();
+  assert.equal(ops.filter((o) => o[0] === "write").length, writes0, "unrelated types never write");
+  assert.equal(S._stats.permChanges, 0);
+  perms.push({ type: "cookie", capability: 8, host: "a56.test" });
+  permChanged("cookie", "added");
+  await S.flush();
+  assert.equal(fileJSON().e.length, 0, "session cookie permission wins");
+  assert.equal(S._stats.permChanges, 1);
+  // passive (not activated, e.g. off mode): never writes
+  S._resetForTests();
+  const before = ops.length;
+  permChanged("persist-data-on-shutdown", "added");
+  await S.flush();
+  assert.equal(ops.length, before);
+  void a;
+});
+
+test("0056r5 wiring: the store observes perm-changed while active", () => {
+  const s = readFileSync(join(F, "DarkstrPersonaSeedStore.sys.mjs"), "utf8");
+  assert.match(s, /Services\.obs\.addObserver\(this, "perm-changed"\)/);
+  assert.match(s, /KEEP_PERM_TYPES = new Set\(\["persist-data-on-shutdown", "cookie"\]\)/);
+});

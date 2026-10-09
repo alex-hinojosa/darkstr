@@ -33,6 +33,10 @@
  *   sites with a persist-data-on-shutdown ALLOW exception are written. A
  *   cookie ACCESS_SESSION permission always wins (never written). Without
  *   clear-on-shutdown every non-private site is written.
+ *   0056r5: a keep / session permission added, changed or removed later
+ *   (perm-changed, incl. clear-all of permissions) marks the store dirty, so
+ *   the next save -- at the latest the profile-before-change flush -- writes
+ *   the newly kept seed or prunes the no-longer-kept one.
  * - Clearing: DarkstrPersonaSeedCleaner (ClearDataService,
  *   CLEAR_FINGERPRINTING_PROTECTION_STATE): site (incl. subdomain hosts, the
  *   seed is per eTLD+1), principal, origin-attributes pattern (container
@@ -60,6 +64,8 @@ const LEGACY_VERSION = 1;
 const MAX_CTX_PROBE = 4096;
 const LABEL_PREFIX = "darkstr-persona-seeds-";
 const SAVE_DELAY_MS = 500;
+/** 0056r5: permission types the keep rule reads (_keepSets). */
+const KEEP_PERM_TYPES = new Set(["persist-data-on-shutdown", "cookie"]);
 /** Test/ops switch: false = behave as if OSKeyStore were unavailable. */
 const KEYSTORE_PREF = "darkstr.persona.seedStore.osKeyStore";
 const SANITIZE_ON_SHUTDOWN_PREF = "privacy.sanitize.sanitizeOnShutdown";
@@ -270,6 +276,7 @@ export var DarkstrPersonaSeedStore = {
     keyDeletes: 0,
     flushErrors: 0,
     migratedV1: 0,
+    permChanges: 0,
   },
 
   get path() {
@@ -372,6 +379,9 @@ export var DarkstrPersonaSeedStore = {
       Services.obs.addObserver(this, "last-pb-context-exited");
     } catch (_e) {}
     try {
+      Services.obs.addObserver(this, "perm-changed");
+    } catch (_e) {}
+    try {
       const { AsyncShutdown } = ChromeUtils.importESModule(
         "resource://gre/modules/AsyncShutdown.sys.mjs"
       );
@@ -383,9 +393,47 @@ export var DarkstrPersonaSeedStore = {
     } catch (_e) {}
   },
 
-  observe(_subject, topic) {
+  observe(subject, topic, data) {
     if (topic === "last-pb-context-exited") {
       this._dropSession(ctx => ctx === "p");
+    } else if (topic === "perm-changed") {
+      this._onPermChanged(subject, data);
+    }
+  },
+
+  /**
+   * 0056r5 (Proof #93 latekeepnm): the keep rule is evaluated at save time,
+   * but only a seed write used to make the store dirty. A keep exception added
+   * after the site was seeded (or re-added after a clear-all), and quitting
+   * without another persona write, never reached disk: the persona re-rolled.
+   * Any change to a permission the keep rule reads now schedules a save (the
+   * shutdown blocker flushes it); removals prune the same way.
+   */
+  _onPermChanged(subject, data) {
+    if (!this._activated) {
+      return; // off mode / passive store: never write
+    }
+    if (data !== "cleared") {
+      let type = "";
+      try {
+        const perm =
+          subject && typeof subject.QueryInterface === "function"
+            ? subject.QueryInterface(Ci.nsIPermission)
+            : subject;
+        type = String(perm?.type || "");
+      } catch (_e) {
+        return;
+      }
+      if (!KEEP_PERM_TYPES.has(type)) {
+        return;
+      }
+    }
+    this._stats.permChanges++;
+    if (this._state === "ready") {
+      this._scheduleSave();
+    } else if (this._state === "loading") {
+      // _load() schedules the save once ready.
+      this._dirty = true;
     }
   },
 
