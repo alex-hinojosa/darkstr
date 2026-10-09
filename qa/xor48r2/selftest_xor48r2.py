@@ -2,7 +2,8 @@
 """Offline self-test for the xor48r2 harness helpers (run by tests/qa-xor48r2-harness.test.mjs). No browser needed."""
 import os, sys, unittest
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from grade48r2_hooks import hook_state, hook_ok, top_doc, frame_url_has, frame_url_is, census_sandboxed, has_census  # noqa: E402
+from grade48r2_hooks import hook_state, hook_ok, top_doc, frame_url_has, frame_url_is, census_sandboxed, has_census, no_firewall_sandbox  # noqa: E402
+from grade48f1 import grade_f1  # noqa: E402
 from xor48r2_net import is_ipv4, lsof_peer_class, LOOPBACK_HOSTS  # noqa: E402
 
 CENSUS_ARMED = [
@@ -51,6 +52,66 @@ class HookState(unittest.TestCase):
         self.assertEqual(len(census_sandboxed(cases)), 4)
         self.assertEqual(census_sandboxed({'SO': {'__census': CENSUS_STOCK}}), [])
         self.assertFalse(has_census({'N1': {'n1': {'hook': None}}}))
+
+
+class ProofF2MissingCensus(unittest.TestCase):
+    """Proof #83 F2: in a run that recorded a census, a step without one (or with {'err'}) must not pass as 'none'."""
+    def test_missing_census_in_census_run_is_unknown_and_fails_both(self):
+        for c in (None, {'err': "JavascriptException('boom')"}):
+            st = hook_state(None, c, top_doc, census_run=True)
+            self.assertEqual(st, 'unknown', c)
+            self.assertFalse(hook_ok(st, True)); self.assertFalse(hook_ok(st, False))
+
+    def test_legacy_run_without_census_unchanged(self):
+        self.assertEqual(hook_state(None, None, top_doc, census_run=False), 'none')
+
+    def test_default_check_needs_a_census(self):
+        self.assertFalse(no_firewall_sandbox({'N1': {'n1': {'hook': None}}}))                       # no census: FAIL (was `else True`)
+        self.assertFalse(no_firewall_sandbox({'N1': {'n1': {'__census': {'err': 'x'}}}}))          # only an error: FAIL
+        self.assertFalse(no_firewall_sandbox({'N1': {'n1': {'__census': CENSUS_ARMED}}}))          # something sandboxed: FAIL
+        self.assertTrue(no_firewall_sandbox({'N1': {'n1': {'__census': CENSUS_STOCK}}}))
+
+
+def f1_run(config, docs_census, hook=None):
+    """Synthetic f1_*.json: 4 docs x 80 clean iterations; docs_census(i) -> the doc's __census value (or KeyError=absent)."""
+    docs = []
+    for i in range(4):
+        doc = {'doc': i, 'o': 'http://127.0.0.1:5', 'hook': hook, 'iters': [{'p': j, 'dur': 12} for j in range(80)], 'conc': []}
+        c = docs_census(i)
+        if c is not KeyError: doc['__census'] = c
+        docs.append(doc)
+    return {'config': config, 'f1': docs, 'lsof': {'samplesWithNonLoopback': 0}, 'lan': '', 'lanReal': False, 'serverPort': 5}
+
+
+class ProofF1HookGate(unittest.TestCase):
+    """Proof #83 F1: armed F1 PASS requires hookStates <= {own, proto} with a census on every document."""
+    def test_armed_proto_with_census_passes(self):
+        r = grade_f1(f1_run('A_iso', lambda i: CENSUS_ARMED))
+        self.assertTrue(r['PASS'], r['hookGate']); self.assertEqual(r['hookStates(top, own|proto|native|none)'], ['proto'])
+
+    def test_armed_own_accessor_with_census_passes(self):
+        self.assertTrue(grade_f1(f1_run('A_iso', lambda i: CENSUS_STOCK, hook='get cookie'))['PASS'])
+
+    def test_armed_unhooked_fails(self):  # the bug the gate exists for: clean cookie results but nothing was hooked
+        r = grade_f1(f1_run('A_iso', lambda i: CENSUS_STOCK))
+        self.assertFalse(r['PASS']); self.assertEqual(r['hookStates(top, own|proto|native|none)'], ['native'])
+
+    def test_armed_without_census_fails(self):
+        self.assertFalse(grade_f1(f1_run('A_iso', lambda i: KeyError))['PASS'])
+        self.assertFalse(grade_f1(f1_run('A_iso', lambda i: KeyError, hook='get cookie'))['PASS'])  # census required even for 'own'
+
+    def test_armed_one_doc_missing_or_err_census_fails(self):
+        r = grade_f1(f1_run('A_iso', lambda i: CENSUS_ARMED if i else KeyError))
+        self.assertFalse(r['PASS']); self.assertIn('unknown', r['hookStates(top, own|proto|native|none)'])
+        self.assertFalse(grade_f1(f1_run('A_iso', lambda i: CENSUS_ARMED if i else {'err': 'x'}))['PASS'])
+
+    def test_armed_mixed_fails(self):
+        mixed = [dict(CENSUS_ARMED[0]), dict(CENSUS_ARMED[0], sandboxed=False)]
+        self.assertFalse(grade_f1(f1_run('A_iso', lambda i: mixed))['PASS'])
+
+    def test_default_must_be_unhooked(self):
+        self.assertTrue(grade_f1(f1_run('default', lambda i: CENSUS_STOCK))['PASS'])
+        self.assertFalse(grade_f1(f1_run('default', lambda i: CENSUS_ARMED))['PASS'])
 
 
 class Net(unittest.TestCase):
