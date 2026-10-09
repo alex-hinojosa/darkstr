@@ -219,3 +219,25 @@ test("0057 install record keyed per inner global (no stacked hooks) + DOMDocElem
   // reused-window event never adds async IPC (off mode stays idle)
   assert.match(DHC, /seeds === undefined && eventType === "DOMDocElementInserted"\) \{\s*\/\/[^\n]*\n[^\n]*\n\s*return;/);
 });
+
+test("0057 replaceMethod never stacks on its own wrapper (waiver-safe identity)", () => {
+  // Simulate waiver vs plain wrappers: unwaiveXrays maps both to one identity.
+  const target = new Map();
+  const Cu = {
+    unwaiveXrays: (x) => (x && x.__plain) || x,
+    exportFunction: (fn) => { const plain = function (...a) { return fn.apply(this, a); }; return plain; },
+  };
+  const env = new Function("Cu", `${lift(DHC, "unwaived")}\n${lift(DHC, "sameObject")}\nconst ourWrappers = new WeakMap();\n${lift(DHC, "methodIsInstalled")}\n${lift(DHC, "replaceMethod")}\nreturn { replaceMethod, methodIsInstalled };`)(Cu);
+  const native = function getImageData() { return "native"; };
+  const proto = { getImageData: native };
+  const recs = [];
+  const o1 = env.replaceMethod({}, proto, "getImageData", function () { return "w1"; }, recs);
+  assert.equal(o1, native);
+  // a waived read returns a distinct wrapper object for the same function
+  const plain1 = proto.getImageData; const waived1 = function () {}; waived1.__plain = plain1;
+  Object.defineProperty(proto, "getImageData", { value: waived1, configurable: true, writable: true });
+  assert.ok(env.methodIsInstalled({ proto, name: "getImageData", wrapper: plain1 }), "waiver-safe identity");
+  Object.defineProperty(proto, "getImageData", { value: plain1, configurable: true, writable: true });
+  const o2 = env.replaceMethod({}, proto, "getImageData", function () { return "w2"; }, recs);
+  assert.equal(o2, native, "second install wraps the native, not our first wrapper");
+});

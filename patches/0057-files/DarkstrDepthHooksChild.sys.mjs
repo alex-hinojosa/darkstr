@@ -57,7 +57,7 @@ function installKey(rawWindow) {
   try {
     const proto = rawWindow?.HTMLCanvasElement?.prototype;
     if (proto && typeof proto === "object") {
-      return proto;
+      return unwaived(proto);
     }
   } catch (_e) {}
   return rawWindow;
@@ -173,6 +173,29 @@ function noiseImageDataRead(id, seed, args, surf) {
   applyCanvasNoiseRect(Cu.waiveXrays(id).data, seed, args[0], args[1], args[2], args[3], w, h, false);
 }
 
+/**
+ * 0057: identity across Xray waivers. Values read from a waived prototype are
+ * waiver wrappers, while Cu.exportFunction hands back a plain wrapper, so a
+ * raw === never matched: "already-installed" and uninstall's restore never
+ * fired, and every install event stacked another layer of hooks.
+ */
+function unwaived(x) {
+  try {
+    return x && (typeof x === "object" || typeof x === "function")
+      ? Cu.unwaiveXrays(x)
+      : x;
+  } catch (_e) {
+    return x;
+  }
+}
+
+function sameObject(a, b) {
+  return a === b || (a != null && b != null && unwaived(a) === unwaived(b));
+}
+
+/** 0057: our wrapper (unwaived) -> the descriptor it replaced. */
+const ourWrappers = new WeakMap();
+
 function methodIsInstalled(replacement) {
   try {
     const desc = Object.getOwnPropertyDescriptor(
@@ -183,10 +206,10 @@ function methodIsInstalled(replacement) {
       return false;
     }
     if (desc.value !== undefined) {
-      return desc.value === replacement.wrapper;
+      return sameObject(desc.value, replacement.wrapper);
     }
     if (desc.get !== undefined) {
-      return desc.get === replacement.wrapper;
+      return sameObject(desc.get, replacement.wrapper);
     }
     return false;
   } catch (_e) {
@@ -219,11 +242,24 @@ function uninstallDepthHooks(rawWindow) {
 }
 
 function replaceMethod(pageWindow, proto, name, implementation, replacements) {
-  const descriptor = Object.getOwnPropertyDescriptor(proto, name);
+  let descriptor = Object.getOwnPropertyDescriptor(proto, name);
+  // 0057: never wrap one of our own wrappers (no stacked noise, whatever the
+  // install bookkeeping says): start from the descriptor it replaced.
+  for (
+    let i = 0;
+    i < 8 &&
+    descriptor &&
+    typeof descriptor.value === "function" &&
+    ourWrappers.has(unwaived(descriptor.value));
+    i++
+  ) {
+    descriptor = ourWrappers.get(unwaived(descriptor.value));
+  }
   if (!descriptor || typeof descriptor.value !== "function") {
     throw new Error(`${name} native descriptor unavailable`);
   }
   const wrapper = Cu.exportFunction(implementation, pageWindow);
+  ourWrappers.set(unwaived(wrapper), descriptor);
   Object.defineProperty(proto, name, { ...descriptor, value: wrapper });
   replacements.push({
     proto,
