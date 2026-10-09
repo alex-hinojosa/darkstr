@@ -504,6 +504,22 @@ All five 0043 Worker/SharedWorker WebGPU XOR gates passed on Proof tip `cc692641
 - Evidence: `~/AgentDocs/proof/darkstr-pr74-0043-xor-20260928-084400/`
 - Apply log: `~/AgentDocs/proof/darkstr-pr74-0043-xor-20260928-084400/darkstr-apply-0043-20260928-084400.log`
 
+## In review — 0048 cookie firewall correctness
+
+| | |
+|---|---|
+| Pin | **0048** (Rowan QA B1, B2, N1 + omit, 3P partitioning, mirror staleness) |
+| Branch | `builder/0048-cookie-firewall` (from main `58a33c2`) |
+| Patch | [`patches/0048-darkstr-cookie-firewall-correctness.patch`](../patches/0048-darkstr-cookie-firewall-correctness.patch) |
+| Apply SoT | [`patches/0048-files/`](../patches/0048-files/) (3 modules + `SHA256SUMS`) |
+| Mini helper | [`scripts/apply-0048-cookie-firewall-mini.sh`](../scripts/apply-0048-cookie-firewall-mini.sh) |
+| Tests | [`tests/cookie-firewall-0048.test.mjs`](../tests/cookie-firewall-0048.test.mjs) |
+| Defaults | unchanged — firewall opt-in, hooks default-off |
+| Evidence | `~/AgentDocs/proof/darkstr-0048-cookiefw-20261008/` |
+| Proof (v1 `f3f1e748`) | **FAILED** — F1 fetch Set-Cookie ordering, F2 A-B-A / no-cors top-cookie leak, F3 native setter/getter + `CookieStore.prototype.set` reach the real jar; check 4 changed to match stock (`~/AgentDocs/proof/darkstr-0048-xor-20261008-174506/`) |
+| Respin (0048r2) | JS: ack-ordered deltas + channel suspend (F1), Gecko TCP partition key with foreign-ancestor bit + initiator-context SameSite (F2), reject unpartitioned 3P (check 4). C++: `darkstr.cookieFirewall.contentGate` gate in `CookieCommons` / `CookieStoreNotifier` (F3). See [`COOKIE-SANDBOX-FAKE-JAR.md`](COOKIE-SANDBOX-FAKE-JAR.md#0048r2-respin). Evidence `~/AgentDocs/proof/darkstr-0048r2-cookiefw-20261008/` |
+| Merge | only after Proof PASS |
+
 ## Completed — 0042 Cookie `/echo` QI soft residual
 
 | Item | Status |
@@ -739,7 +755,7 @@ Single chrome SoT: `DarkstrCookieFirewall.sys.mjs` owns:
    `pollution && !nativeCompatible && nativePersonaHooks && darkstr.cookieFirewall.enabled`
 2. **Decision:** allowlisted eTLD+1 → **passthrough** (real jar); else **sandbox**.
 3. **Mode:** `synthetic` (default) seed-tied rewrite via 0030 eTLD seed / golden lock; `isolate` stores values as-is in sandbox only.
-4. **One jar:** in-memory `Map<etld, Map<name,value>>` in parent.
+4. **One jar:** in-memory, in parent. 0035: `Map<etld, Map<name,value>>`; **0048:** partitioned by (OA, top-level site) with full cookie records (see [`COOKIE-SANDBOX-FAKE-JAR.md`](COOKIE-SANDBOX-FAKE-JAR.md#0048-correctness)).
 5. **HTTP path:** `http-on-modify-request` replaces `Cookie`; `http-on-examine-response` (+cached) ingests `Set-Cookie` then strips header (best-effort vs CookieService race).
 6. **Script path:** JSWindowActor child installs `document.cookie` + `cookieStore` wrappers; all writes IPC to parent jar; child mirror keeps getter sync while using the **same** seed/synthetic function.
 
@@ -784,7 +800,7 @@ All five cookie-firewall XOR gates passed on Proof tip `d35c5fd8fdec6fba20cf1c08
 ### Residual risks
 
 - **CookieService race:** stock jar may still accept Set-Cookie before chrome strip on some channels; follow-up C++ hook if Proof sees jar bleed.
-- Child `document.cookie` getter is sync via local mirror; HTTP→script visibility updates on pageshow/DOMWindowCreated hydrate (same-turn write→read coherent).
+- ~~Child `document.cookie` getter is sync via local mirror; HTTP→script visibility updates on pageshow/DOMWindowCreated hydrate~~ — Rowan QA showed the mirror went stale and was installed once per tab; **0048** replaces it with a per-document install + parent-pushed deltas.
 - Not anti-detect / not Cloudflare bypass.
 
 ## Apply status (Mini)
