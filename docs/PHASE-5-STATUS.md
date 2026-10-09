@@ -504,6 +504,68 @@ All five 0043 Worker/SharedWorker WebGPU XOR gates passed on Proof tip `cc692641
 - Evidence: `~/AgentDocs/proof/darkstr-pr74-0043-xor-20260928-084400/`
 - Apply log: `~/AgentDocs/proof/darkstr-pr74-0043-xor-20260928-084400/darkstr-apply-0043-20260928-084400.log`
 
+## In review — 0053 off mode leaves prefs alone (Fable QA B5)
+
+| | |
+|---|---|
+| Pin | **0053**: Fable QA **B5** (Homogeneous / off mode rewrote RFP, FPP and WebGL prefs on every start) |
+| Branch | `builder/0053-off-mode-hands-off` from `builder/0052-no-diag-prefs` @ `0ba3eb03` (stacked; needs 0052) |
+| Patch | [`patches/0053-darkstr-off-mode-hands-off.patch`](../patches/0053-darkstr-off-mode-hands-off.patch) + `patches/0053-files/` (DarkstrModeXor, DarkstrNativePersona, librewolf.cfg + `SHA256SUMS`) |
+| Apply | `scripts/apply-0053-off-mode-hands-off-mini.sh` (chrome JS + librewolf.cfg; no C++ recompile) |
+| Tests | `tests/off-mode-hands-off-0053.test.mjs` (Gecko-like pref store: defaults vs user values); the 0048–0052 tests load the newest shipped copy (0053 → 0052 → older) |
+| DMG | `~/AgentDocs/builds/darkstr-0053-924c6036.dmg` (+ `.sha256`) |
+| Evidence | `~/AgentDocs/proof/darkstr-0053-offmode-20261009-020144/` |
+
+### Bug
+
+DarkstrModeXor ran on every startup and mode change in **both** modes. In
+Homogeneous it set `privacy.resistFingerprinting` / `privacy.fingerprintingProtection`
+back to "stock", which overwrote a user's own `RFP=false`. In every mode it forced WebGL on:
+`webgl.force-enabled=true`, `gfx.blocklist.all=-1`, `webgl.forbid-*=false`,
+`librewolf.webgl.prompt=false`, plus `unlockPref`. `librewolf.cfg:959-974`
+(`darkstr-0029-webgl`) did the same for every profile. Off mode wrote
+`darkstr.pollutionActive=false` too.
+
+### Fix
+
+- **Homogeneous writes nothing.** ModeXor's observer ignores RFP/FPP/CB-category
+  changes in off mode (unchanged), and the mode apply no longer sets anything.
+  NativePersona writes `darkstr.pollutionActive` only while Pollution is active.
+  Off mode clears an old value of it and never writes `false`.
+- **Pollution saves, then restores exactly.** On entry ModeXor saves the state of
+  `privacy.resistFingerprinting`, `privacy.fingerprintingProtection` and
+  `librewolf.webgl.prompt` (user value or "no user value") in
+  `darkstr.xor.savedPrefs` (JSON). It then sets them to `false`. The save survives
+  restarts in Pollution. On leaving, each pref is restored to its saved user value
+  or its user value is cleared, and the saved copy is removed.
+- **WebGL only under Pollution, through the LibreWolf prompt gate only.** No
+  `webgl.force-enabled`, no `gfx.blocklist.all`, no `forbid-*`, no lock/unlock.
+  The GPU blocklist applies. The `darkstr-0029-webgl` block is removed from
+  `librewolf.cfg`. Off mode keeps LibreWolf's stock "WebGL is currently disabled"
+  prompt behaviour.
+- **One-time migration** for profiles a pre-0053 build ran. They are detected by a
+  `darkstr.webgl.lastStatus` value without the 0053 `v53;` tag, or by the
+  `webgl.forbid-software=false` user value that every 0029–0052 start wrote. The
+  migration only clears the old forced WebGL values (and only where they equal the
+  forced value). In Pollution with no saved copy, it assumes stock. It then sets
+  `darkstr.xor.migrated0053=true` so it never runs again. A fresh profile never
+  gets the marker. Limitation: a user's own `webgl.forbid-software=false` on a
+  profile with no marker is cleared once.
+
+### Not changed
+
+- The Rust `duppel_persona::mode_pref_effects` still describes Homogeneous as
+  "RFP true / FPP true". That is the planning model; the chrome path is what runs.
+- Stock LibreWolf still writes its own `privacy.*` user values in a fresh profile.
+  These come from the CB "strict" category (`privacy.trackingprotection.*`,
+  `query_stripping.*`, `fingerprintingProtection`, `annotate_channels.strict_list`,
+  consentmanager), from bounce-tracking migration, GPC, `history.custom` and
+  `sanitize.pending`. No darkstr module names any of them except ModeXor's FPP,
+  which it writes under Pollution only.
+- Under Pollution, Gecko's CB `matchCBCategory` switches
+  `browser.contentblocking.category` to `custom`. It returns to `strict` once FPP
+  is restored (seen after the next start).
+
 ## In review — 0052 no debug state in prefs.js (Fable QA B1)
 
 | | |

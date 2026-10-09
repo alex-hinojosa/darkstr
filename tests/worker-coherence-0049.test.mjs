@@ -4,6 +4,7 @@
  * page child (patches/0051-files) and minimal XPCOM / DOM stubs.
  * 0052: DarkstrNativePersona / DarkstrWorkerHooks ship from patches/0052-files
  * (diagnostics in memory only); the rest still ships from 0049 / 0051.
+ * 0053: DarkstrNativePersona ships from patches/0053-files.
  *
  *   B3  Dedicated workers report their creating document's persona (UA,
  *       platform, hardwareConcurrency, languages, timezone); Shared/Service
@@ -25,8 +26,15 @@ const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const FILES = join(root, "patches/0049-files");
 const FILES51 = join(root, "patches/0051-files");
 const FILES52 = join(root, "patches/0052-files");
-// Newest shipped copy of a module (0052 supersedes 0049 where it has one).
-const shipped = (f) => (existsSync(join(FILES52, f)) ? join(FILES52, f) : join(FILES, f));
+// Newest shipped copy of a module (later pins supersede earlier ones).
+const NEWER = ["0053-files", "0052-files"].map((d) => join(root, "patches", d));
+const newest = (f, fallbackDir) => {
+  for (const d of NEWER) {
+    if (existsSync(join(d, f))) return join(d, f);
+  }
+  return join(fallbackDir, f);
+};
+const shipped = (f) => newest(f, FILES);
 const src = (f) => readFileSync(shipped(f), "utf8");
 
 const NATIVE_UA =

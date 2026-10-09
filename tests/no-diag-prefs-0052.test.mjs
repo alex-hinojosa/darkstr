@@ -26,7 +26,16 @@ const MODULES = [
   "DarkstrNativePersona.sys.mjs",
   "DarkstrWorkerHooks.sys.mjs",
 ];
-const src = (f) => readFileSync(join(F52, f), "utf8");
+// 0053+: the invariants hold for the newest shipped copy of each module.
+const NEWER = ["0053-files", "0052-files"].map((d) => join(root, "patches", d));
+const shippedPath = (f) => NEWER.map((d) => join(d, f)).find((p) => existsSync(p));
+// 0053: ModeXor's one-time legacy-profile check reads the old 0029 status
+// string (migration only, never product behaviour); read-back checks skip it.
+const stripMigration = (js) => {
+  const a = js.indexOf("  _detectLegacyProfile() {");
+  return a === -1 ? js : js.slice(0, a) + js.slice(js.indexOf("\n  },", a));
+};
+const src = (f) => stripMigration(readFileSync(shippedPath(f), "utf8"));
 
 // ------------------------------------------------------------- stubs ---
 const prefs = new Map();
@@ -81,7 +90,7 @@ globalThis.Ci = {};
 globalThis.Cc = {};
 globalThis.Cu = {};
 
-const mx = await import(pathToFileURL(join(F52, "DarkstrModeXor.sys.mjs")));
+const mx = await import(pathToFileURL(shippedPath("DarkstrModeXor.sys.mjs")));
 const { DARKSTR_DIAG_PREFS, sweepDiagPrefs, DarkstrModeXor: MX } = mx;
 
 /** const NAME_PREF = "darkstr.x.y" → { NAME_PREF: "darkstr.x.y" } */
@@ -166,11 +175,12 @@ test("DARKSTR_DIAG_PREFS is diagnostics only (functional state never swept)", ()
 });
 
 test("no shipped chrome module reads a diagnostic pref back", () => {
-  const dirs = ["0052-files", "0051-files", "0049-files"].map((d) => join(root, "patches", d));
+  const dirs = ["0053-files", "0052-files", "0051-files", "0049-files"].map((d) => join(root, "patches", d));
   for (const d of dirs) {
+    if (!existsSync(d)) continue;
     for (const f of readdirSync(d).filter((x) => x.endsWith(".sys.mjs"))) {
-      if (d.endsWith("0049-files") && existsSync(join(F52, f))) continue; // superseded
-      const js = readFileSync(join(d, f), "utf8");
+      if (shippedPath(f) && shippedPath(f) !== join(d, f)) continue; // superseded
+      const js = stripMigration(readFileSync(join(d, f), "utf8"));
       const consts = prefConsts(js);
       for (const name of DARKSTR_DIAG_PREFS) {
         const lit = name.replace(/\./g, "\\.");

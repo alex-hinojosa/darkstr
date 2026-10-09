@@ -1,0 +1,393 @@
+--- a/browser/components/DarkstrModeXor.sys.mjs
++++ b/browser/components/DarkstrModeXor.sys.mjs
+@@ -13,8 +13,12 @@
+  *   duppel_bridge::PrefsApplicator::apply_mode_effects / PrefApplyPlan::is_xor_safe
+  *
+  * Pollution  → privacy.resistFingerprinting=false,
+- *              privacy.fingerprintingProtection=false
+- * Homogeneous → stock RFP true / FPP stock-on restore; no RFP metric customization
++ *              privacy.fingerprintingProtection=false,
++ *              librewolf.webgl.prompt=false (WebGL without the LibreWolf
++ *              doorhanger; GPU blocklist and webgl.force-enabled untouched)
++ * Homogeneous → hands-off (0053, Fable B5): writes nothing. Leaving Pollution
++ *              restores exactly the values saved when Pollution was entered
++ *              (user value or "no user value"), then forgets the saved copy.
+  * Forbidden   → Pollution with RFP still true via this prefs path
+  *
+  * Observes darkstr.mode / darkstr.nativeCompatible. Also observes
+@@ -26,7 +30,10 @@
+  * privacy.* (does not echo darkstr.* back — avoids re-entrancy). Persona/chaff
+  * remain WebExt / later M3 hooks; nativeCompatible is read for parity only here.
+  *
+- * Soft residual (0029): LibreWolf nulls getContext('webgl') even when Canvas 2D works. Unlock webgl.disabled + force-enabled + gfx.blocklist.all=-1 AND librewolf.webgl.prompt=false (LW IsWebGLAllowed doorhanger gate — Err string "WebGL is currently disabled." is from that path, not webgl.disabled alone). Product-level on every mode apply so Proof can live-check UNMASKED + apple caps from 0017/0023 under Pollution+hooks and Homogeneous. Firefox persona only — does not invent Chrome GPU strings; depth spoof still 0017/0023. Prefer unlocking path over inventing software GL (Mini GPU can work).
++ * 0053: the 0029 WebGL unlock (webgl.force-enabled=true, gfx.blocklist.all=-1,
++ * webgl.forbid-*=false on every mode apply + librewolf.cfg defaults) is gone.
++ * Only the LibreWolf prompt gate (StaticPrefs::librewolf_webgl_prompt — the
++ * "WebGL is currently disabled." path) is lifted, and only under Pollution.
+  */
+ 
+ const MODE_PREF = "darkstr.mode";
+@@ -48,6 +55,55 @@
+ const WEBGL_LAST_STATUS_PREF = "darkstr.webgl.lastStatus";
+ 
+ /**
++ * 0053 (Fable B5): the only prefs darkstr owns, and only while Pollution is
++ * on. Their pre-Pollution state is saved once in SAVED_PREF on entry (JSON:
++ * per pref {user: had a user value, value}) and restored exactly on exit.
++ */
++const SAVED_PREF = "darkstr.xor.savedPrefs";
++const POLLUTION_PREFS = Object.freeze([
++  [RFP_PREF, false],
++  [FPP_PREF, false],
++  [LIBREWOLF_WEBGL_PROMPT_PREF, false],
++]);
++/** Status format written by 0053+ (diagnostics); anything else is pre-0053. */
++const WEBGL_STATUS_TAG = "v53;";
++/**
++ * Set once, only on a profile a pre-0053 build ran (never on a fresh one), so
++ * the legacy clean-up below runs a single time and never touches a value the
++ * user sets later.
++ */
++const MIGRATED_PREF = "darkstr.xor.migrated0053";
++/**
++ * User values that pre-0053 builds (0029 ModeXor) forced on every startup.
++ * Cleared once, and only on a profile a pre-0053 build ran: darkstr.webgl.
++ * lastStatus without the 0053 tag (pre-0052, or diag on), or the
++ * webgl.forbid-software=false user value every 0029–0052 startup wrote
++ * (stock default is true).
++ */
++const LEGACY_WEBGL_VALUES = Object.freeze([
++  [WEBGL_FORCE_ENABLED_PREF, true],
++  [GFX_BLOCKLIST_ALL_PREF, -1],
++  [WEBGL_FORBID_HARDWARE_PREF, false],
++  [WEBGL_FORBID_SOFTWARE_PREF, false],
++  [LIBREWOLF_WEBGL_PROMPT_PREF, false],
++  [LIBREWOLF_WEBGL_PROMPT_HIDE_PREF, true],
++]);
++
++function readUserValue(name) {
++  const type = Services.prefs.getPrefType(name);
++  if (type === Services.prefs.PREF_BOOL) {
++    return Services.prefs.getBoolPref(name);
++  }
++  if (type === Services.prefs.PREF_INT) {
++    return Services.prefs.getIntPref(name);
++  }
++  if (type === Services.prefs.PREF_STRING) {
++    return Services.prefs.getStringPref(name);
++  }
++  return null;
++}
++
++/**
+  * 0052 (Fable B1 / O7): diagnostics stay in memory. They reach prefs.js only
+  * while darkstr.debug.diagPrefs is true (default false; QA / Proof harnesses
+  * set it in user.js). Chrome callers read the same values through
+@@ -172,6 +228,9 @@
+       return;
+     }
+     this._inited = true;
++    // 0053: was this profile last run by a pre-0053 build? (Read before the
++    // 0052 sweep removes darkstr.webgl.lastStatus.)
++    this._legacyProfile = this._detectLegacyProfile();
+     // 0052: drop diagnostics an older build (or a diag session) left behind.
+     this._lastSweep = sweepDiagPrefs();
+     this._observer = this._observe.bind(this);
+@@ -266,6 +325,8 @@
+ 
+   /**
+    * Apply XOR side-effects for the current darkstr.mode value.
++   * 0053: Pollution saves + owns POLLUTION_PREFS; Homogeneous writes nothing
++   * except the one-time exact restore when Pollution is switched off.
+    * @returns {{ mode: string, nativeCompatible: boolean, xorSafe: boolean }}
+    */
+   applyModeEffects() {
+@@ -274,9 +335,6 @@
+     }
+     this._applying = true;
+     try {
+-      // 0029: enable live WebGL for both Homogeneous and Pollution (Firefox-coherent).
+-      this._ensureWebGlContextPrefs();
+-
+       let mode = "homogeneous";
+       try {
+         mode = Services.prefs.getStringPref(MODE_PREF, "homogeneous");
+@@ -294,20 +352,30 @@
+         nativeCompatible = false;
+       }
+ 
++      if (this._legacyProfile) {
++        this._legacyProfile = false;
++        try {
++          Services.prefs.setBoolPref(MIGRATED_PREF, true);
++        } catch (_e) {}
++        this._clearLegacyWebGlValues();
++        if (mode === "pollution" && !Services.prefs.prefHasUserValue(SAVED_PREF)) {
++          // A pre-0053 build already forced RFP/FPP off without saving them:
++          // the user's own values are unknown, so restore = stock on exit.
++          this._savePrefs({ assumeStock: true });
++        }
++      }
++
+       if (mode === "pollution") {
+-        Services.prefs.setBoolPref(RFP_PREF, false);
+-        Services.prefs.setBoolPref(FPP_PREF, false);
++        this._enterPollution();
+       } else {
+-        // Homogeneous: restore LibreWolf stock RFP expectations.
+-        // Do not customize RFP metrics / letterboxing tables.
+-        Services.prefs.setBoolPref(RFP_PREF, true);
+-        Services.prefs.setBoolPref(FPP_PREF, true);
++        this._leavePollution();
+       }
++      this._recordWebGlStatus(mode);
+ 
+       const rfp = Services.prefs.getBoolPref(RFP_PREF, false);
+       const fpp = Services.prefs.getBoolPref(FPP_PREF, false);
+-      const xorSafe =
+-        mode === "pollution" ? !rfp && !fpp : rfp === true;
++      // Homogeneous has no constraint: RFP/FPP are whatever the user chose.
++      const xorSafe = mode === "pollution" ? !rfp && !fpp : true;
+ 
+       return { mode, nativeCompatible, xorSafe };
+     } finally {
+@@ -315,81 +383,131 @@
+     }
+   },
+ 
+-  _ensureWebGlContextPrefs() {
+-    try {
+-      Services.prefs.setBoolPref(WEBGL_DISABLED_PREF, false);
+-      Services.prefs.setBoolPref(WEBGL_FORCE_ENABLED_PREF, true);
++  /** 0053: save the pre-Pollution state of POLLUTION_PREFS (once). */
++  _savePrefs({ assumeStock = false } = {}) {
++    const saved = { v: 1, prefs: {} };
++    for (const [name] of POLLUTION_PREFS) {
++      if (Services.prefs.getPrefType(name) === Services.prefs.PREF_INVALID) {
++        continue; // e.g. librewolf.webgl.prompt on a non-LibreWolf build
++      }
++      const user = !assumeStock && Services.prefs.prefHasUserValue(name);
++      saved.prefs[name] = { user, value: user ? readUserValue(name) : null };
++    }
++    Services.prefs.setStringPref(SAVED_PREF, JSON.stringify(saved));
++  },
++
++  _enterPollution() {
++    if (!Services.prefs.prefHasUserValue(SAVED_PREF)) {
++      this._savePrefs();
++    }
++    for (const [name, value] of POLLUTION_PREFS) {
+       try {
+-        if (Services.prefs.getPrefType(WEBGL_FORBID_HARDWARE_PREF) != Services.prefs.PREF_INVALID) {
+-          Services.prefs.setBoolPref(WEBGL_FORBID_HARDWARE_PREF, false);
++        if (Services.prefs.getPrefType(name) === Services.prefs.PREF_INVALID) {
++          continue;
+         }
+-      } catch (_eFh) {}
+-      try {
+-        if (Services.prefs.getPrefType(WEBGL_FORBID_SOFTWARE_PREF) != Services.prefs.PREF_INVALID) {
+-          Services.prefs.setBoolPref(WEBGL_FORBID_SOFTWARE_PREF, false);
++        if (Services.prefs.getBoolPref(name) !== value) {
++          Services.prefs.setBoolPref(name, value);
+         }
+-      } catch (_eFs) {}
+-      // Completeness only — startup cfg (defaultPref gfx.blocklist.all=-1) is SoT.
++      } catch (_e) {}
++    }
++  },
++
++  /** 0053: exact restore of what _savePrefs recorded; no-op without it. */
++  _leavePollution() {
++    if (!Services.prefs.prefHasUserValue(SAVED_PREF)) {
++      return;
++    }
++    let saved = null;
++    try {
++      saved = JSON.parse(Services.prefs.getStringPref(SAVED_PREF, ""));
++    } catch (_e) {
++      saved = null;
++    }
++    const entries = (saved && saved.prefs) || {};
++    for (const [name] of POLLUTION_PREFS) {
++      const rec = entries[name];
++      if (!rec) {
++        continue;
++      }
+       try {
+-        Services.prefs.setIntPref(GFX_BLOCKLIST_ALL_PREF, -1);
+-      } catch (_eBl) {}
+-      // LW permission prompt gate (StaticPrefs::librewolf_webgl_prompt).
+-      try {
+-        if (Services.prefs.getPrefType(LIBREWOLF_WEBGL_PROMPT_PREF) != Services.prefs.PREF_INVALID) {
+-          try {
+-            Services.prefs.unlockPref(LIBREWOLF_WEBGL_PROMPT_PREF);
+-          } catch (_eUnlock) {}
+-          Services.prefs.setBoolPref(LIBREWOLF_WEBGL_PROMPT_PREF, false);
++        if (rec.user === true && typeof rec.value === "boolean") {
++          Services.prefs.setBoolPref(name, rec.value);
++        } else if (rec.user !== true && Services.prefs.prefHasUserValue(name)) {
++          Services.prefs.clearUserPref(name);
+         }
+-      } catch (_ePrompt) {}
+-      try {
+-        if (Services.prefs.getPrefType(LIBREWOLF_WEBGL_PROMPT_HIDE_PREF) != Services.prefs.PREF_INVALID) {
+-          try {
+-            Services.prefs.unlockPref(LIBREWOLF_WEBGL_PROMPT_HIDE_PREF);
+-          } catch (_eUnlockH) {}
+-          Services.prefs.setBoolPref(LIBREWOLF_WEBGL_PROMPT_HIDE_PREF, true);
++      } catch (_e) {}
++    }
++    try {
++      Services.prefs.clearUserPref(SAVED_PREF);
++    } catch (_e) {}
++  },
++
++  _detectLegacyProfile() {
++    try {
++      if (Services.prefs.getBoolPref(MIGRATED_PREF, false)) {
++        return false;
++      }
++      if (Services.prefs.prefHasUserValue(WEBGL_LAST_STATUS_PREF)) {
++        const status = Services.prefs.getStringPref(WEBGL_LAST_STATUS_PREF, "");
++        if (!status.startsWith(WEBGL_STATUS_TAG)) {
++          return true;
+         }
+-      } catch (_eHide) {}
++      }
++      return (
++        Services.prefs.prefHasUserValue(WEBGL_FORBID_SOFTWARE_PREF) &&
++        Services.prefs.getBoolPref(WEBGL_FORBID_SOFTWARE_PREF) === false
++      );
++    } catch (_e) {
++      return false;
++    }
++  },
+ 
+-      const disabled = Services.prefs.getBoolPref(WEBGL_DISABLED_PREF, true);
+-      const forced = Services.prefs.getBoolPref(WEBGL_FORCE_ENABLED_PREF, false);
+-      let blocklistAll = "?";
++  /** 0053: undo the 0029 WebGL user values a pre-0053 build left (clear only). */
++  _clearLegacyWebGlValues() {
++    const cleared = [];
++    for (const [name, forced] of LEGACY_WEBGL_VALUES) {
+       try {
+-        blocklistAll = String(Services.prefs.getIntPref(GFX_BLOCKLIST_ALL_PREF, 0));
+-      } catch (_eBl2) {}
+-      let lwPrompt = "?";
+-      try {
+-        if (Services.prefs.getPrefType(LIBREWOLF_WEBGL_PROMPT_PREF) != Services.prefs.PREF_INVALID) {
+-          lwPrompt = String(Services.prefs.getBoolPref(LIBREWOLF_WEBGL_PROMPT_PREF, true));
+-        } else {
+-          lwPrompt = "absent";
++        if (
++          Services.prefs.prefHasUserValue(name) &&
++          readUserValue(name) === forced
++        ) {
++          Services.prefs.clearUserPref(name);
++          cleared.push(name);
+         }
+-      } catch (_ePrompt2) {
+-        lwPrompt = "err";
+-      }
++      } catch (_e) {}
++    }
++    this._legacyCleared = cleared;
++    return cleared;
++  },
+ 
++  /** Diagnostics only (in memory unless darkstr.debug.diagPrefs): no pref writes. */
++  _recordWebGlStatus(mode) {
++    try {
++      const g = (name, fallback) => {
++        try {
++          const v = readUserValue(name);
++          return v === null ? fallback : String(v);
++        } catch (_e) {
++          return "err";
++        }
++      };
++      const prompt = g(LIBREWOLF_WEBGL_PROMPT_PREF, "absent");
++      const disabled = g(WEBGL_DISABLED_PREF, "?");
+       const bits = [
+-        "disabled=" + String(disabled),
+-        "force-enabled=" + String(forced),
+-        "blocklist.all=" + blocklistAll,
+-        "librewolf.webgl.prompt=" + lwPrompt,
+-        "ok=" + String(!disabled && lwPrompt !== "true"),
++        "mode=" + mode,
++        "disabled=" + disabled,
++        "force-enabled=" + g(WEBGL_FORCE_ENABLED_PREF, "?"),
++        "blocklist.all=" + g(GFX_BLOCKLIST_ALL_PREF, "?"),
++        "librewolf.webgl.prompt=" + prompt,
++        this._gfxFeatureStatusSnippet(),
+       ];
+-      bits.push(this._gfxFeatureStatusSnippet());
+-
+-      const status = bits.join(",").slice(0, 400);
+-      const ensureOk = !disabled && lwPrompt !== "true";
+-      diagPrefs.setBoolPref(WEBGL_ENSURE_APPLIED_PREF, ensureOk);
+-      diagPrefs.setStringPref(WEBGL_LAST_STATUS_PREF, status);
+-    } catch (e) {
+-      try {
+-        diagPrefs.setBoolPref(WEBGL_ENSURE_APPLIED_PREF, false);
+-        const reason =
+-          "webgl-ensure: " +
+-          (e && e.message ? String(e.message) : String(e)).slice(0, 160);
+-        diagPrefs.setStringPref(WEBGL_LAST_STATUS_PREF, reason);
+-      } catch (_e2) {}
+-    }
++      const ok = disabled === "false" && prompt !== "true";
++      diagPrefs.setBoolPref(WEBGL_ENSURE_APPLIED_PREF, ok);
++      diagPrefs.setStringPref(
++        WEBGL_LAST_STATUS_PREF,
++        (WEBGL_STATUS_TAG + bits.join(",")).slice(0, 400)
++      );
++    } catch (_e) {}
+   },
+ 
+   /**
+--- a/browser/components/DarkstrNativePersona.sys.mjs
++++ b/browser/components/DarkstrNativePersona.sys.mjs
+@@ -814,8 +814,15 @@
+ 
+     // Content-process C++ gates cannot read dynamic string darkstr.mode (Fission
+     // sanitization). Mirror pollution as a bool for DarkstrNavigatorHooks.
++    // 0053 (Fable B5): Homogeneous writes nothing — the mirror is only set
++    // while Pollution is active and cleared (back to "no user value", read as
++    // false) otherwise.
+     try {
+-      Services.prefs.setBoolPref(POLLUTION_ACTIVE_PREF, !!pollutionActive);
++      if (pollutionActive) {
++        Services.prefs.setBoolPref(POLLUTION_ACTIVE_PREF, true);
++      } else if (Services.prefs.prefHasUserValue(POLLUTION_ACTIVE_PREF)) {
++        Services.prefs.clearUserPref(POLLUTION_ACTIVE_PREF);
++      }
+     } catch (_ePol) {}
+ 
+     // 0028: optional WebRTC IP pref-kill only while native Pollution applies.
+--- a/lw/librewolf.cfg
++++ b/lw/librewolf.cfg
+@@ -956,23 +956,6 @@
+ defaultPref("darkstr.nativePersonaHooks", false);
+ // END darkstr-m1-prefs
+ 
+-// BEGIN darkstr-0029-webgl — Firefox-coherent WebGL (undo LibreWolf null-context hardening)
+-// gfx.blocklist.all=-1 ignores feature blocklisting; +1 forces block-all (never set +1).
+-// Pref is AtStartup / mirror:once — must land in cfg before gfx init.
+-// librewolf.webgl.prompt=false unlocks LW IsWebGLAllowed doorhanger gate
+-// (StaticPrefs::librewolf_webgl_prompt; Err "WebGL is currently disabled.").
+-unlockPref("webgl.disabled");
+-defaultPref("webgl.disabled", false);
+-unlockPref("webgl.force-enabled");
+-defaultPref("webgl.force-enabled", true);
+-unlockPref("gfx.blocklist.all");
+-defaultPref("gfx.blocklist.all", -1);
+-unlockPref("librewolf.webgl.prompt");
+-defaultPref("librewolf.webgl.prompt", false);
+-unlockPref("librewolf.webgl.prompt.hide");
+-defaultPref("librewolf.webgl.prompt.hide", true);
+-// END darkstr-0029-webgl
+-
+ // BEGIN darkstr-0030-etld-rotate
+ // Sticky per-eTLD+1 seed under Pollution+hooks. Proof: snapshot paste OR rotatePerSite=false.
+ defaultPref("darkstr.persona.rotatePerSite", true);
