@@ -1,0 +1,184 @@
+--- a/browser/components/DarkstrModeXor.sys.mjs
++++ b/browser/components/DarkstrModeXor.sys.mjs
+@@ -27,8 +27,18 @@
+  *              restores exactly the values saved when Pollution was entered
+  *              (user value or "no user value"), then forgets the saved copy.
+  * Forbidden   → Pollution with RFP still true via this prefs path
++ * 0054 (Fable B6): Pollution requires native persona hooks. Pollution with
++ *              darkstr.nativePersonaHooks=false would turn RFP / FPP off with
++ *              no persona to replace them (a bare browser). ModeXor refuses
++ *              it, from any writer (hand-edited prefs at startup, about:config,
++ *              an extension, a pref change at runtime): darkstr.mode is put
++ *              back to Homogeneous, so the saved RFP / FPP are restored and RFP
++ *              is never off without a persona. The Settings pane turns hooks on
++ *              before it writes Pollution, so it never hits the refusal.
++ *              Native-Compatible (Pollution + hooks + nativeCompatible: RFP
++ *              off, native identity) stays the documented escape.
+  *
+- * Observes darkstr.mode / darkstr.nativeCompatible. Also observes
++ * Observes darkstr.mode / darkstr.nativeCompatible / darkstr.nativePersonaHooks. Also observes
+  * privacy.resistFingerprinting / privacy.fingerprintingProtection and
+  * browser.contentblocking.category (ContentBlockingPrefs.PREF_CB_CATEGORY on
+  * 155.0.1) so that under Pollution we can re-assert both false after CB
+@@ -45,6 +55,10 @@
+ 
+ const MODE_PREF = "darkstr.mode";
+ const NATIVE_PREF = "darkstr.nativeCompatible";
++/** 0054: Pollution requires it (refused otherwise). */
++const HOOKS_PREF = "darkstr.nativePersonaHooks";
++/** 0054: diagnostics (in memory unless darkstr.debug.diagPrefs). */
++const LAST_REFUSAL_PREF = "darkstr.xor.lastRefusal";
+ const RFP_PREF = "privacy.resistFingerprinting";
+ const FPP_PREF = "privacy.fingerprintingProtection";
+ /** 0057r2: Firefox baseline FPP (default on; canvas randomization among its targets). */
+@@ -236,6 +250,7 @@
+   "darkstr.chaff.lastBeaconKind",
+   "darkstr.webgl.ensureApplied",
+   "darkstr.webgl.lastStatus",
++  "darkstr.xor.lastRefusal", // 0054
+   "darkstr.ffi.lastError",
+   "darkstr.ffi.loadSource",
+ ]);
+@@ -289,6 +304,7 @@
+     Services.prefs.addObserver(DIAG_PREFS_PREF, this._observer);
+     Services.prefs.addObserver(MODE_PREF, this._observer);
+     Services.prefs.addObserver(NATIVE_PREF, this._observer);
++    Services.prefs.addObserver(HOOKS_PREF, this._observer);
+     Services.prefs.addObserver(RFP_PREF, this._observer);
+     Services.prefs.addObserver(FPP_PREF, this._observer);
+     Services.prefs.addObserver(BASELINE_FPP_PREF, this._observer);
+@@ -310,6 +326,7 @@
+       Services.prefs.removeObserver(DIAG_PREFS_PREF, this._observer);
+       Services.prefs.removeObserver(MODE_PREF, this._observer);
+       Services.prefs.removeObserver(NATIVE_PREF, this._observer);
++      Services.prefs.removeObserver(HOOKS_PREF, this._observer);
+       Services.prefs.removeObserver(RFP_PREF, this._observer);
+       Services.prefs.removeObserver(FPP_PREF, this._observer);
+       Services.prefs.removeObserver(BASELINE_FPP_PREF, this._observer);
+@@ -358,7 +375,8 @@
+     if (this._applying) {
+       return;
+     }
+-    if (data === MODE_PREF || data === NATIVE_PREF) {
++    if (data === MODE_PREF || data === NATIVE_PREF || data === HOOKS_PREF) {
++      // 0054: hooks switched off under Pollution -> refused (Homogeneous).
+       this.applyModeEffects();
+       return;
+     }
+@@ -406,6 +424,13 @@
+         mode = "homogeneous";
+       }
+ 
++      // 0054 (Fable B6): Pollution without native persona hooks is refused
++      // before any RFP / FPP write: the mode pref goes back to Homogeneous.
++      if (mode === "pollution" && !this._hooksOn()) {
++        this._refusePollution();
++        mode = "homogeneous";
++      }
++
+       let nativeCompatible = false;
+       try {
+         nativeCompatible = Services.prefs.getBoolPref(NATIVE_PREF, false);
+@@ -447,9 +472,52 @@
+       return { mode, nativeCompatible, xorSafe };
+     } finally {
+       this._applying = false;
++    }
++  },
++
++  _hooksOn() {
++    try {
++      return Services.prefs.getBoolPref(HOOKS_PREF, false) === true;
++    } catch (_e) {
++      return false;
+     }
+   },
+ 
++  /**
++   * 0054: darkstr.mode=pollution with hooks off -> Homogeneous. Clears the
++   * user value when the default is Homogeneous (stock), else writes it.
++   * Runs inside applyModeEffects (_applying), so the mode observer does not
++   * re-enter; the other darkstr modules see the corrected mode at once.
++   */
++  _refusePollution() {
++    this._refusals = (this._refusals || 0) + 1;
++    try {
++      let def = "homogeneous";
++      try {
++        def = Services.prefs
++          .getDefaultBranch("")
++          .getStringPref(MODE_PREF, "homogeneous");
++      } catch (_e) {
++        def = "homogeneous";
++      }
++      if (def === "homogeneous" && Services.prefs.prefHasUserValue(MODE_PREF)) {
++        Services.prefs.clearUserPref(MODE_PREF);
++      }
++      if (Services.prefs.getStringPref(MODE_PREF, "homogeneous") !== "homogeneous") {
++        Services.prefs.setStringPref(MODE_PREF, "homogeneous");
++      }
++    } catch (_e) {}
++    try {
++      diagPrefs.setStringPref(LAST_REFUSAL_PREF, "pollution-without-hooks");
++    } catch (_e) {}
++    try {
++      console.warn(
++        "darkstr 0054: Pollution needs native persona hooks " +
++          "(darkstr.nativePersonaHooks); darkstr.mode was set back to Homogeneous."
++      );
++    } catch (_e) {}
++  },
++
+   /** 0053: save the pre-Pollution state of POLLUTION_PREFS (once). */
+   _savePrefs({ assumeStock = false } = {}) {
+     const saved = { v: 1, prefs: {} };
+--- a/browser/components/preferences/config/darkstr.mjs
++++ b/browser/components/preferences/config/darkstr.mjs
+@@ -5,8 +5,11 @@
+ import { Preferences } from "chrome://global/content/preferences/Preferences.mjs";
+ 
+ // Same chrome prefs as extension Settings. One mode at a time.
+-// Hooks default off and only apply in Pollution.
+-// Leaving Pollution clears hooks (pref false), not just the disabled gate.
++// 0054 (Fable B6): Pollution requires native persona hooks. Choosing
++// Pollution turns hooks on first (then writes the mode), leaving Pollution
++// clears them, and the hooks checkbox only shows the state: "Pollution on,
++// hooks off" cannot be set here. DarkstrModeXor refuses it from any other
++// writer. Native-Compatible stays the escape (native identity in Pollution).
+ // addSetting throws unless the pref is registered first.
+ Preferences.addAll([
+   { id: "darkstr.mode", type: "string" },
+@@ -18,6 +21,13 @@
+   Preferences.addSetting({
+     id: "darkstrMode",
+     pref: "darkstr.mode",
++    set(value) {
++      // Hooks before mode: ModeXor never sees Pollution without hooks.
++      if (value === "pollution") {
++        Services.prefs.setBoolPref("darkstr.nativePersonaHooks", true);
++      }
++      return value;
++    },
+     onUserChange(value) {
+       if (value !== "pollution") {
+         const hooks = Preferences.getSetting("darkstrNativePersonaHooks");
+@@ -41,6 +51,10 @@
+     id: "darkstrNativePersonaHooks",
+     pref: "darkstr.nativePersonaHooks",
+     deps: ["darkstrMode"],
+-    disabled: ({ darkstrMode }) => darkstrMode.value !== "pollution",
++    // 0054: display only -- on exactly while Pollution is on.
++    disabled: () => true,
++    set(value, { darkstrMode }) {
++      return darkstrMode?.value === "pollution" ? true : value;
++    },
+   });
+ }
+--- a/browser/locales/en-US/browser/preferences/preferences.ftl
++++ b/browser/locales/en-US/browser/preferences/preferences.ftl
+@@ -2948,4 +2948,4 @@
+     .description = Beside mode. Restores native identity for banking and SSO. Not a Cloudflare-defeat switch.
+ darkstr-native-persona-hooks =
+     .label = Native persona hooks
+-    .description = Off by default. Applies the persona in the browser when Pollution is on. Not anti-detect.
++    .description = On whenever Pollution is on: Pollution always applies the persona. Use Native-Compatible for native identity. Not anti-detect.

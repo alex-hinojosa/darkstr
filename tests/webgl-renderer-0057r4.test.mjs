@@ -24,7 +24,7 @@ const WHC = await import(pathToFileURL(join(F57, "DarkstrWorkerHooksChild.sys.mj
 const { geckoSanitizeRenderer, personaGlString, buildDepthOverrides } = WHC;
 
 // Every shipped copy of the two child modules (later pins re-ship WorkerHooksChild).
-const childCopies = ["0057-files", "0058-files", "0058b-files"]
+const childCopies = ["0057-files", "0058-files", "0058b-files", "0058c-files"]
   .flatMap((d) => ["DarkstrDepthHooksChild.sys.mjs", "DarkstrWorkerHooksChild.sys.mjs"].map((f) => join(root, "patches", d, f)))
   .filter((p) => existsSync(p));
 

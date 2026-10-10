@@ -1,0 +1,392 @@
+--- a/browser/components/DarkstrWorkerHooksChild.sys.mjs
++++ b/browser/components/DarkstrWorkerHooksChild.sys.mjs
+@@ -55,14 +55,58 @@
+   return /apple/i.test(vendor) || /apple/i.test(renderer);
+ }
+ 
+-/** true → this document / worker gets no WebGPU. */
++/**
++ * 0058c: the persona claims macOS. The UA's OS token decides first (as 0058's
++ * osOfSnapshot: a pasted snapshot's UA is what navigator.userAgent and every
++ * request claim), then navigator.platform. No OS information at all = the
++ * host's (Mac). iOS / iPadOS, Windows, Linux, Android, ChromeOS are not macOS.
++ */
++export function isMacPersona(persona) {
++  const ua = String(persona?.userAgent || "");
++  const m = /\(([^)]*)\)/.exec(ua);
++  if (m) {
++    const t = m[1];
++    if (/iPhone|iPad|iPod/i.test(t)) {
++      return false;
++    }
++    if (/Windows|Win64|Win32|WOW64/i.test(t)) {
++      return false;
++    }
++    if (/Android|Linux|X11|CrOS|FreeBSD|OpenBSD/i.test(t)) {
++      return false;
++    }
++    if (/Macintosh|Mac OS X/i.test(t)) {
++      return true;
++    }
++  }
++  const p = String(persona?.platform || "");
++  if (p) {
++    return /^Mac/i.test(p);
++  }
++  return true;
++}
++
++/**
++ * true → this document / worker gets no WebGPU.
++ * 0058c (Proof #95 note): keyed on the persona's OS *and* GPU vendor. On an
++ * Apple-silicon host the only adapter is Apple's, so WebGPU is exposed only to
++ * a macOS persona with an Apple GPU; a Windows / Linux persona (seeded or a
++ * pasted snapshot, with or without a depth GPU) gets stock
++ * dom.webgpu.enabled=false shape -- never the Apple adapter passed through.
++ */
+ export function webGpuHiddenFor(result, appleSiliconHost = isAppleSiliconHost()) {
+   if (!appleSiliconHost) {
+     return false;
+   }
+-  if (result?.decision !== "persona" || !result.depth) {
++  if (result?.decision !== "persona") {
+     return false;
+   }
++  if (result.persona && !isMacPersona(result.persona)) {
++    return true;
++  }
++  if (!result.depth) {
++    return false;
++  }
+   return !isApplePersonaGpu(result.depth.gpu);
+ }
+ 
+--- a/browser/components/DarkstrDepthHooks.sys.mjs
++++ b/browser/components/DarkstrDepthHooks.sys.mjs
+@@ -153,8 +153,119 @@
+     }
+   } catch (_e) {}
+   return "windows";
++}
++
++/**
++ * 0058c: OS of a snapshot -- the UA OS token first, then platform; the same
++ * rule as DarkstrNativePersona.snapshotOs (tests keep them equal). null = unknown.
++ */
++export function snapshotOsForGpu(snap) {
++  const m = /^Mozilla\/5\.0 \(([^()]+?); rv:/.exec(String(snap?.userAgent || ""));
++  const t = m ? m[1] : "";
++  if (/Windows/.test(t)) return "windows";
++  if (/Macintosh|Mac OS X/.test(t)) return "macos";
++  if (/X11|Linux/.test(t)) return "linux";
++  const p = String(snap?.platform || "");
++  if (/^Win/.test(p)) return "windows";
++  if (/^Mac/.test(p)) return "macos";
++  if (/Linux/.test(p)) return "linux";
++  return null;
++}
++
++/**
++ * 0058c: a raw WebGL GPU (vendor = UNMASKED_VENDOR, renderer = raw
++ * GL_RENDERER) that Firefox on `os` could report:
++ *  - windows: ANGLE on Direct3D, vendor "Google Inc. (<maker>)";
++ *  - linux:   native GL with its driver in the string (Mesa, llvmpipe,
++ *             radeonsi, nouveau, NVIDIA "/PCIe/SSE2"); never ANGLE, Apple or
++ *             the macOS GL vendors;
++ *  - macos:   anything not clearly another OS's (no D3D ANGLE, Mesa, Google
++ *             vendor, Linux NVIDIA "PCIe/SSE2" strings).
++ */
++export function gpuCoherentWithOs(gpu, os) {
++  const g = normalizeGpu(gpu);
++  if (!g) return false;
++  const v = g.vendor;
++  const r = g.renderer;
++  const d3d = /^ANGLE \(.*(Direct3D|D3D1[01])/.test(r);
++  if (os === "windows") {
++    return d3d && /^Google Inc\. \([^)]+\)$/.test(v) && !/Apple/.test(r);
++  }
++  if (os === "linux") {
++    // macOS GL vendors ("Intel Inc.", "ATI Technologies Inc.") and Mac
++    // renderer shapes never appear on Linux; Linux GL strings carry their
++    // driver (Mesa / llvmpipe / radeonsi / nouveau / NVIDIA "/PCIe/SSE2").
++    if (
++      d3d ||
++      /ANGLE|Apple|OpenGL Engine|Metal/.test(r) ||
++      /^(Google Inc\.|Apple|Intel Inc\.|ATI Technologies Inc\.)/.test(v)
++    ) {
++      return false;
++    }
++    return /Mesa|llvmpipe|\/PCIe\/SSE2|radeonsi|nouveau|Zink|virgl|SVGA3D/.test(r);
++  }
++  if (os === "macos") {
++    return !d3d && !/Mesa|llvmpipe|radeonsi|\/PCIe\/SSE2/.test(r) && !/^Google Inc\./.test(v);
++  }
++  return true;
++}
++
++/**
++ * 0058c: depth seed of a pasted snapshot that carries none (FNV-1a 32 of its
++ * trimmed pref text; never 0).
++ */
++export function snapshotDepthSeed(raw) {
++  const text = String(raw || "").trim();
++  let h = 0x811c9dc5;
++  for (let i = 0; i < text.length; i++) {
++    h ^= text.charCodeAt(i);
++    h = Math.imul(h, 0x01000193) >>> 0;
++  }
++  return h >>> 0 || 1;
+ }
+ 
++const gGpuWarned = new Set();
++function warnGpuOnce(key, msg) {
++  if (gGpuWarned.has(key)) {
++    return;
++  }
++  gGpuWarned.add(key);
++  try {
++    console.warn(msg);
++  } catch (_e) {}
++}
++
++/**
++ * 0058c: the persona GPU, coherent with the snapshot's OS.
++ *  - useOwn (golden / pasted snapshot): the snapshot's own GPU strings when
++ *    they are OS-coherent; otherwise a warning and the defaults below;
++ *  - `gpu` (derived / plan GPU) when coherent with that OS;
++ *  - else the bucketed default of that OS (GPU_BY_OS[os], picked by `seed`).
++ * Unknown OS: `gpu` unchanged. A macOS persona keeps what it had.
++ */
++export function personaGpu(snap, gpu, seed, { useOwn = true } = {}) {
++  const os = snapshotOsForGpu(snap);
++  if (!os) {
++    return gpu;
++  }
++  const own = normalizeGpu(snap?.gpu);
++  if (useOwn && own) {
++    if (gpuCoherentWithOs(own, os)) {
++      return own;
++    }
++    warnGpuOnce(
++      `${os}|${own.vendor}|${own.renderer}`,
++      `darkstr 0058c: snapshot GPU "${own.vendor} / ${own.renderer}" is not coherent with its ${os} OS; using a ${os} default GPU`
++    );
++  }
++  if (gpu && gpuCoherentWithOs(gpu, os)) {
++    return gpu;
++  }
++  const table = GPU_BY_OS[os];
++  const pick = table[(seed >>> 0) % table.length];
++  return { vendor: pick.vendor, renderer: pick.renderer };
++}
++
+ function normalizeGpu(raw) {
+   if (!raw || typeof raw !== "object") {
+     return null;
+@@ -487,6 +598,8 @@
+     if (!plan.armed || (!plan.seeds && !plan.perSite)) {
+       return null;
+     }
++    // 0058c: the decision's snapshot, for an OS-coherent GPU on every path.
++    let gpuSnap = null;
+     // SubsequentNav arm: reuse NativePersona first-doc gate when available.
+     // When 0030 rotatePerSite is active, ALWAYS derive depth seeds (incl.
+     // webgpuSeed) from eTLD-effective persona seed — same SoT as sticky
+@@ -515,6 +628,7 @@
+         if (!snap) {
+           return null;
+         }
++        gpuSnap = snap;
+ 
+         let rotating = false;
+         try {
+@@ -567,7 +681,11 @@
+             return null;
+           }
+           if (seed) {
+-            const derived = this._generateDepthFromSeed(seed);
++            // 0058c: GPU from the persona OS's table (same rng index).
++            const derived = this._generateDepthFromSeed(
++              seed,
++              snapshotOsForGpu(snap) || undefined
++            );
+             if (derived) {
+               const out = {
+                 canvasSeed: derived.canvasSeed >>> 0,
+@@ -575,10 +693,12 @@
+                 fontSeed: derived.fontSeed >>> 0,
+                 speechSeed: derived.speechSeed >>> 0,
+                 webgpuSeed: derived.webgpuSeed >>> 0,
+-                gpu: {
+-                  vendor: derived.gpu.vendor,
+-                  renderer: derived.gpu.renderer,
+-                },
++                gpu: personaGpu(
++                  snap,
++                  { vendor: derived.gpu.vendor, renderer: derived.gpu.renderer },
++                  derived.canvasSeed,
++                  { useOwn: false }
++                ),
+               };
+               this._writeLastSeeds(out);
+               return out;
+@@ -599,7 +719,11 @@
+             fontSeed: snapFont,
+             speechSeed: snapSpeech,
+             webgpuSeed: readWebGpuSeed(snap, snapSpeech, snapAudio),
+-            gpu: { vendor: snapGpu.vendor, renderer: snapGpu.renderer },
++            gpu: personaGpu(
++              snap,
++              { vendor: snapGpu.vendor, renderer: snapGpu.renderer },
++              snapCanvas
++            ),
+           };
+           this._writeLastSeeds(out);
+           return out;
+@@ -629,10 +753,11 @@
+       webgpuSeed:
+         (plan.seeds.webgpuSeed >>> 0) ||
+         deriveWebGpuSeed(speechSeedOut, plan.seeds.audioSeed),
+-      gpu: {
+-        vendor: plan.seeds.gpu.vendor,
+-        renderer: plan.seeds.gpu.renderer,
+-      },
++      gpu: personaGpu(
++        gpuSnap,
++        { vendor: plan.seeds.gpu.vendor, renderer: plan.seeds.gpu.renderer },
++        plan.seeds.canvasSeed
++      ),
+     };
+     this._writeLastSeeds(out);
+     return out;
+@@ -640,64 +765,60 @@
+ 
+   _readDepthSeeds() {
+     // Prefer cached persona snapshot (same JSON bridge as NativePersona).
++    // 0058c: the raw pasted snapshot (NativePersona's resolved copy drops
++    // `gpu`) decides the GPU: its own strings when coherent with its OS, else
++    // a default of that OS (personaGpu).
++    let raw = "";
++    let parsed = null;
+     try {
+-      const raw = Services.prefs.getStringPref(SNAPSHOT_PREF, "");
++      raw = String(Services.prefs.getStringPref(SNAPSHOT_PREF, "") || "").trim();
+       if (raw) {
+-        const parsed = JSON.parse(raw);
+-        if (parsed && typeof parsed === "object") {
+-          const canvasSeed = readU32Field(parsed, "canvasSeed", "canvas_seed");
+-          const audioSeed = readU32Field(parsed, "audioSeed", "audio_seed");
+-          const gpu = normalizeGpu(parsed.gpu);
+-          if (canvasSeed !== null && audioSeed !== null && gpu) {
+-            {
+-              const fontSeed = readFontSeed(parsed, canvasSeed, audioSeed);
+-              const speechSeed = readSpeechSeed(parsed, fontSeed, canvasSeed);
+-              return {
+-                canvasSeed,
+-                audioSeed,
+-                fontSeed,
+-                speechSeed,
+-                webgpuSeed: readWebGpuSeed(parsed, speechSeed, audioSeed),
+-                gpu,
+-              };
+-            }
+-          }
+-          // Partial snapshot: fill missing fields from seed fallback below,
+-          // but keep present fields when we have a persona seed.
+-        }
++        const p = JSON.parse(raw);
++        parsed = p && typeof p === "object" && !Array.isArray(p) ? p : null;
+       }
+-    } catch (_e) {}
++    } catch (_e) {
++      parsed = null;
++    }
++    const snapOs = parsed ? snapshotOsForGpu(parsed) || undefined : undefined;
++    if (parsed) {
++      const canvasSeed = readU32Field(parsed, "canvasSeed", "canvas_seed");
++      const audioSeed = readU32Field(parsed, "audioSeed", "audio_seed");
++      const gpu = normalizeGpu(parsed.gpu);
++      // Full depth snapshot (Rust print_persona_snapshot): its own fields.
++      if (canvasSeed !== null && audioSeed !== null && gpu) {
++        const fontSeed = readFontSeed(parsed, canvasSeed, audioSeed);
++        const speechSeed = readSpeechSeed(parsed, fontSeed, canvasSeed);
++        return {
++          canvasSeed,
++          audioSeed,
++          fontSeed,
++          speechSeed,
++          webgpuSeed: readWebGpuSeed(parsed, speechSeed, audioSeed),
++          gpu: personaGpu(parsed, gpu, canvasSeed),
++        };
++      }
++    }
+ 
+     const seed = this._readPersonaSeedPref();
+-    if (!seed) {
+-      // Try partial snapshot fill without persona.seed.
+-      try {
+-        const raw = Services.prefs.getStringPref(SNAPSHOT_PREF, "");
+-        if (raw) {
+-          const parsed = JSON.parse(raw);
+-          const canvasSeed = readU32Field(parsed, "canvasSeed", "canvas_seed");
+-          const audioSeed = readU32Field(parsed, "audioSeed", "audio_seed");
+-          const gpu = normalizeGpu(parsed.gpu);
+-          // Need canvas+audio+gpu for a coherent depth payload; fontSeed fills.
+-          if (canvasSeed !== null && audioSeed !== null && gpu) {
+-            {
+-              const fontSeed = readFontSeed(parsed, canvasSeed, audioSeed);
+-              const speechSeed = readSpeechSeed(parsed, fontSeed, canvasSeed);
+-              return {
+-                canvasSeed,
+-                audioSeed,
+-                fontSeed,
+-                speechSeed,
+-                webgpuSeed: readWebGpuSeed(parsed, speechSeed, audioSeed),
+-                gpu,
+-              };
+-            }
+-          }
+-        }
+-      } catch (_e) {}
++    if (seed) {
++      // Proof seed path; with a pasted snapshot the GPU follows its OS.
++      const d = this._generateDepthFromSeed(seed >>> 0, snapOs);
++      if (parsed) {
++        d.gpu = personaGpu(parsed, d.gpu, d.canvasSeed);
++      }
++      return d;
++    }
++    if (!parsed) {
+       return null;
+     }
+-    return this._generateDepthFromSeed(seed >>> 0);
++    // 0058c: a pasted snapshot without depth seeds and without
++    // darkstr.persona.seed used to leave the depth layer unarmed, so its pages
++    // drew and reported WebGL with the host's real GPU (an Apple GPU under a
++    // Windows / Linux snapshot). Derive the depth seeds deterministically from
++    // the snapshot text instead: same snapshot, same digests.
++    const d = this._generateDepthFromSeed(snapshotDepthSeed(raw), snapOs);
++    d.gpu = personaGpu(parsed, d.gpu, d.canvasSeed);
++    return d;
+   },
+ 
+   /**
+@@ -734,14 +855,16 @@
+     return 0;
+   },
+ 
+-  _generateDepthFromSeed(seed) {
++  _generateDepthFromSeed(seed, osOverride = undefined) {
+     const rng = mulberry32(seed);
+     // Advance RNG in the same rough order as profiles.js generateProfile
+     // (UA/platform/HW/screen/color skipped via discarded picks) so canvas/audio
+     // remain correlated with a full persona when only seed is present.
+     void pickFrom([0, 1], rng); // UA group stand-in
+     void pickFrom([0, 1], rng); // UA stand-in
+-    const os = detectHostOs();
++    // 0058c: a persona OS (pasted snapshot) picks from its own table; every
++    // table has the same length, so the rng stream and indices are unchanged.
++    const os = osOverride || detectHostOs();
+     const gpus = GPU_BY_OS[os] || GPU_BY_OS.windows;
+     const gpu = pickFrom(gpus, rng);
+     void pickFrom([4, 8, 10, 12, 16], rng);
