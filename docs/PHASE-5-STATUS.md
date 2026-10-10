@@ -1761,3 +1761,89 @@ On both builds the Native-Compatible visit stays native in all 20 contexts: no n
   - **Negative control on main's DMG (`darkstr-0058b-318ac5b0`, = 789f66c): FAIL 376/503** (127 failures: I1 39, I2 48, I3 9, plus expectation and pane checks). Pollution with hooks off has RFP off, no persona, and pages show the host values (hc 12, America/Chicago, en-US). Choosing Pollution in main's pane leaves hooks off, with the same result.
 - **Regression on 255a6df8:** WebGL / depth 605/605, private windows 71/71, Fable S1 PASS. Keychain: S1's own seed item deleted; the 0054 self-test profiles write no seed store (clear-on-shutdown, no keep exception), so they create no keychain items.
 - **Note for other writers:** anything that sets `darkstr.mode=pollution` must set `darkstr.nativePersonaHooks=true` first (Proof's armed harness already does), or it is refused.
+
+## 0058c: follow-ups to Proof's stack PASS (`darkstr-stack-xor-20261009-122626`)
+
+### 1. The WebGPU gate keys on the persona's OS and GPU vendor (Proof #95 note)
+- **Gap (0058b):** `webGpuHiddenFor` looked only at the depth GPU, and a missing vendor defaulted to Apple. On an Apple-silicon host, a Windows or Linux persona (seeded, or a pasted snapshot with no or an Apple GPU) would pass the Apple adapter through.
+- **Fix (`patches/0058c-files/DarkstrWorkerHooksChild.sys.mjs`, chrome JS only):** new `isMacPersona(persona)`.
+  - The UA's OS token decides first, as 0058's `osOfSnapshot` does; then `navigator.platform`; with no OS information, the host's (Mac).
+  - iOS / iPadOS ("like Mac OS X"), Windows, Linux, Android and ChromeOS are not macOS.
+- On an Apple-silicon host, WebGPU is exposed only to a macOS persona with an Apple GPU.
+  - Every other persona decision gets the 0058b hidden shape: stock `dom.webgpu.enabled=false`, in the page and in all worker kinds, because the window gate and the worker bag share the same function.
+  - Native / off decisions and other hosts are unchanged.
+- Tests: `tests/webgpu-gate-os-0058c.test.mjs` covers the full OS × GPU matrix, pasted snapshots without a platform field, a UA contradicting the platform, iOS, and the window and worker bags.
+- **DMG `darkstr-0058c-84d876e7.dmg`** (main 789f66c + 0058c). dmgverify: 6/6 omni files MATCH.
+- Live gate self-test (`darkstr-0058c-*/selftest`, port 8467, headless, `dom.webgpu.enabled=true`; 8 seeded sites, plus pasted Windows / Linux / Mac snapshots and Windows / Linux without a platform field, 2 sites each; stock-off / stock-on references):
+  - **0058c: 837/837 PASS.** Every Windows / Linux snapshot document has the stock-off shape in the page and in dedicated / nested / shared / service workers. The Mac snapshot and seeded Apple personas get stock-on; seeded Intel personas get stock-off.
+  - **Negative control on main's DMG (`darkstr-0058b-318ac5b0`, = 789f66c): FAIL 597/837.** All 240 failures are the Windows / Linux snapshot documents: WebGPU fully exposed (41 `GPU*` globals) behind a Windows / Linux UA.
+- The residual noted here (a pasted Windows / Linux snapshot reporting the host's Apple WebGL GPU) is fixed in §5.
+
+### 2. A user-set `privacy.fingerprintingProtection.pbmode=false` reverts at restart: LibreWolf, not darkstr (documented, no code change)
+- **Cause:**
+  - `librewolf.cfg:61` is `pref("browser.contentblocking.category", "strict")`. Autoconfig `pref()` writes the **user** value at every start.
+  - Firefox's `ContentBlockingPrefs.init()` → `updateCBCategory()` → `setPrefsToCategory("strict")` then re-applies strict's feature list, whose `fppPrivate` means pbmode=true. That equals the StaticPrefList default, so Gecko drops the user value; Proof read (true, default).
+  - In the session, setting pbmode=false makes `matchCBCategory()` switch the category to `custom`. The next start forces it back.
+- **Live A/B** (`darkstr-0058c-*/a2/`; darkstr off, fresh profile, three sessions; same binary as main's DMG):
+
+| app | pbmode=false after restart 1 / 2 | cookieBehavior=0 (control) | category s1 → s2 |
+|---|---|---|---|
+| stock `darkstr-0058b-318ac5b0` | **reverted** / reverted (true, default) | reverted (5) | custom → strict |
+| same app, only cfg line 61 commented out | **kept** (false, user) / kept | kept (0) | custom → custom |
+
+  prefs.js after s1 has `privacy.fingerprintingProtection.pbmode false`, so the value was persisted. After s2 the category is "strict" and strict's other `*.pbmode` prefs have appeared.
+- **Conclusion:** darkstr startup and the 0053 migration play no part (same code in both arms). It affects every custom ETP pref in LibreWolf (cookieBehavior too) and predates darkstr's pbmode handling (Proof: 0056r2 / 0057r3).
+- Under Pollution, ModeXor still saves and restores pbmode exactly within a session. Fighting LibreWolf's forced strict category at startup is out of scope for darkstr.
+
+### 3. Armed vs stock global sets (Proof #95 ambiguity)
+With WebGPU off, the global-name lists of armed darkstr (Pollution) and stock LibreWolf differ **only** by two Pollution-wide effects:
+- **WebCodecs present**: the WebCodecs constructors (AudioData … VideoFrame in Proof's name diff). Stock LibreWolf hides them under RFP, and Pollution turns `privacy.resistFingerprinting` off (POLLUTION_PREFS).
+- **RTC\* and MediaStreamEvent absent:** Pollution's 0028 WebRTC kill sets `media.peerconnection.enabled=false`, saved and restored by DarkstrNativePersona.
+
+These are properties of Pollution's pref set, not of the WebGPU gate. Intel-persona-with-WebGPU-on equals armed-WebGPU-off exactly (all names), and `Navigator.prototype` equals stock.
+
+### 4. x51 concurrency liveness bound (harness)
+- `qa/xor55r2/grade51x.py` `[N2] conc tN: loop ran` now needs `>= CONC_MIN` requests: 8 by default, or `XOR_CONC_MIN` on a dedicated host. The old `>= 20` assumed an idle host.
+- It is a liveness / throughput count; every request that ran is still graded for UA, Accept-Language and persona.
+- Proof's parallel-load runs (9 and 12 requests, uaStable) regrade **860/0** default (was 859/1). `XOR_CONC_MIN=20` reproduces the old FAIL.
+
+### 5. Pasted Windows / Linux snapshots report an OS-coherent WebGL GPU (commits bc32b6ee + b120e999)
+- **Root cause (two parts):**
+  - The depth GPU table followed the **host** OS (`_generateDepthFromSeed` → `GPU_BY_OS[detectHostOs()]`), and a snapshot's own `gpu` was used unchecked.
+  - The main one, found by the live check on bc32b6ee: a pasted snapshot with no `canvasSeed` / `audioSeed` and no `darkstr.persona.seed` **never armed the depth layer.** Rotation is locked by the snapshot and `plan.seeds` was null, so WebGL, canvas, audio, fonts, speech and WebGPU were all native. Pages reported the Mac's real GPU (and drew an unnoised canvas) behind a Windows / Linux UA. NativePersona's resolved snapshot also drops `gpu`, so the depth path never saw the snapshot's own strings.
+- **Fix (`patches/0058c-files/DarkstrDepthHooks.sys.mjs`, chrome JS only):**
+  - `personaGpu(snap, gpu, seed)`: on a snapshot whose OS is known (the UA OS token first, then platform: the 0058 `snapshotOs` rule, tested equal), it uses the snapshot's own GPU strings only when `gpuCoherentWithOs`. Otherwise it keeps the derived GPU if coherent, or takes a bucketed default from that OS's table (picked by the canvas seed) and warns once (`console.warn`).
+    - Windows = ANGLE Direct3D renderer + "Google Inc. (<maker>)" vendor.
+    - Linux = native GL with its driver in the string (Mesa, llvmpipe, radeonsi, nouveau, NVIDIA "/PCIe/SSE2"); never ANGLE, Apple or the macOS GL vendors "Intel Inc." / "ATI Technologies Inc.".
+    - macOS = nothing clearly another OS's.
+  - `_readDepthSeeds` decides the GPU from the **raw** pasted snapshot. When the snapshot carries no depth seeds and `darkstr.persona.seed` is unset, it now derives the depth seeds deterministically from the snapshot text (FNV-1a 32 of the trimmed pref): same snapshot, same digests.
+  - Applied on the rotate, golden-snapshot and plan-seed paths of `depthSeedsForBrowsingContext`, so the page and every worker kind get the same GPU.
+  - The per-OS tables have the same length, so the rng index is unchanged. **macOS personas, seed-only and no-snapshot Proof paths are byte-identical** (tests compare against the 0057 code).
+- **Reported strings** go through the unchanged port of Gecko's sanitizer, so they are what stock Firefox gives on that OS:
+  - VENDOR stays "Mozilla".
+  - RENDERER and UNMASKED_RENDERER are equal, e.g. Windows `ANGLE (Intel, Intel(R) HD Graphics 400 Direct3D11 vs_5_0 ps_5_0), or similar` with UNMASKED_VENDOR "Google Inc. (Intel)"; Linux `Intel(R) HD Graphics 400, or similar` with "Intel", `NVIDIA GeForce GTX 980, or similar` with "NVIDIA Corporation", `Radeon R9 200 Series, or similar` with "AMD".
+- **Behaviour change for Proof:** a pasted snapshot without depth seeds now arms the full depth layer (canvas / audio / WebGL / fonts / speech / WebGPU farbling) from snapshot-derived seeds, where it used to be native. Snapshots that carry their own seeds, and `darkstr.persona.seed=42`, are unchanged.
+- Tests: `tests/webgl-gpu-os-0058c.test.mjs` (11 tests) cover coherence of every table entry for its OS only, the sanitized strings per OS, own-GPU used / replaced / warned once, a platform-only snapshot, the seedless snapshot arming (0057 returned null), determinism, and the seed-path identity. npm 334/334.
+- **DMG `darkstr-0058c-b120e999.dmg`** (#96 tip b120e999). dmgverify: both 0058c omni files MATCH. `darkstr-0058c-bc32b6ee.dmg` is superseded (sidecar `.SUPERSEDED.txt`) and kept as a negative control.
+- **Live check** (`darkstr-0058c-*/selftest`, port 8467; the 0058c gate self-test plus WebGL strings in page / dedicated / nested / shared / service workers; adds a Windows snapshot with its own coherent ANGLE GPU and a Linux snapshot with an Apple GPU):
+  - **b120e999: 1303/1303 PASS.** Windows snapshots: ANGLE D3D11 buckets; the own GPU (GTX 1660 SUPER) is reported as stock does (`GTX 980` bucket). Linux snapshots: Mesa / NVIDIA / AMD buckets; the Apple GPU is replaced by a Linux default. The Mac snapshot is unchanged (Apple). Every worker equals its page, and WebGPU stays hidden for Windows / Linux.
+  - **Negative controls:** 9eea6a5 (#96 before this commit, `darkstr-0058c-84d876e7`; that name is the DMG's sha256 prefix, not a commit) **FAIL 1243/1303**, and bc32b6ee **FAIL 1243/1303**. In both, all 60 failures are the Windows / Linux snapshot documents reporting `Apple / Apple M1, or similar`.
+  - **Regression on b120e999:** WebGL / depth 605/605, private windows 71/71, Fable S1 PASS. Keychain: own seed items deleted, none left.
+
+### 0058c r2: combined with 0059 after main moved to 2c8da76 (shadow-copy fix)
+- **Problem:** `patches/0058c-files/DarkstrDepthHooks.sys.mjs` and `patches/0059-files/DarkstrDepthHooks.sys.mjs` were both full copies cut from the same base (the 0057 copy). On main (0059 applied), apply-0058c's base check failed. Applied in the other order, 0058c's copy would have silently dropped 0059's actor change (no `matches`, so opaque frames get depth noise). npm could not see it, because each pin's tests read only their own copy.
+- **Fix (commit 8aabd6f):**
+  - 0058c's copy is the 3-way merge (`git merge-file`, clean) of the 0058c copy and the 0059 copy over their common base. The only difference from the Proof-tested 0058c copy is 0059's hunk.
+  - `BASE_SHA256SUMS` now names 0059's copy (`de8f1d4d…`), and the patch is regenerated against it.
+  - apply-0058c checks against main (0058b + 0059) and fails if 0059's change is missing.
+- **Guard:** `patches/STACK` (shipped pins, oldest first) and `tests/stack-consistency.test.mjs`. For every file carried by more than one pin:
+  - (A) a pin's `BASE_SHA256SUMS` must name the previous carrier's exact copy;
+  - (B) replaying the stack, every line a pin's patch adds must survive in the shipped copy, unless a later pin's patch removes it.
+
+  On fd257b5 it fails with "0058c: DarkstrDepthHooks.sys.mjs was cut on 0057 instead of 0059 … 0059's change is shadowed" and "5 line(s) added by 0059 are gone". It passes on main, on 8aabd6f, and on main + #96 + #98 + #99 combined.
+- **DMG `darkstr-0058c-r2-8aabd6f9.dmg`** (main 2c8da76 + 0058c r2), sha256 `b27848ca4ddc1309198f574baa0e24078713636a377a79ecd765670ef21c67cd`. dmgverify: 4/4 omni files MATCH. npm 344/344.
+- **Suites on r2** (`~/AgentDocs/proof/darkstr-0058c-r2-20261009-1625/suites/`, each on its own port, fresh profiles):
+  - 0059 opaque frames: **1285/1285**.
+  - 0058c snapshots: **1303/1303**. On the first run, one profile's browser had no WebGL context at all (`gl is null` in page and every worker, 20 checks). A rerun passed 1303/1303, so this is an environment flake, not a wrong string.
+  - WebGL/depth: **605/605**.
+  - Private windows: **71/71**.

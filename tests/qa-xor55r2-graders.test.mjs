@@ -55,3 +55,11 @@ test("0058r2 (Proof #92): no grader decides or labels persona presence by UA", (
   }
   assert.match(readFileSync(join(QA, "grade51pop.py"), "utf8"), /keeps opener armed bit \(persona tuple != native: languages\/cores\/TZ\)/);
 });
+
+test("0058c: x51 concurrency liveness is a lower bound (>=8, XOR_CONC_MIN), not the idle-host >=20", () => {
+  const src = readFileSync(join(QA, "grade51x.py"), "utf8");
+  assert.match(src, /CONC_MIN = max\(1, int\(_os\.environ\.get\('XOR_CONC_MIN', '8'\)\)\)/);
+  assert.match(src, /len\(rs\) >= CONC_MIN and res\.get\('uaStable'\)/);
+  assert.doesNotMatch(src.split("\n").filter((l) => !l.trimStart().startsWith("#")).join("\n"), />= ?20\b/);
+  assert.match(src, /liveness\/throughput signal, not an identity/);
+});
