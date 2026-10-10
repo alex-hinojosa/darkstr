@@ -124,7 +124,7 @@ test("0060r2: a kept site's sandbox cookies survive a restart; non-kept and priv
   assert.equal(files.get(JAR).mode, 0o600, "file 0600");
   assert.equal(dirs.get("/prof/darkstr"), 0o700, "dir 0700");
   const t = fileText();
-  for (const s of ["kept.test", "gone.test", "tracker.example", "SECRETVALUE", "sid", "https", "0.0|", "\"b\"", "\"r\""]) assert.ok(!t.includes(s), `no plaintext ${s}`);
+  for (const s of ["kept.test", "gone.test", "tracker.example", "SECRETVALUE", "\"name\"", "\"value\"", "https://", "0.0|", "\"b\"", "\"r\""]) assert.ok(!t.includes(s), `no plaintext ${s}`);
   const label = JSON.parse(t).l;
   assert.match(label, /^darkstr-cookie-jar-[0-9a-f]{16}$/); assert.ok(secrets.has(label), "key held in the Keychain");
   assert.equal(JSON.parse(t).e.length, 2, "kept first-party + kept partition only");
@@ -197,8 +197,9 @@ test("0060r2: kill -9 safety -- atomic replace, stray tmp removed, garbage file 
   files.set(JAR, { bytes: new TextEncoder().encode("\u0000\u0001garbage"), mode: 0o600 });
   await boot();
   assert.equal(fw._bucket(A0, false), null);
-  put(A0, rec("sid", "V9", "kept.test")); await store.flush(true);
-  assert.doesNotThrow(() => JSON.parse(fileText())); assert.ok(!fileText().includes("V9"));
+  put(A0, rec("sid", "SECRETVALUE-V9", "kept.test")); await store.flush(true);
+  // needles must not be able to occur in base64 ciphertext by chance (long, or containing quotes / dashes)
+  assert.doesNotThrow(() => JSON.parse(fileText())); assert.ok(!fileText().includes("SECRETVALUE-V9"));
   // write path is tmp + chmod 0600 + rename
   const src = readFileSync(FW_PATH, "utf8");
   assert.match(src, /const tmp = this\.path \+ "\.tmp";\s*await IOUtils\.write\(tmp,[^;]*flush: true \}\);\s*await IOUtils\.setPermissions\(tmp, 0o600\);\s*await IOUtils\.move\(tmp, this\.path/);
