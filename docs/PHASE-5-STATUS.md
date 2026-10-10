@@ -1847,3 +1847,150 @@ These are properties of Pollution's pref set, not of the WebGPU gate. Intel-pers
   - 0058c snapshots: **1303/1303**. On the first run, one profile's browser had no WebGL context at all (`gl is null` in page and every worker, 20 checks). A rerun passed 1303/1303, so this is an environment flake, not a wrong string.
   - WebGL/depth: **605/605**.
   - Private windows: **71/71**.
+## 0060 (Fable B8): cookie firewall coverage
+
+Opt-in as before: `darkstr.cookieFirewall.enabled` still defaults to **false**, and a disarmed firewall is stock Gecko everywhere (measured below: firewall off on this build and on main give identical results). Base: main `2c8da76` (#97 / 0059 merged in).
+
+**Gaps on main (armed firewall):**
+- **Extension frames** (CF:890). The JSWindowActor was registered for `messageManagerGroups: ["browsers"]` only. A web frame inside an extension background page, popup, sidebar or extension tab ("webext-browsers") got no gate answer, so the C++ content gate failed it closed: `document.cookie` was empty, `cookieStore` threw, and its writes vanished, while its HTTP requests still used the sandbox jar.
+- **Worker cookieStore** (CookieCommons.cpp:891-895, 922-924). Every worker failed closed, allowlisted sites included.
+- **Clearing.** No ClearDataService cleaner touched the sandbox jar. Forget About This Site, Clear Recent History, Clear-Site-Data and clear-on-quit all left sandboxed cookies in place until restart.
+- **Plaintext.** With `darkstr.debug.diagPrefs` on, prefs.js got `lastCookieOut "qa_srv=1; qa_js=S6-b1"`, `lastEtld "lvh.me"` and `darkstr.persona.lastEtld` / `lastDecision` site names.
+
+**Fix (pin `0060`; 6 files: chrome JS + C++):**
+- **Extension frames** (`DarkstrCookieFirewall.sys.mjs`):
+  - The actor is registered for every message-manager group.
+  - `_ownerTopSite()`: a frame tree under a non-web top (an extension page) is owned by its outermost http(s) document. So the e60 frame in an extension page uses e60's first-party jar, the same jar the e60 tab uses, for HTTP, `document.cookie` and `cookieStore` alike.
+  - An allowlisted site gets "passthrough", which means stock Gecko. Stock gives a web frame inside an extension page no cookies at all, and this was measured to match exactly.
+- **Worker cookieStore** (`CookieCommons.cpp`, `CookieStoreParent.cpp`):
+  - CookieCommons no longer fails workers closed. Documents keep the gate.
+  - `CookieStoreParent` Get / Set / Delete ask the firewall on observer topic `darkstr-cookie-store` (property bag: op, URI, OA incl. partitionKey, third-party flag, cookie fields).
+  - `cookieStoreRequest()` gives the decision ("passthrough" = real store; "sandbox" = the firewall answers from the same bucket a document of that partition reads). No answer while armed means fail closed.
+- **Clearing** (`ClearDataService.sys.mjs`, `PrincipalsCollector.sys.mjs`):
+  - `DarkstrCookieFirewallCleaner` sits under `CLEAR_COOKIES` next to `CookieCleaner`: deleteAll / ByHost / ByPrincipal / BySite / ByRange / ByOriginAttributes / ByLocalFiles.
+  - It matches the way Gecko's CookieCleaner does, with OriginAttributesPattern semantics. A principal carrying a partitionKey (a framed site's Clear-Site-Data) clears only that partition, and `partitionKey ""` clears only the unpartitioned jar (the #93 rule).
+  - Live documents get the delete deltas.
+  - The shutdown sanitizer clears per collected principal (to honor persist-data-on-shutdown exceptions), so `PrincipalsCollector` now also lists the sandbox jar's hosts (`sandboxCookieHosts()`, rawHost + OA suffix, the same shape it builds from `Services.cookies`).
+- **One pipeline / 0061 hook:**
+  - Every cookie admitted goes through `_admit()`, every removal through `_purge()` and every partition seed through `_seedFor()`.
+  - `setPipelineHook({ seedFor, valueFor })` is the documented 0061 entry point (see the PIPELINE block in the module).
+  - 0060 ships no hook.
+- **No plaintext (0052 rule):**
+  - Site- and value-bearing diagnostics reach prefs.js only as `redacted:<session-keyed digest>:<length>`. That covers the cookie firewall's `lastEtld`, `lastPartition`, `lastHttpEtld`, `lastCookieOut/Set/Err` and `lastError`, plus NativePersona's `lastEtld` and `lastDecision`. It holds even with `darkstr.debug.diagPrefs` on.
+  - `getDiagnostics()` (memory, chrome only) keeps readable values.
+  - The 0052 facade text is byte-identical. Redaction wraps it.
+  - **Note for Proof:** scripts that read `darkstr.persona.lastEtld` / `lastDecision` or `darkstr.cookieFirewall.last*` from prefs.js now see digests. Read `getDiagnostics()` from chrome instead.
+
+**npm:** 353/353.
+
+**DMG `darkstr-0060-752faf26.dmg`** (main 2c8da76 + 0060), sha256 `8df23b661daf96d616f421c2c2469d4b2ebcdaf8312146d2ad886b84347b43d6`. dmgverify: 7/7 omni files MATCH (4 × 0060, 3 × 0059). XUL carries `darkstr-cookie-store` (main's XUL: 0). Superseded 0060 DMGs keep a `.SUPERSEDED.txt` beside them.
+
+**Self-test** (`~/AgentDocs/proof/darkstr-0060-20261009-1505/selftest`):
+- Setup: own server on port 8481, hosts `{a,b,c,e,f,g,w}60.localhost` pinned to loopback, sandbox-exec loopback-only, headless, a fresh profile per session.
+- Armed run: Pollution + hooks + firewall `isolate`, allowlist f60 / g60, `diagPrefs` on (the worst case for plaintext).
+- Cookie strings travel base64 in URLs, so the plaintext grep only finds what the browser itself stored.
+
+| | 0060 `752faf26` | main `darkstr-0059-6777ce6b` (negative control) |
+|---|---|---|
+| armed: extension frames, worker cookieStore, 4 clear paths, plaintext grep | **172/172 PASS** | **FAIL 54** (118/172) |
+| firewall off (XW + C1–C4) and default profile vs main | **6/6 result files identical** | (reference) |
+
+Checks (armed):
+- **Extension frames:**
+  - The e60 frame in the extension background page and the e60 frame in an extension tab each read e60's jar (HTTP-set + script-set cookies).
+  - Their `document.cookie` and `cookieStore` writes land in the jar the e60 tab reads.
+  - `document.cookie == cookieStore == own Cookie header` in every context.
+  - The allowlisted f60 frame matches stock.
+  - Main: the frames see nothing, `cookieStore` throws, and their writes are lost.
+- **Worker cookieStore:**
+  - Service-worker `getAll` equals the page's `cookieStore` before and after; a worker `set` / `delete` shows up in `document.cookie`, the HTTP Cookie header and the worker.
+  - Cases: w60 top level, w60 framed in a60 (partitioned, and invisible to w60 top), w60 in both extension frames, and allowlisted g60 (real jar).
+  - Main: every worker call is a TypeError (fail closed), including the allowlisted one.
+- **Clear paths.** Expected sets were measured on stock (firewall off, real jar), and the sandbox jar now gives the same results:
+  - Forget About This Site (b60) → `{a1, c1}`.
+  - Clear Recent History: a range clear removes only cookies set after the mark; "everything" → `{}`.
+  - Clear-Site-Data from b60 framed in a60 → only `b_in_a`. The live frame's `document.cookie` / `cookieStore` empty at once.
+  - Clear-Site-Data from top-level c60 → only `c1`.
+  - Clear-on-quit (shutdown sanitizer, persist-data-on-shutdown exception for b60) → `{b1}`. b60 partitioned under a60 / c60 is cleared.
+  - The real jar never holds a sandboxed site.
+  - Main: no clear path touches the sandbox jar.
+- **Plaintext grep:**
+  - No cookie value in any file of any armed profile (prefs.js, cookies.sqlite, sessionstore, cache, …).
+  - No sandboxed site name in prefs.js, cookies.sqlite or `darkstr/`.
+  - No value or site name in Darkstr console output.
+  - Main: `lastCookieOut` / `lastEtld` / `persona.lastEtld` in plaintext.
+- **Firewall off = stock:** this build and main give identical probe reports, worker views and jars after every clear, and the defaults are unchanged (`enabled` false, `contentGate` false, mode `synthetic`, allowlist empty).
+
+**Fable S6** (`s6/`; the 0052 copy of Fable's harness, unchanged, port 8482):
+- S6-cookie-firewall: 25/25 requests with the same paths and Cookie headers as the 0052 reference, on 0060 and on main.
+- S6-diag positive control (diagPrefs on): same traffic. The 9 diagnostic lines come back, but on 0060 as digests (`lastCookieOut "redacted:…:21"`, `lastEtld "redacted:…:6"`), where main writes `"qa_srv=1; qa_js=S6-b1"` / `"lvh.me"`.
+- 0060 S6 profiles: 0 files with the cookie value and 0 darkstr prefs naming a site. Main: 1 file and 5 prefs.
+
+Residuals / not built:
+- 0061 (per-site rotation) itself.
+- SharedWorker cookieStore: Gecko exposes CookieStore to service workers only.
+- Container removal goes through `deleteByOriginAttributes`, covered by unit tests but not live.
+
+### 0060r2 — kept sites keep their sandbox cookies across a restart (Alex, 2026-10-09)
+
+Proof FAILed #99 / 0060 on one item: Alex decided that kept sites
+(persist-data-on-shutdown) keep their sandbox cookies across restarts. Every
+other 0060 claim passed and is unchanged. The respin adds
+`DarkstrCookieJarStore` to `DarkstrCookieFirewall.sys.mjs` (no new module,
+no moz.build change):
+
+- **What is persisted:** only the sandbox buckets whose top-level site has a
+  `persist-data-on-shutdown` ALLOW exception and no cookie `ACCESS_SESSION`
+  permission (the 0056 keep rule), in non-private contexts. That covers the
+  site's first-party jar and the partitions under it (`|p`, `|pf`). Only
+  cookies a stock restart keeps are written: persistent unexpired cookies,
+  plus session cookies only while session restore is on
+  (`browser.startup.page = 3`). Non-kept sites stay memory-only and are gone
+  at quit, as before.
+- **At rest:** `<profile>/darkstr/cookie-jar.json`, dir 0700, file 0600,
+  `{ v:1, l, k, e:[{c,h,n,d}] }`. `k` is a random 32-byte key K wrapped by an
+  OSKeyStore (macOS Keychain) secret under a random label
+  `darkstr-cookie-jar-<16 hex>`. `c = HMAC(K, "ctx:"+userContextId)` and
+  `h = HMAC(K, userContextId+"|"+bucket key)` are per-context tags, like 0056.
+  `d` is AES-GCM(K) of `{bucket key, mode, records}` with AAD `c|h`, so
+  hosts, sites, cookie names and values, container numbers and times never
+  appear in the clear. Swapped or tampered entries fail authentication and
+  are dropped. Without OSKeyStore it is memory only. Nothing goes to
+  prefs.js.
+- **Containers / private:** each container's buckets are their own entries
+  with their own tags and are restored into the same container only. Private
+  browsing is never written and never holds a load.
+- **Lifecycle:** the first arm after startup loads the file and merges it into
+  the live jar, which is authoritative from then on. Saves are debounced
+  (500 ms) and flushed at profile-before-change, after the shutdown
+  sanitizer. Disarming keeps the file. A mode switch (isolate ↔ synthetic)
+  forgets it, because values written under one mode are not valid under the
+  other. During the load, sandbox requests that read a kept site's jar are
+  suspended (at most `darkstr.cookieFirewall.jarStore.startupWaitMs`,
+  default 2000), so the first load after a restart already sends the
+  cookies.
+- **Clears:** every DarkstrCookieFirewallCleaner path applies the same
+  predicates to the persisted buckets in any mode, loading the file if
+  needed. That covers Forget About This Site, Clear-Site-Data, per-host and
+  per-principal clears, container removal, and Clear Recent History (records
+  carry `ctime` inside the ciphertext). Clear-all deletes the file and the
+  Keychain secret, so the next store gets a new key and label. Unkeep
+  (perm-changed on `persist-data-on-shutdown` / `cookie`, including clearing
+  all permissions) prunes the site's entries right away. When nothing is
+  kept, the file is removed.
+- **kill -9:** writes go to a tmp file, are chmod'ed 0600, then renamed, so
+  the file is always the previous or the new complete version. A stray
+  `.tmp` (encrypted too) is removed at the next load. An unreadable file is
+  ignored and replaced at the next save. It held only ciphertext.
+- Tests: `tests/cookie-jar-store-0060r2.test.mjs` (restart, non-kept,
+  private, containers + tags, tamper, unkeep, site / container / range /
+  all clears, disarmed clear, kill -9 tmp + garbage, session / expired,
+  mode switch, firewall off = no file / no Keychain item, startup hold).
+- Keychain hygiene for harnesses: the store's label is in
+  `DarkstrCookieJarStore.debugState().label` (and in the file's `l`).
+  Proof-tools `dskc.py` records `darkstr-cookie-jar-*` labels alongside
+  `darkstr-persona-seeds-*`.
+- Shadow flag (open): 0060 carries a copy of `DarkstrNativePersona.sys.mjs`
+  (diag redaction). Once 0058d is in main, that copy needs a 3-way combine
+  with 0058d's, and `patches/STACK` gets 0060 after 0058d.
+- Live (2026-10-10, `darkstr-0060r2-155a16ee.dmg`, sha256 `b1defbc2b8e134ffc73f7cad379931d6dfa0e2dc8837245020b0d4b476a64b0a`; evidence `~/AgentDocs/proof/darkstr-0060r2-20261010-1230/`). The restart self-test (`selftest/drive60r2.py`, one profile across several runs, clear-on-quit on) scored 31/31 on R1 keep restart (first party, framed partition, container 1, non-kept, private), R2 plain restart, R3 unkeep, R4 clear-all (file plus Keychain secret), R5 Forget About This Site, R6 containers, R7 kill -9 (after a save and mid-burst), R8 firewall off = stock, and the profile-wide plaintext grep. Negative control on `darkstr-0060-752faf26.dmg` (#99 before this respin): the kept site loses its sandbox cookies on restart, and no file is written. The full 0060 suite scored 172/172, with off and default identical to the 0060 build (6/6). S6 and S6-diag requests match the 0060 run except for the probe port. S6-diag prefs hold digests only. Each run deletes the Keychain labels its driver recorded (persona seeds and cookie jar, via `dskc.py`).

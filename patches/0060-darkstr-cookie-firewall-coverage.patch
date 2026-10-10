@@ -1,0 +1,2131 @@
+--- a/browser/components/DarkstrCookieFirewall.sys.mjs
++++ b/browser/components/DarkstrCookieFirewall.sys.mjs
+@@ -64,9 +64,9 @@
+  *     sandbox, and document.cookie / window.cookieStore are hooked on every
+  *     document with an http(s) principal (including about:blank, srcdoc and
+  *     blob: documents) before page script runs.
+- *     Residual (not covered): ServiceWorkerGlobalScope.cookieStore goes
+- *     straight to Gecko's CookieStoreParent; allowlisted top sites use the
+- *     real jar by design.
++ *     ServiceWorkerGlobalScope.cookieStore follows the same decision and
++ *     jar since 0060 (CookieStoreParent asks this module); allowlisted top
++ *     sites use the real jar by design.
+  *
+  * Allowlist: darkstr.cookieFirewall.allowlist CSV of top-level eTLD+1 → real
+  * jar passthrough for that page and everything it loads.
+@@ -96,6 +96,48 @@
+  *     CookieStoreNotifier refuse the real cookie store unless the content
+  *     child answered "passthrough" (allowlist) for that inner window.
+  *
++ * 0060 (Fable B8, coverage):
++ *   - Extension browsers and frames: the JSWindowActor is registered for
++ *     every message-manager group, not only "browsers" (extension popups,
++ *     sidebars and background pages are "webext-browsers"), so every http(s)
++ *     document gets a gate answer from its own child instead of the C++
++ *     fail-closed default (CookieCommons "darkstr-cookie-gate"). A document
++ *     whose top-level document is not web content (an extension page) is
++ *     owned by its outermost http(s) ancestor, for script and HTTP alike
++ *     (_ownerTopSite), so its document.cookie, CookieStore and requests read
++ *     the same jar.
++ *   - Worker CookieStore (Gecko exposes it on ServiceWorkerGlobalScope only):
++ *     the content process no longer fails closed for every worker;
++ *     CookieStoreParent asks this module ("darkstr-cookie-store") and gets
++ *     the allowlist / sandbox decision and the jar view a document of the
++ *     same partition gets (cookieStoreRequest). No answer while armed =
++ *     fail closed (nothing read, nothing written).
++ *   - Clearing: DarkstrCookieFirewallCleaner (ClearDataService, CLEAR_COOKIES)
++ *     purges the sandbox jar for Forget About This Site, Clear Recent
++ *     History, Clear-Site-Data, clear-on-quit and container removal, with
++ *     Gecko's OriginAttributesPattern semantics: a partitioned clear only
++ *     touches that partition (the #93 rule). Live documents get the deletes.
++ *     The shutdown sanitizer clears per collected principal (to honor
++ *     persist-data-on-shutdown exceptions); PrincipalsCollector lists the
++ *     sandbox jar's hosts too (sandboxCookieHosts), so it reaches them.
++ *   - One pipeline (PIPELINE below): every cookie admitted to the jar goes
++ *     through _admit(), every removal through _purge(), every partition seed
++ *     through _seedFor(). 0061 (per-site rotation) plugs in there via
++ *     setPipelineHook(); 0060 ships no hook.
++ *   - No plaintext (0052 rule): diagnostics carrying a site name or a cookie
++ *     value are readable only in memory (getDiagnostics, chrome). Anything
++ *     written out (prefs.js while darkstr.debug.diagPrefs) is a keyed,
++ *     per-session digest.
++ *
++ * 0060r2 (Alex, 2026-10-09; Proof FAIL on #99): KEPT sites keep their
++ *   sandbox cookies across a restart. DarkstrCookieJarStore (below) persists
++ *   the buckets of top-level sites with a persist-data-on-shutdown exception,
++ *   encrypted at rest like the 0056 seed store (Keychain-held key, profile
++ *   file 0600, per-context HMAC tags, never prefs.js, never private
++ *   browsing). Every other bucket stays memory-only and is gone at quit as
++ *   before. Unkeep, per-site clears, container removal and clear-all remove
++ *   the persisted cookies too.
++ *
+  * Soft residual (0042): outbound Cookie on content fetch was empty under 0035
+  * because http-on-modify-request subject was used without QI to nsIHttpChannel
+  * and setRequestHeader failures were swallowed. Pin: QI + surface set errors.
+@@ -154,6 +196,44 @@
+   snapshot() {
+     return Object.fromEntries(gDiag);
+   },
++};
++/**
++ * 0060: diagnostics that carry a site name or a cookie value. Memory keeps
++ * the value (chrome-only getDiagnostics); prefs.js only ever gets
++ * redactDiag(value): "redacted:<keyed 32-bit digest>:<length>", keyed per
++ * session so it cannot be looked up across runs.
++ */
++const REDACTED_DIAG_PREFS = new Set([
++  LAST_ETLD_PREF,
++  LAST_PARTITION_PREF,
++  LAST_HTTP_ETLD_PREF,
++  LAST_COOKIE_OUT_PREF,
++  LAST_COOKIE_SET_PREF,
++  LAST_COOKIE_ERR_PREF,
++  LAST_ERROR_PREF,
++]);
++const DIAG_DIGEST_KEY = Math.floor(Math.random() * 0x100000000) >>> 0 || 1;
++export function redactDiag(value) {
++  const t = String(value ?? "");
++  if (!t) {
++    return "";
++  }
++  let h = (DIAG_DIGEST_KEY ^ 0x811c9dc5) >>> 0;
++  for (let i = 0; i < t.length; i++) {
++    h = Math.imul(h ^ t.charCodeAt(i), 0x01000193) >>> 0;
++  }
++  h = Math.imul(h ^ (h >>> 15), 0x2c1b3c6d) >>> 0;
++  return `redacted:${("00000000" + h.toString(16)).slice(-8)}:${t.length}`;
++}
++const diagFacadeWrite = diagPrefs._write;
++diagPrefs._write = function (setter, name, value) {
++  if (!REDACTED_DIAG_PREFS.has(name)) {
++    diagFacadeWrite.call(this, setter, name, value);
++    return;
++  }
++  // prefs.js (when diagPrefs is on) gets the digest; memory the value.
++  diagFacadeWrite.call(this, setter, name, redactDiag(value));
++  gDiag.set(name, value);
+ };
+ 
+ const SNAPSHOT_PREF = "darkstr.persona.snapshot";
+@@ -168,6 +248,9 @@
+ const DELTA_ACK_TIMEOUT_MS = 2000;
+ const NONE_REQUIRES_SECURE_PREF = "network.cookie.sameSite.noneRequiresSecure";
+ 
++/** 0060: CookieStoreParent (worker / service worker CookieStore) asks here. */
++const COOKIE_STORE_TOPIC = "darkstr-cookie-store";
++
+ const ACTOR_NAME = "DarkstrCookieFirewall";
+ const MSG_INSTALL = "DarkstrCookieFirewall:Install";
+ const MSG_DELTA = "DarkstrCookieFirewall:Delta";
+@@ -759,6 +842,96 @@
+   };
+ }
+ 
++// ---- 0060: buckets vs Gecko OriginAttributes(Pattern) -----------------------
++
++/**
++ * "<u>.<p>|<scheme>://<top base>[|p|pf]" → { userContextId, privateBrowsingId,
++ * scheme, base, part: "" | "p" | "pf" }. null for anything else.
++ */
++function parseBucketKey(key) {
++  const m = /^(\d+)\.(\d+)\|([a-z][a-z0-9+.-]*):\/\/([^|]*)(?:\|(p|pf))?$/.exec(
++    String(key || "")
++  );
++  if (!m) {
++    return null;
++  }
++  return {
++    userContextId: Number(m[1]),
++    privateBrowsingId: Number(m[2]),
++    scheme: m[3],
++    base: m[4],
++    part: m[5] || "",
++  };
++}
++
++/** Services.eTLD.hasRootDomain for normalized hosts (no XPCOM). */
++function hasRootDomain(host, root) {
++  const h = normalizeHost(host);
++  const r = normalizeHost(root);
++  return !!h && !!r && (h === r || h.endsWith("." + r));
++}
++
++/**
++ * Does a bucket hold cookies Gecko keys with OriginAttributes matching
++ * `pattern` (an OriginAttributesPattern dictionary or a principal's
++ * originAttributes)? Unset fields match everything, like Gecko. The jar maps
++ * onto Gecko exactly: "u" = partitionKey "", "p" = (scheme,top),
++ * "pf" = (scheme,top,f). Ports are not part of a jar key, so a partition
++ * key's port is ignored. `baseOf` maps a partition-key host to its site.
++ */
++function bucketMatchesPattern(info, pattern, baseOf = (h) => h) {
++  if (!info) {
++    return false;
++  }
++  const p = pattern || {};
++  if (p.userContextId !== undefined && Number(p.userContextId) !== info.userContextId) {
++    return false;
++  }
++  if (p.privateBrowsingId !== undefined && Number(p.privateBrowsingId) !== info.privateBrowsingId) {
++    return false;
++  }
++  if (p.firstPartyDomain !== undefined && p.firstPartyDomain !== "") {
++    return false; // the jar never uses first-party isolation keys
++  }
++  if (p.partitionKey !== undefined && p.partitionKey !== null) {
++    if (p.partitionKey === "") {
++      if (info.part !== "") {
++        return false;
++      }
++    } else {
++      const pk = parsePartitionKey(p.partitionKey);
++      if (
++        !pk ||
++        info.part === "" ||
++        (pk.scheme && pk.scheme !== info.scheme) ||
++        normalizeHost(baseOf(pk.host)) !== info.base ||
++        !!pk.foreignAncestor !== (info.part === "pf")
++      ) {
++        return false;
++      }
++    }
++  }
++  const kp = p.partitionKeyPattern;
++  if (kp && typeof kp === "object") {
++    if (info.part === "") {
++      return false;
++    }
++    if (kp.scheme !== undefined && String(kp.scheme).toLowerCase() !== info.scheme) {
++      return false;
++    }
++    if (kp.baseDomain !== undefined && normalizeHost(kp.baseDomain) !== info.base) {
++      return false;
++    }
++    if (
++      kp.foreignByAncestorContext !== undefined &&
++      !!kp.foreignByAncestorContext !== (info.part === "pf")
++    ) {
++      return false;
++    }
++  }
++  return true;
++}
++
+ export const DarkstrCookieCore = Object.freeze({
+   mixU32,
+   syntheticToken,
+@@ -787,6 +960,9 @@
+   writeBucketFor,
+   bucketTag,
+   unionMaps,
++  parseBucketKey,
++  hasRootDomain,
++  bucketMatchesPattern,
+   KIND_1P,
+   KIND_3P,
+   KIND_3PF,
+@@ -811,6 +987,11 @@
+     return diagPrefs.snapshot();
+   },
+ 
++  /** 0060: coverage counters (counts only, no names or values). */
++  getCoverageStats() {
++    return { ...this._coverageStats };
++  },
++
+   _inited: false,
+   _actorRegistered: false,
+   _observer: null,
+@@ -825,6 +1006,12 @@
+   _liveActors: null,
+   /** F1 diag: responses held for content acks / acks that timed out. */
+   _ackStats: { held: 0, timeouts: 0 },
++  /** 0060: CookieStoreParent observer ("darkstr-cookie-store"). */
++  _cookieStoreObserver: null,
++  /** 0060: counts only (never names / values): purges, worker store calls. */
++  _coverageStats: { purged: 0, purges: 0, workerStore: 0, workerFailClosed: 0 },
++  /** 0061 hook (PIPELINE). null in 0060. */
++  _pipelineHook: null,
+ 
+   init() {
+     if (this._inited) {
+@@ -832,6 +1019,7 @@
+     }
+     this._inited = true;
+     this._jar = new Map();
++    this._coverageStats = { purged: 0, purges: 0, workerStore: 0, workerFailClosed: 0 };
+     this._liveActors = new Set();
+     this._observer = this._observePref.bind(this);
+     for (const p of PREFS_TO_OBSERVE) {
+@@ -857,8 +1045,19 @@
+     };
+     try {
+       Services.obs.addObserver(this._pbObserver, "last-pb-context-exited");
++    } catch (_e) {}
++    this._cookieStoreObserver = {
++      observe: (subject, topic) => {
++        if (topic === COOKIE_STORE_TOPIC) {
++          this._onCookieStoreTopic(subject);
++        }
++      },
++    };
++    try {
++      Services.obs.addObserver(this._cookieStoreObserver, COOKIE_STORE_TOPIC);
+     } catch (_e) {}
+     this._ensureHttpObserver();
++    DarkstrCookieJarStore.attach(this);
+     this.refreshPlan();
+   },
+ 
+@@ -881,6 +1080,10 @@
+       Services.obs.removeObserver(this._pbObserver, "last-pb-context-exited");
+     } catch (_e) {}
+     this._pbObserver = null;
++    try {
++      Services.obs.removeObserver(this._cookieStoreObserver, COOKIE_STORE_TOPIC);
++    } catch (_e) {}
++    this._cookieStoreObserver = null;
+     this._teardownHttpObserver();
+     if (this._actorRegistered) {
+       try {
+@@ -888,6 +1091,8 @@
+       } catch (_e) {}
+       this._actorRegistered = false;
+     }
++    // 0060r2: keep the kept buckets before the live jar goes.
++    DarkstrCookieJarStore.onDisarm();
+     if (this._jar) {
+       this._jar.clear();
+     }
+@@ -926,8 +1131,13 @@
+         // No `matches`: about:blank / srcdoc / blob: documents inherit an
+         // http(s) principal and must be hooked too. The child filters on
+         // document principal before any IPC.
++        // 0060: no `messageManagerGroups` either. With ["browsers"] only, web
++        // frames inside extension popups / sidebars / background pages
++        // ("webext-browsers") had no child, so the C++ gate (CookieCommons
++        // "darkstr-cookie-gate") got no answer and blocked them by default
++        // while their requests were sandboxed. Chrome documents stay out
++        // (includeChrome defaults to false).
+         allFrames: true,
+-        messageManagerGroups: ["browsers"],
+         safeForUntrustedWebProcess: true,
+       });
+       this._actorRegistered = true;
+@@ -1015,6 +1225,7 @@
+     if (prevMode && prevMode !== plan.mode && this._jar) {
+       // Mode switch: values were written under the other mode.
+       this._jar.clear();
++      DarkstrCookieJarStore.onModeSwitch();
+     }
+     if (this._actorRegistered && (plan.armed || wasArmed)) {
+       this._reinstallAllDocuments();
+@@ -1023,15 +1234,22 @@
+   },
+ 
+   _setArmed(armed) {
++    const was = this._armed;
+     this._armed = !!armed;
+     try {
+       diagPrefs.setBoolPref(ARMED_PREF, this._armed);
+     } catch (_e) {}
+     this._setContentGate(this._armed);
+     if (!this._armed && this._jar) {
++      // 0060r2: kept buckets go to the encrypted store first.
++      DarkstrCookieJarStore.onDisarm();
+       // Idle: drop sandbox so a later arm starts clean. Real jar untouched.
+       this._jar.clear();
+     }
++    if (this._armed && !was) {
++      // 0060r2: load the kept sites' persisted jar and merge it in.
++      DarkstrCookieJarStore.onArmed();
++    }
+   },
+ 
+   /**
+@@ -1254,6 +1472,45 @@
+         diagPrefs.setStringPref(LAST_PARTITION_PREF, String(jarKey));
+       }
+     } catch (_e) {}
++  },
++
++  /**
++   * 0060: host + OriginAttributes suffix of every sandboxed cookie, in the
++   * shape PrincipalsCollector builds from Services.cookies (rawHost +
++   * originAttributesToSuffix), so collector-driven clears (the shutdown
++   * sanitizer honoring "persist-data-on-shutdown" exceptions) reach the
++   * sandbox jar. "p" buckets carry partitionKey "(scheme,top)", "pf"
++   * "(scheme,top,f)", exactly what Gecko's CookieCleaner would see.
++   * Memory only; nothing is logged or written. Disarmed → [].
++   */
++  sandboxCookieHosts() {
++    const out = new Set();
++    for (const [key, bucket] of this._jar || []) {
++      const info = parseBucketKey(key);
++      if (!info || !bucket || !bucket.size) {
++        continue;
++      }
++      const oa = {
++        userContextId: info.userContextId,
++        privateBrowsingId: info.privateBrowsingId,
++      };
++      if (info.part) {
++        oa.partitionKey = `(${info.scheme},${info.base}${info.part === "pf" ? ",f" : ""})`;
++      }
++      let suffix = "";
++      try {
++        suffix = ChromeUtils.originAttributesToSuffix(oa);
++      } catch (_e) {
++        continue;
++      }
++      for (const rec of bucket.values()) {
++        const h = normalizeHost(rec.host).replace(/^\./, "");
++        if (h) {
++          out.add(h + suffix);
++        }
++      }
++    }
++    return [...out];
+   },
+ 
+   _bucket(jarKey, create) {
+@@ -1287,8 +1544,42 @@
+       const oa = key.split("|")[0];
+       if (!oa.endsWith(".0")) {
+         this._jar.delete(key);
++      }
++    }
++  },
++
++  /**
++   * 0060: site that owns `bc`'s frame tree for cookies. Normally the
++   * top-level document. When the top-level document is not web content (an
++   * extension page in a tab, popup, sidebar or background page; an opaque
++   * top) the outermost http(s) document under it owns the tree: it is
++   * first-party, like a top-level document of its site. `selfWgp` stands in
++   * for bc's own document while it is being installed (it may not be
++   * bc.currentWindowGlobal yet). null = no web document in the chain.
++   */
++  _ownerTopSite(bc, selfWgp = null) {
++    if (!bc) {
++      return null;
++    }
++    const wgOf = (c) => (selfWgp && c === bc ? selfWgp : c?.currentWindowGlobal);
++    let top = null;
++    try {
++      top = this._siteFromPrincipal(wgOf(bc.top || bc)?.documentPrincipal);
++    } catch (_e) {}
++    if (top) {
++      return top;
++    }
++    let owner = null;
++    for (let c = bc; c; c = c.parent) {
++      let s = null;
++      try {
++        s = this._siteFromPrincipal(wgOf(c)?.documentPrincipal);
++      } catch (_e) {}
++      if (s) {
++        owner = s;
+       }
+     }
++    return owner;
+   },
+ 
+   /** eTLD+1 of every document from `bc` up to the top (http(s) only). */
+@@ -1331,12 +1622,10 @@
+       }
+     } catch (_e) {}
+     const bc = wgp.browsingContext;
+-    let topWG = wgp;
+     let crossSite = false;
+-    if (bc && bc.top && bc.top !== bc) {
+-      topWG = bc.top.currentWindowGlobal;
+-    }
+-    const top = this._siteFromPrincipal(topWG?.documentPrincipal);
++    // 0060: the owner of the frame tree (see _ownerTopSite): the top-level
++    // document, or the outermost web document under an extension page.
++    const top = bc ? this._ownerTopSite(bc, wgp) : doc;
+     if (!top) {
+       return out;
+     }
+@@ -1366,7 +1655,7 @@
+     // set by this document lands in, else its partition.
+     out.cacheKey = out.cacheKeys[0];
+     out.seed =
+-      this._effectiveSeedForEtld(top.base, docPrincipal.originAttributes) >>> 0;
++      this._seedFor(top.base, docPrincipal.originAttributes, "document") >>> 0;
+     const env = this._env(docPrincipal.originAttributes);
+     out.laxByDefault = env.laxByDefault;
+     out.noneRequiresSecure = env.noneRequiresSecure;
+@@ -1508,10 +1797,16 @@
+   _store(bucketKey, built, opts, sink = null) {
+     const bucket = this._bucket(bucketKey, true);
+     const before = built?.ok ? bucket.get(cookieKey(built.record)) : null;
++    if (built?.ok && !built.deletion) {
++      // 0060: creation time in PRTime microseconds (Clear Recent History
++      // range). A replaced cookie keeps its creation time, like Gecko.
++      built.record.ctime = before?.ctime ?? Date.now() * 1000;
++    }
+     const res = applyRecord(bucket, built, { ...opts, seq: ++this._seq });
+     if (!res.changed) {
+       return res;
+     }
++    DarkstrCookieJarStore.noteChange(bucketKey);
+     const changes = [];
+     if (res.deletedKey) {
+       changes.push({ bucketKey, rec: before || built.record, deleted: true });
+@@ -1528,8 +1823,121 @@
+       this._flushDeltas(changes);
+     }
+     return res;
++  },
++
++  // -------------------------------------------------------------------------
++  // PIPELINE (0060). The firewall is the only cookie pipeline while armed:
++  //   in:   HTTP Set-Cookie (_onHttp), document.cookie / window CookieStore
++  //         (setDocumentCookie), worker / service worker CookieStore
++  //         (cookieStoreRequest) -> _admit(source, info, built, bucketKey)
++  //   out:  Cookie request header, document.cookie / CookieStore reads,
++  //         worker CookieStore reads -> matchFor* over readBucketsFor()
++  //   gone: expiry, cleaners (DarkstrCookieFirewallCleaner), disarm,
++  //         mode switch -> _purge() / _jar.clear()
++  //   seed: _seedFor(topBase, oa, source)
++  // 0061 per-site rotation plugs in with setPipelineHook(hook), all optional:
++  //   hook.seedFor({ topBase, oa, source })            -> u32 | undefined
++  //       partition seed (default: _effectiveSeedForEtld, 0030 rules)
++  //   hook.valueFor({ seed, topBase, record, bucketKey, source, mode })
++  //                                                    -> string | undefined
++  //       value stored for an admitted cookie (default: synthetic mode token,
++  //       isolate mode as-is)
++  //   hook.purgeFor(...) is not needed: rotating a partition is
++  //       _purge((info) => <bucket of that partition>, () => true, "rotate").
++  // The parent is authoritative: content caches take the value the parent
++  // stored through the delta it broadcasts (also to the writing document), so
++  // a hook only has to run here. 0060 ships no hook.
++  // -------------------------------------------------------------------------
++
++  /** 0061 entry point; null clears it. Returns the previous hook. */
++  setPipelineHook(hook) {
++    const prev = this._pipelineHook;
++    this._pipelineHook = hook && typeof hook === "object" ? hook : null;
++    return prev;
++  },
++
++  _seedFor(topBase, oa, source) {
++    const hook = this._pipelineHook;
++    if (hook && typeof hook.seedFor === "function") {
++      try {
++        const v = hook.seedFor({ topBase, oa, source });
++        if (Number.isFinite(v)) {
++          return v >>> 0;
++        }
++      } catch (e) {
++        console.error("darkstr 0060: pipeline seedFor hook failed", e);
++      }
++    }
++    return this._effectiveSeedForEtld(topBase, oa) >>> 0;
++  },
++
++  /**
++   * Admit one validated cookie into `bucketKey` (the only write path).
++   * info: { source, mode, seed, topBase }; opts / sink as for _store.
++   */
++  _admit(info, built, bucketKey, opts, sink = null) {
++    if (built?.ok && !built.deletion) {
++      let value;
++      const hook = this._pipelineHook;
++      if (hook && typeof hook.valueFor === "function") {
++        try {
++          value = hook.valueFor({
++            seed: info.seed >>> 0,
++            topBase: info.topBase,
++            record: { ...built.record },
++            bucketKey,
++            source: info.source,
++            mode: info.mode,
++          });
++        } catch (e) {
++          console.error("darkstr 0060: pipeline valueFor hook failed", e);
++          value = undefined;
++        }
++      }
++      if (typeof value === "string") {
++        built.record.value = value;
++      } else if (info.mode === "synthetic") {
++        built.record.value = this._syntheticFor(info.seed, info.topBase, built.record, bucketKey);
++      }
++    }
++    return this._store(bucketKey, built, opts, sink);
+   },
+ 
++  /**
++   * Remove every record `recMatch(rec, info)` in buckets `bucketMatch(info,
++   * key)` (the only removal path besides expiry / disarm). Live documents get
++   * the deletes. Returns the number removed. Never logs names or values.
++   */
++  _purge(bucketMatch, recMatch, reason = "") {
++    if (!this._jar?.size) {
++      return 0;
++    }
++    const changes = [];
++    for (const [key, bucket] of [...this._jar]) {
++      const info = parseBucketKey(key);
++      if (!info || !bucketMatch(info, key)) {
++        continue;
++      }
++      for (const [k, rec] of [...bucket]) {
++        if (recMatch(rec, info)) {
++          bucket.delete(k);
++          changes.push({ bucketKey: key, rec, deleted: true });
++        }
++      }
++      if (!bucket.size) {
++        this._jar.delete(key);
++      }
++      DarkstrCookieJarStore.noteChange(key);
++    }
++    if (changes.length) {
++      this._coverageStats.purges++;
++      this._coverageStats.purged += changes.length;
++      this._flushDeltas(changes);
++    }
++    this._coverageStats.lastPurge = `${String(reason || "").slice(0, 16)}:${changes.length}`;
++    return changes.length;
++  },
++
+   /** Synthetic token; `bucketKey` keeps u-bucket tokens unchanged vs 0048. */
+   _syntheticFor(ctxSeed, topBase, rec, bucketKey = "") {
+     return syntheticValue(
+@@ -1573,14 +1981,12 @@
+     if (!bucketKey) {
+       return { ok: false, reason: "third-party-unpartitioned" };
+     }
+-    if (plan.mode === "synthetic" && !built.deletion) {
+-      built.record.value = this._syntheticFor(ctx.seed, ctx.topBase, built.record, bucketKey);
+-    }
+-    const res = this._store(bucketKey, built, {
+-      fromHttp: false,
+-      secureOrigin: ctx.secure,
+-      now,
+-    });
++    const res = this._admit(
++      { source: "document", mode: plan.mode, seed: ctx.seed, topBase: ctx.topBase },
++      built,
++      bucketKey,
++      { fromHttp: false, secureOrigin: ctx.secure, now }
++    );
+     return { ok: !!res.changed, reason: res.reason || "" };
+   },
+ 
+@@ -1705,12 +2111,17 @@
+       top = req;
+     } else {
+       try {
+-        top = this._siteFromPrincipal(bc?.top?.currentWindowGlobal?.documentPrincipal);
++        // 0060: same owner rule as documentContext (extension tops).
++        top = bc ? this._ownerTopSite(bc) : null;
+       } catch (_e) {}
+       let pk = null;
+       try {
+         pk = parsePartitionKey(li.cookieJarSettings?.partitionKey);
+       } catch (_e) {}
++      if (pk?.scheme && pk.scheme !== "http" && pk.scheme !== "https") {
++        // 0060: a non-web partition (moz-extension top) is not a site.
++        pk = null;
++      }
+       if (!top && pk?.host) {
+         top = {
+           scheme: pk.scheme || req.scheme,
+@@ -1920,6 +2331,64 @@
+         } catch (_e) {}
+         return;
+       }
++      if (this._holdForJarStore(channel, ctx, env)) {
++        return;
++      }
++      this._applyRequestCookie(channel, ctx, env);
++      return;
++    }
++    this._onHttpResponse(channel, topic, ctx, env, plan);
++  },
++
++  /**
++   * 0060r2: while the kept sites' jar is loading (startup), a request that
++   * reads a kept site's buckets waits for it (at most JAR_WAIT_MS), so the
++   * first load after a restart already sends the persisted cookies.
++   */
++  _holdForJarStore(channel, ctx, env) {
++    const store = DarkstrCookieJarStore;
++    if (!store.loading || !store.keepsTop(ctx.top?.base, ctx.oa)) {
++      return false;
++    }
++    const waitMs = store.waitMs();
++    if (!waitMs) {
++      return false;
++    }
++    try {
++      channel.suspend();
++    } catch (_e) {
++      return false;
++    }
++    store._stats.held++;
++    let done = false;
++    let timer = null;
++    const finish = (timedOut) => {
++      if (done) {
++        return;
++      }
++      done = true;
++      timer?.cancel();
++      if (timedOut) {
++        store._stats.heldTimeout++;
++      }
++      try {
++        store._hydrate();
++        this._applyRequestCookie(channel, ctx, env);
++      } catch (e) {
++        console.error("darkstr 0060r2: held request cookie failed", e);
++      } finally {
++        try {
++          channel.resume();
++        } catch (_e) {}
++      }
++    };
++    timer = jarLater(() => finish(true), waitMs);
++    store.whenReady().then(() => finish(false), () => finish(false));
++    return true;
++  },
++
++  _applyRequestCookie(channel, ctx, env) {
++    {
+       const now = Date.now();
+       const buckets = ctx.readKeys.map((k) => {
+         const b = this._bucket(k, false);
+@@ -1971,9 +2440,10 @@
+           diagPrefs.setStringPref(LAST_COOKIE_SET_PREF, "");
+         } catch (_e2) {}
+       }
+-      return;
+     }
++  },
+ 
++  _onHttpResponse(channel, topic, ctx, env, plan) {
+     if (!HTTP_TOPICS.includes(topic)) {
+       return;
+     }
+@@ -1997,8 +2467,8 @@
+     }
+     const now = Date.now();
+     const seed =
+-      plan.mode === "synthetic"
+-        ? this._effectiveSeedForEtld(ctx.top.base, ctx.oa)
++      plan.mode === "synthetic" || this._pipelineHook
++        ? this._seedFor(ctx.top.base, ctx.oa, "http")
+         : 0;
+     const sink = [];
+     for (const line of String(raw).split(/\r?\n/)) {
+@@ -2031,10 +2501,13 @@
+         // Stock (optInPartitioning): third-party cookie without Partitioned.
+         continue;
+       }
+-      if (plan.mode === "synthetic" && !built.deletion) {
+-        built.record.value = this._syntheticFor(seed, ctx.top.base, built.record, bucketKey);
+-      }
+-      this._store(bucketKey, built, { fromHttp: true, secureOrigin: ctx.secure, now }, sink);
++      this._admit(
++        { source: "http", mode: plan.mode, seed, topBase: ctx.top.base },
++        built,
++        bucketKey,
++        { fromHttp: true, secureOrigin: ctx.secure, now },
++        sink
++      );
+     }
+     if (sink.length) {
+       const requester = this._requesterActor(ctx);
+@@ -2045,5 +2518,1048 @@
+       this._holdUntilAcked(channel, acks);
+     }
+     this._writeDiag(ctx.top.base, seed, "sandbox", ctx.jarKey);
++  },
++  // ---- 0060: worker / service worker CookieStore ---------------------------
++
++  /**
++   * Context of a CookieStoreParent request (no browsing context: the worker's
++   * cookie URI, OriginAttributes and the content process's third-party
++   * flags). Top-level site: the partition key (attrs, else the partitioned
++   * attrs a first party also sends), else the cookie site itself for a
++   * first-party context. A third-party request without a partition key has
++   * no knowable top: null (fail closed).
++   */
++  _workerContext(req, site, plan) {
++    let pk = null;
++    for (const k of [req.partitionKey, req.partitionedKey]) {
++      const p = parsePartitionKey(k);
++      if (p?.host && (!p.scheme || p.scheme === "http" || p.scheme === "https")) {
++        pk = p;
++        break;
++      }
++    }
++    let top = null;
++    if (pk) {
++      top = { scheme: pk.scheme || site.scheme, host: pk.host, base: this._baseOfHost(pk.host) };
++    } else if (!req.thirdParty) {
++      top = site;
++    } else {
++      return null;
++    }
++    let kind;
++    if (site.base !== top.base) {
++      kind = KIND_3P;
++    } else if (pk?.foreignAncestor) {
++      kind = KIND_3PF;
++    } else {
++      kind = KIND_1P;
++    }
++    const oa = {
++      userContextId: Number(req.userContextId || 0) >>> 0,
++      privateBrowsingId: Number(req.privateBrowsingId || 0) >>> 0,
++    };
++    const decision = this.decisionForEtld(top.base, plan);
++    const jarKey = this._jarKey(this._oaKey(oa), top);
++    return {
++      decision,
++      top,
++      kind,
++      oa,
++      jarKey,
++      readKeys: readBucketsFor(jarKey, kind),
++      host: site.host,
++      secure: isSecureOrigin(site.scheme, site.host),
++      crossSite: kind !== KIND_1P,
++    };
++  },
++
++  /**
++   * One worker CookieStore operation. req: { op: "get"|"set"|"delete",
++   * uri (nsIURI-like), userContextId, privateBrowsingId, partitionKey,
++   * partitionedKey, thirdParty, name, matchName, path, onlyFirstMatch, value,
++   * session, expires (ms), domain, sameSite ("strict"|"lax"|"none"),
++   * partitioned }. Returns { decision: "passthrough" } (stock store) or
++   * { decision: "sandbox", items?, ok? }.
++   */
++  cookieStoreRequest(req) {
++    const plan = this.getPlan();
++    if (!plan.armed) {
++      return { decision: "passthrough" };
++    }
++    const site = this._siteFromUri(req?.uri);
++    if (!site) {
++      return { decision: "passthrough" };
++    }
++    this._coverageStats.workerStore++;
++    const ctx = this._workerContext(req, site, plan);
++    if (!ctx) {
++      this._coverageStats.workerFailClosed++;
++      return { decision: "sandbox", items: [], ok: false };
++    }
++    if (ctx.decision !== "sandbox") {
++      return { decision: "passthrough" };
++    }
++    const env = this._env(ctx.oa);
++    const now = Date.now();
++    if (req.op === "get") {
++      const buckets = ctx.readKeys.map((k) => {
++        const b = this._bucket(k, false);
++        this._purgeExpired(b, now);
++        return b;
++      });
++      let recs = matchForScript(
++        unionMaps(buckets),
++        {
++          host: ctx.host,
++          path: String(req.path || "/") || "/",
++          secure: ctx.secure,
++          crossSite: ctx.crossSite,
++          now,
++        },
++        env
++      );
++      if (req.matchName) {
++        recs = recs.filter((r) => r.name === String(req.name ?? ""));
++      }
++      if (req.onlyFirstMatch) {
++        recs = recs.slice(0, 1);
++      }
++      return { decision: "sandbox", items: recs.map((r) => ({ name: r.name, value: r.value })) };
++    }
++    if (req.op !== "set" && req.op !== "delete") {
++      return { decision: "sandbox", ok: false };
++    }
++    const isDelete = req.op === "delete";
++    const parts = [`${String(req.name ?? "")}=${isDelete ? "" : String(req.value ?? "")}`];
++    parts.push(`Path=${String(req.path || "/")}`);
++    if (req.domain) {
++      parts.push(`Domain=${String(req.domain)}`);
++    }
++    if (isDelete) {
++      parts.push("Max-Age=0");
++    } else if (!req.session && Number.isFinite(Number(req.expires))) {
++      parts.push(`Expires=${new Date(Number(req.expires)).toUTCString()}`);
++    }
++    const ss = String(req.sameSite || "strict").toLowerCase();
++    parts.push(`SameSite=${ss === "lax" || ss === "none" ? ss : "strict"}`);
++    parts.push("Secure");
++    if (req.partitioned) {
++      parts.push("Partitioned");
++    }
++    const built = buildRecord(
++      parseSetCookie(parts.join("; ")),
++      {
++        host: ctx.host,
++        path: site.path,
++        secure: ctx.secure,
++        fromHttp: false,
++        crossSite: ctx.crossSite,
++        topLevelNav: false,
++        now,
++      },
++      env
++    );
++    if (!built.ok) {
++      return { decision: "sandbox", ok: false, reason: built.reason };
++    }
++    const bucketKey = writeBucketFor(
++      ctx.jarKey,
++      ctx.kind,
++      built.record.partitioned,
++      env.optInPartitioning
++    );
++    if (!bucketKey) {
++      return { decision: "sandbox", ok: false, reason: "third-party-unpartitioned" };
++    }
++    const seed =
++      plan.mode === "synthetic" || this._pipelineHook
++        ? this._seedFor(ctx.top.base, ctx.oa, "worker-cookieStore")
++        : 0;
++    const res = this._admit(
++      { source: "worker-cookieStore", mode: plan.mode, seed, topBase: ctx.top.base },
++      built,
++      bucketKey,
++      { fromHttp: false, secureOrigin: ctx.secure, now }
++    );
++    // Stock CookieStore resolves a valid set / delete even when the store
++    // keeps an existing cookie (HttpOnly / Secure protection); same here.
++    return { decision: "sandbox", ok: true, changed: !!res.changed };
++  },
++
++  /** nsIWritablePropertyBag2 from CookieStoreParent <-> cookieStoreRequest. */
++  _onCookieStoreTopic(subject) {
++    let bag;
++    try {
++      bag = subject.QueryInterface(Ci.nsIWritablePropertyBag2);
++    } catch (_e) {
++      return;
++    }
++    const str = (k) => {
++      try {
++        return bag.getPropertyAsAString(k);
++      } catch (_e) {
++        return "";
++      }
++    };
++    const bool = (k) => {
++      try {
++        return !!bag.getPropertyAsBool(k);
++      } catch (_e) {
++        return false;
++      }
++    };
++    const num = (k) => {
++      try {
++        return Number(bag.getPropertyAsInt64(k));
++      } catch (_e) {
++        return 0;
++      }
++    };
++    let res;
++    try {
++      let uri = null;
++      try {
++        uri = Services.io.newURI(str("uri"));
++      } catch (_e) {}
++      res = this.cookieStoreRequest({
++        op: str("op"),
++        uri,
++        userContextId: num("userContextId"),
++        privateBrowsingId: num("privateBrowsingId"),
++        partitionKey: str("partitionKey"),
++        partitionedKey: str("partitionedKey"),
++        thirdParty: bool("thirdParty"),
++        name: str("name"),
++        matchName: bool("matchName"),
++        path: str("path"),
++        onlyFirstMatch: bool("onlyFirstMatch"),
++        value: str("value"),
++        session: bool("session"),
++        expires: num("expires"),
++        domain: str("domain"),
++        sameSite: str("sameSite"),
++        partitioned: bool("partitioned"),
++      });
++    } catch (e) {
++      console.error("darkstr 0060: worker cookieStore request failed", e);
++      res = { decision: "sandbox", items: [], ok: false };
++    }
++    try {
++      bag.setPropertyAsAString("decision", res.decision);
++      if (res.decision === "sandbox") {
++        const items = res.items || [];
++        bag.setPropertyAsUint32("count", items.length);
++        items.forEach((it, i) => {
++          bag.setPropertyAsAString(`name${i}`, it.name);
++          bag.setPropertyAsAString(`value${i}`, it.value);
++        });
++        bag.setPropertyAsBool("ok", !!res.ok);
++      }
++    } catch (_e) {}
++  },
++};
++
++/**
++ * 0060: ClearDataService cleaner for the sandbox jar (registered under
++ * CLEAR_COOKIES, so every cookie clear reaches it: Forget About This Site,
++ * Clear Recent History, Clear-Site-Data, clear-on-quit, container removal).
++ * Same matching as Gecko's CookieCleaner:
++ *  - deleteByHost / deleteByPrincipal: cookies of exactly that host, in the
++ *    partitions the OriginAttributes (pattern) selects. A principal carries
++ *    its partitionKey, so a partitioned clear (a framed site's
++ *    Clear-Site-Data, the shutdown sanitizer's partitioned principals) only
++ *    clears that partition; "" only the unpartitioned jar (#93 rule).
++ *  - deleteBySite: the site's cookies in every partition plus every cookie
++ *    partitioned under that top site (ClearDataService hasSite()).
++ *  - deleteByRange: cookies created since aFrom (PRTime us).
++ *  - deleteByOriginAttributes / deleteAll / deleteByLocalFiles.
++ * A disarmed firewall has an empty jar: every method is a no-op (stock).
++ */
++const FW_baseOf = (h) => {
++  try {
++    return DarkstrCookieFirewall._baseOfHost(h) || h;
++  } catch (_e) {
++    return h;
++  }
++};
++// ---------------------------------------------------------------------------
++// 0060r2 (Alex, 2026-10-09): kept sites keep their sandbox cookies across a
++// restart. DarkstrCookieJarStore persists the sandbox buckets of KEPT
++// top-level sites only, encrypted at rest the way the 0056 seed store is:
++//
++// - File <profile>/darkstr/cookie-jar.json (dir 0700, file 0600), written
++//   only by the parent, atomically (tmp file, chmod 0600, rename), so a
++//   kill -9 leaves either the previous or the new file, never a torn one.
++//   A stray .tmp (killed mid-write) is removed at load; it is encrypted too.
++// - Format v1: { v: 1, l: <OSKeyStore label>, k: <K wrapped by OSKeyStore>,
++//   e: [{ c, h, n, d }] }
++//     c  HMAC-SHA256(K, "ctx:" + userContextId), hex (per-context tag, 0056)
++//     h  HMAC-SHA256(K, userContextId + "|" + bucket key), hex
++//     n  AES-GCM IV (base64)    d  AES-GCM(K, n, JSON{b, m, r}) with AAD c|h
++//        b bucket key, m firewall mode, r cookie records -- all inside the
++//        ciphertext. No host, site, cookie name or value, container number
++//        or time is ever written in the clear.
++//   K: random 32 bytes; the OSKeyStore secret (macOS Keychain) under a random
++//   label "darkstr-cookie-jar-<hex>" wraps it. OSKeyStore unavailable ->
++//   memory only (nothing written).
++// - Kept = top-level site with a persist-data-on-shutdown ALLOW exception and
++//   no cookie ACCESS_SESSION permission (the 0056 keep rule), never private
++//   browsing. Every other bucket stays memory-only: non-kept sites are wiped
++//   on quit exactly as before. Only cookies that would survive a stock restart
++//   are written: persistent cookies (unexpired), plus session cookies only
++//   while session restore is on (browser.startup.page = 3).
++// - The live jar is authoritative once hydrated (first arm after the load);
++//   before that (disarmed / not yet loaded) the file is changed only by
++//   clears and by the keep rule. Unkeep (perm-changed) prunes the site's
++//   entries at once. Clears (DarkstrCookieFirewallCleaner) apply the same
++//   predicates to the persisted buckets (loading the file if needed, in any
++//   mode); clear-all deletes the file and the OSKeyStore secret.
++// - Startup: sandbox requests that would read a kept site's jar wait for the
++//   load (at most JAR_WAIT_MS) so the first load already sends the cookies.
++// ---------------------------------------------------------------------------
++const JAR_DIR = "darkstr";
++const JAR_FILE = "cookie-jar.json";
++const JAR_VERSION = 1;
++const JAR_LABEL_PREFIX = "darkstr-cookie-jar-";
++const JAR_SAVE_DELAY_MS = 500;
++const JAR_WAIT_PREF = "darkstr.cookieFirewall.jarStore.startupWaitMs";
++const JAR_WAIT_DEFAULT_MS = 2000;
++/** Test / ops switch, like darkstr.persona.seedStore.osKeyStore. */
++const JAR_KEYSTORE_PREF = "darkstr.cookieFirewall.jarStore.osKeyStore";
++const JAR_KEEP_PERM_TYPES = new Set(["persist-data-on-shutdown", "cookie"]);
++const STARTUP_PAGE_PREF = "browser.startup.page";
++
++function jarIsParent() {
++  try {
++    return Services.appinfo.processType === Ci.nsIXULRuntime.PROCESS_TYPE_DEFAULT;
++  } catch (_e) {
++    return false;
++  }
++}
++function jarLater(fn, ms) {
++  try {
++    if (typeof Cc !== "undefined" && Ci.nsITimer) {
++      const t = Cc["@mozilla.org/timer;1"].createInstance(Ci.nsITimer);
++      t.initWithCallback(fn, ms, Ci.nsITimer.TYPE_ONE_SHOT);
++      return { cancel: () => t.cancel() };
++    }
++  } catch (_e) {}
++  const t = setTimeout(fn, ms);
++  return { cancel: () => clearTimeout(t) };
++}
++const jarB64 = {
++  enc(bytes) {
++    let s = "";
++    for (const b of bytes) {
++      s += String.fromCharCode(b & 0xff);
++    }
++    return btoa(s);
+   },
++  dec(str) {
++    const s = atob(String(str || ""));
++    const out = new Uint8Array(s.length);
++    for (let i = 0; i < s.length; i++) {
++      out[i] = s.charCodeAt(i);
++    }
++    return out;
++  },
+ };
++const jarHex = (buf) =>
++  [...new Uint8Array(buf)].map((x) => x.toString(16).padStart(2, "0")).join("");
++function jarSiteOfHost(host) {
++  const h = normalizeHost(host).replace(/^\./, "");
++  if (!h) {
++    return "";
++  }
++  try {
++    return Services.eTLD.getBaseDomainFromHost(h);
++  } catch (_e) {
++    return h;
++  }
++}
++
++export var DarkstrCookieJarStore = {
++  /** idle | loading | ready | session-only */
++  _state: "idle",
++  _loadPromise: null,
++  /** bucket key -> { mode, records: Map(cookieKey -> record) } (memory). */
++  _persisted: new Map(),
++  /** True while the live firewall jar holds the persisted buckets. */
++  _hydrated: false,
++  _fw: null,
++  _key: null, // CryptoKey AES-GCM
++  _hmacKey: null, // CryptoKey HMAC
++  _label: "",
++  _wrapped: "",
++  _dirty: false,
++  _saveTimer: null,
++  _savePromise: null,
++  _observing: false,
++  /** A file exists (seen at load or written this session). */
++  _onDisk: false,
++  _stats: { reads: 0, writes: 0, keyGens: 0, keyDeletes: 0, dropped: 0, decryptErrors: 0, held: 0, heldTimeout: 0 },
++
++  get path() {
++    return PathUtils.join(PathUtils.profileDir, JAR_DIR, JAR_FILE);
++  },
++  get dirPath() {
++    return PathUtils.join(PathUtils.profileDir, JAR_DIR);
++  },
++  get loading() {
++    return this._state === "loading";
++  },
++  whenReady() {
++    return this._loadPromise || Promise.resolve();
++  },
++
++  _keyStoreAllowed() {
++    try {
++      return Services.prefs.getBoolPref(JAR_KEYSTORE_PREF, true);
++    } catch (_e) {
++      return true;
++    }
++  },
++  _osKeyStore() {
++    return Cc["@mozilla.org/security/oskeystore;1"].getService(Ci.nsIOSKeyStore);
++  },
++  waitMs() {
++    let ms = JAR_WAIT_DEFAULT_MS;
++    try {
++      ms = Services.prefs.getIntPref(JAR_WAIT_PREF, JAR_WAIT_DEFAULT_MS);
++    } catch (_e) {}
++    return Math.max(0, Math.min(10000, ms | 0));
++  },
++
++  /** Called by DarkstrCookieFirewall.init (parent only). */
++  attach(fw) {
++    this._fw = fw;
++    if (!jarIsParent() || this._observing) {
++      return;
++    }
++    this._observing = true;
++    try {
++      Services.obs.addObserver(this, "perm-changed");
++    } catch (_e) {}
++    try {
++      const { AsyncShutdown } = ChromeUtils.importESModule(
++        "resource://gre/modules/AsyncShutdown.sys.mjs"
++      );
++      AsyncShutdown.profileBeforeChange.addBlocker(
++        "darkstr 0060r2: cookie jar store",
++        () => this.flush(true)
++      );
++    } catch (_e) {}
++  },
++
++  observe(subject, topic, data) {
++    if (topic !== "perm-changed") {
++      return;
++    }
++    if (data !== "cleared") {
++      let type = "";
++      try {
++        const perm =
++          subject && typeof subject.QueryInterface === "function"
++            ? subject.QueryInterface(Ci.nsIPermission)
++            : subject;
++        type = String(perm?.type || "");
++      } catch (_e) {
++        return;
++      }
++      if (!JAR_KEEP_PERM_TYPES.has(type)) {
++        return;
++      }
++    }
++    // Keep / unkeep: re-evaluate now. Unkeep prunes the file at once; a new
++    // keep is written from the live jar (when hydrated) at the next save.
++    this._ensureLoaded().then(() => {
++      if (this._state !== "ready") {
++        return;
++      }
++      if (this._hydrated) {
++        this._snapshotLive();
++      }
++      this._applyKeepRule();
++      this._scheduleSave();
++    });
++  },
++
++  /** Load (once). Any mode may load for a clear; only arm hydrates. */
++  _ensureLoaded() {
++    if (!jarIsParent()) {
++      return Promise.resolve();
++    }
++    if (this._state === "idle") {
++      this._state = "loading";
++      this._loadPromise = this._load().catch((e) => {
++        console.error("darkstr 0060r2: cookie jar load failed", e);
++        this._state = "session-only";
++      });
++    }
++    return this._loadPromise || Promise.resolve();
++  },
++
++  async _importKey(raw) {
++    const bytes = Uint8Array.from(raw);
++    this._key = await crypto.subtle.importKey("raw", bytes, { name: "AES-GCM" }, false, ["encrypt", "decrypt"]);
++    this._hmacKey = await crypto.subtle.importKey("raw", bytes, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
++  },
++
++  async _hmac(msg) {
++    const sig = await crypto.subtle.sign("HMAC", this._hmacKey, new TextEncoder().encode(String(msg)));
++    return jarHex(sig);
++  },
++
++  async _load() {
++    try {
++      await IOUtils.remove(this.path + ".tmp", { ignoreAbsent: true });
++    } catch (_e) {}
++    let data = null;
++    if (await IOUtils.exists(this.path)) {
++      this._onDisk = true;
++      this._stats.reads++;
++      try {
++        data = await IOUtils.readJSON(this.path);
++      } catch (e) {
++        // Unreadable: nothing can be recovered from it; the next save
++        // replaces it (all of its content was ciphertext anyway).
++        console.error("darkstr 0060r2: cookie-jar.json unreadable, starting empty", e);
++        data = null;
++        this._dirty = true;
++      }
++    }
++    if (data && data.v === JAR_VERSION && data.l && data.k) {
++      if (!this._keyStoreAllowed()) {
++        this._state = "session-only";
++        return;
++      }
++      let available = false;
++      try {
++        available = await this._osKeyStore().asyncSecretAvailable(data.l);
++      } catch (_e) {
++        this._state = "session-only";
++        return;
++      }
++      if (available) {
++        const raw = await this._osKeyStore().asyncDecryptBytes(data.l, data.k);
++        await this._importKey(raw);
++        this._label = data.l;
++        this._wrapped = data.k;
++        for (const e of Array.isArray(data.e) ? data.e : []) {
++          try {
++            if (!/^[0-9a-f]{64}$/.test(e?.c) || !/^[0-9a-f]{64}$/.test(e?.h)) {
++              throw new Error("bad tag");
++            }
++            const plain = await crypto.subtle.decrypt(
++              { name: "AES-GCM", iv: jarB64.dec(e.n), additionalData: new TextEncoder().encode(`${e.c}|${e.h}`) },
++              this._key,
++              jarB64.dec(e.d)
++            );
++            const obj = JSON.parse(new TextDecoder().decode(plain));
++            const info = parseBucketKey(obj.b);
++            if (!info || info.privateBrowsingId !== 0 || !Array.isArray(obj.r)) {
++              throw new Error("bad entry");
++            }
++            // The tags must be this entry's own (no swapping between contexts).
++            if (e.c !== (await this._hmac("ctx:" + info.userContextId)) ||
++                e.h !== (await this._hmac(`${info.userContextId}|${obj.b}`))) {
++              throw new Error("tag mismatch");
++            }
++            const records = new Map();
++            for (const r of obj.r) {
++              if (r && typeof r.name === "string" && typeof r.host === "string") {
++                records.set(cookieKey(r), r);
++              }
++            }
++            this._persisted.set(obj.b, { mode: String(obj.m || "synthetic"), records });
++          } catch (_eEntry) {
++            this._stats.decryptErrors++;
++            this._dirty = true;
++          }
++        }
++      } else {
++        // Secret gone (Keychain item removed): unrecoverable; a fresh store
++        // (new key and label) replaces the file at the next save.
++        this._dirty = true;
++      }
++    } else if (data) {
++      this._dirty = true;
++    }
++    this._state = "ready";
++    if (this._applyKeepRule()) {
++      this._dirty = true;
++    }
++    if (this._dirty) {
++      this._scheduleSave();
++    }
++  },
++
++  /** Keep-rule sets (base domains), as in DarkstrPersonaSeedStore._keepSets. */
++  _keepSets() {
++    const keep = new Set();
++    const session = new Set();
++    try {
++      for (const p of Services.perms.getAllByTypes(["persist-data-on-shutdown"])) {
++        if (p.capability === Ci.nsIPermissionManager.ALLOW_ACTION) {
++          const s = jarSiteOfHost(p.principal?.host);
++          if (s) {
++            keep.add(s);
++          }
++        }
++      }
++    } catch (_e) {}
++    try {
++      for (const p of Services.perms.getAllByTypes(["cookie"])) {
++        if (p.capability === Ci.nsICookiePermission.ACCESS_SESSION) {
++          const s = jarSiteOfHost(p.principal?.host);
++          if (s) {
++            session.add(s);
++          }
++        }
++      }
++    } catch (_e) {}
++    return { keep, session };
++  },
++
++  /** Is this bucket (by key) persisted? Never private, kept top sites only. */
++  keepsBucket(bucketKey, sets = this._keepSets()) {
++    const info = parseBucketKey(bucketKey);
++    if (!info || info.privateBrowsingId !== 0) {
++      return false;
++    }
++    const site = normalizeHost(info.base);
++    return !!site && sets.keep.has(site) && !sets.session.has(site);
++  },
++
++  /** Is any bucket for this top site / context persisted (startup hold)? */
++  keepsTop(topBase, oa) {
++    if (Number(oa?.privateBrowsingId || 0) > 0) {
++      return false;
++    }
++    const sets = this._keepSets();
++    const site = normalizeHost(topBase);
++    return !!site && sets.keep.has(site) && !sets.session.has(site);
++  },
++
++  _sessionCookiesSurvive() {
++    try {
++      return Services.prefs.getIntPref(STARTUP_PAGE_PREF, 1) === 3;
++    } catch (_e) {
++      return false;
++    }
++  },
++
++  /** Records of one bucket that a stock restart would keep. */
++  _persistable(records, now = Date.now()) {
++    const keepSession = this._sessionCookiesSurvive();
++    const out = new Map();
++    for (const [k, r] of records) {
++      if (r.expiry === null || r.expiry === undefined) {
++        if (keepSession) {
++          out.set(k, { ...r });
++        }
++      } else if (r.expiry > now) {
++        out.set(k, { ...r });
++      }
++    }
++    return out;
++  },
++
++  _applyKeepRule(sets = this._keepSets()) {
++    let dropped = false;
++    for (const key of [...this._persisted.keys()]) {
++      if (!this.keepsBucket(key, sets)) {
++        this._persisted.delete(key);
++        this._stats.dropped++;
++        dropped = true;
++      }
++    }
++    return dropped;
++  },
++
++  /** Live jar (authoritative while hydrated) -> persisted kept buckets. */
++  _snapshotLive() {
++    const fw = this._fw;
++    if (!fw || !this._hydrated) {
++      return;
++    }
++    const sets = this._keepSets();
++    const mode = fw.getPlan?.().mode || "synthetic";
++    const next = new Map();
++    for (const [key, bucket] of fw._jar || []) {
++      if (!bucket?.size || !this.keepsBucket(key, sets)) {
++        continue;
++      }
++      const records = this._persistable(bucket);
++      if (records.size) {
++        next.set(key, { mode, records });
++      }
++    }
++    this._persisted = next;
++  },
++
++  /** Firewall armed: load, then merge the persisted buckets into the jar. */
++  onArmed() {
++    if (!jarIsParent()) {
++      return;
++    }
++    this._ensureLoaded().then(() => this._hydrate());
++  },
++
++  _hydrate() {
++    const fw = this._fw;
++    if (this._state !== "ready" || !fw?._armed || this._hydrated) {
++      return;
++    }
++    const mode = fw.getPlan?.().mode || "synthetic";
++    const now = Date.now();
++    const changes = [];
++    for (const [key, entry] of this._persisted) {
++      if (entry.mode !== mode) {
++        continue;
++      }
++      const bucket = fw._bucket(key, true);
++      for (const [k, r] of this._persistable(entry.records, now)) {
++        if (!bucket.has(k)) {
++          // A cookie set while the file was loading is newer: it wins.
++          bucket.set(k, r);
++          changes.push({ bucketKey: key, rec: r, deleted: false });
++        }
++      }
++    }
++    this._hydrated = true;
++    if (changes.length) {
++      try {
++        fw._flushDeltas(changes);
++      } catch (_e) {}
++    }
++  },
++
++  /** Firewall about to drop its live jar (disarm): keep the kept buckets. */
++  onDisarm() {
++    if (this._hydrated) {
++      this._snapshotLive();
++      this._hydrated = false;
++      this._scheduleSave();
++    }
++  },
++
++  /** Mode switch: values were written under the other mode -> forget them. */
++  onModeSwitch() {
++    if (this._persisted.size) {
++      this._persisted.clear();
++      this._scheduleSave();
++    }
++  },
++
++  /** A live bucket changed (firewall _store / _purge). */
++  noteChange(bucketKey) {
++    if (!this._hydrated || this._state !== "ready") {
++      return;
++    }
++    const info = parseBucketKey(bucketKey);
++    if (!info || info.privateBrowsingId !== 0) {
++      return; // private never persists, never schedules a write
++    }
++    this._scheduleSave();
++  },
++
++  /** Clears: same predicates as DarkstrCookieFirewall._purge. */
++  async purge(bucketMatch, recMatch) {
++    await this._ensureLoaded();
++    if (this._state !== "ready") {
++      return 0;
++    }
++    if (this._hydrated) {
++      this._snapshotLive(); // live purge already ran; mirror it
++    }
++    let n = 0;
++    for (const [key, entry] of [...this._persisted]) {
++      const info = parseBucketKey(key);
++      if (!info || !bucketMatch(info, key)) {
++        continue;
++      }
++      for (const [k, rec] of [...entry.records]) {
++        if (recMatch(rec, info)) {
++          entry.records.delete(k);
++          n++;
++        }
++      }
++      if (!entry.records.size) {
++        this._persisted.delete(key);
++      }
++    }
++    if (n || this._onDisk) {
++      this._dirty = true;
++      await this.flush();
++    }
++    return n;
++  },
++
++  /** Clear everything: file + OSKeyStore secret (next store: new key). */
++  async clearAll() {
++    if (this._state === "loading") {
++      await this._loadPromise;
++    }
++    while (this._savePromise) {
++      await this._savePromise;
++    }
++    this._saveTimer?.cancel();
++    this._saveTimer = null;
++    this._dirty = false;
++    this._persisted.clear();
++    let label = this._label;
++    if (!label) {
++      try {
++        if (await IOUtils.exists(this.path)) {
++          label = (await IOUtils.readJSON(this.path))?.l || "";
++        }
++      } catch (_e) {}
++    }
++    try {
++      await IOUtils.remove(this.path, { ignoreAbsent: true });
++      await IOUtils.remove(this.path + ".tmp", { ignoreAbsent: true });
++    } catch (e) {
++      console.error("darkstr 0060r2: cookie-jar.json remove failed", e);
++    }
++    if (label && this._keyStoreAllowed()) {
++      try {
++        await this._osKeyStore().asyncDeleteSecret(label);
++        this._stats.keyDeletes++;
++      } catch (_e) {}
++    }
++    this._onDisk = false;
++    this._key = null;
++    this._hmacKey = null;
++    this._label = "";
++    this._wrapped = "";
++    if (this._state === "idle" || this._state === "session-only" || this._state === "ready") {
++      this._state = this._keyStoreAllowed() ? "ready" : "session-only";
++    }
++  },
++
++  _scheduleSave() {
++    if (this._state !== "ready") {
++      return;
++    }
++    this._dirty = true;
++    if (this._saveTimer) {
++      return;
++    }
++    this._saveTimer = jarLater(() => {
++      this._saveTimer = null;
++      this.flush().catch((e) => {
++        console.error("darkstr 0060r2: cookie jar save failed", e);
++      });
++    }, JAR_SAVE_DELAY_MS);
++  },
++
++  async flush(final = false) {
++    this._saveTimer?.cancel();
++    this._saveTimer = null;
++    while (this._savePromise) {
++      await this._savePromise;
++    }
++    if (final && this._hydrated) {
++      this._snapshotLive();
++      this._dirty = true;
++    }
++    if (!this._dirty || this._state !== "ready") {
++      return;
++    }
++    this._dirty = false;
++    this._savePromise = this._save().finally(() => {
++      this._savePromise = null;
++    });
++    await this._savePromise;
++  },
++
++  async _ensureKey() {
++    if (this._key) {
++      return true;
++    }
++    if (!this._keyStoreAllowed()) {
++      return false;
++    }
++    const label = JAR_LABEL_PREFIX + jarHex(crypto.getRandomValues(new Uint8Array(8)));
++    const raw = crypto.getRandomValues(new Uint8Array(32));
++    const ks = this._osKeyStore();
++    await ks.asyncGenerateSecret(label);
++    this._stats.keyGens++;
++    this._wrapped = await ks.asyncEncryptBytes(label, Array.from(raw));
++    this._label = label;
++    await this._importKey(Array.from(raw));
++    raw.fill(0);
++    return true;
++  },
++
++  async _save() {
++    if (this._hydrated) {
++      this._snapshotLive();
++    }
++    this._applyKeepRule();
++    if (!this._persisted.size) {
++      if (this._onDisk || (await IOUtils.exists(this.path))) {
++        // Nothing kept any more: no file (the key stays for the session).
++        await IOUtils.remove(this.path, { ignoreAbsent: true });
++        this._onDisk = false;
++        this._stats.writes++;
++      }
++      return;
++    }
++    try {
++      if (!(await this._ensureKey())) {
++        this._state = "session-only";
++        return;
++      }
++    } catch (e) {
++      console.error("darkstr 0060r2: OSKeyStore unavailable, kept cookies are session-only", e);
++      this._state = "session-only";
++      return;
++    }
++    const e = [];
++    for (const [b, entry] of this._persisted) {
++      const info = parseBucketKey(b);
++      if (!info || info.privateBrowsingId !== 0) {
++        continue;
++      }
++      const c = await this._hmac("ctx:" + info.userContextId);
++      const h = await this._hmac(`${info.userContextId}|${b}`);
++      const iv = crypto.getRandomValues(new Uint8Array(12));
++      const plain = new TextEncoder().encode(JSON.stringify({ b, m: entry.mode, r: [...entry.records.values()] }));
++      const d = await crypto.subtle.encrypt(
++        { name: "AES-GCM", iv, additionalData: new TextEncoder().encode(`${c}|${h}`) },
++        this._key,
++        plain
++      );
++      e.push({ c, h, n: jarB64.enc(iv), d: jarB64.enc(new Uint8Array(d)) });
++    }
++    // Entry order carries no information (sorted by tag).
++    e.sort((x, y) => (x.h < y.h ? -1 : x.h > y.h ? 1 : 0));
++    await this._writeAtomic({ v: JAR_VERSION, l: this._label, k: this._wrapped, e });
++  },
++
++  async _writeAtomic(obj) {
++    if (!jarIsParent()) {
++      throw new Error("darkstr 0060r2: cookie jar store is parent-only");
++    }
++    await IOUtils.makeDirectory(this.dirPath, { ignoreExisting: true, createAncestors: false, permissions: 0o700 });
++    try {
++      await IOUtils.setPermissions(this.dirPath, 0o700);
++    } catch (_e) {}
++    const tmp = this.path + ".tmp";
++    await IOUtils.write(tmp, new TextEncoder().encode(JSON.stringify(obj)), { mode: "overwrite", flush: true });
++    await IOUtils.setPermissions(tmp, 0o600);
++    await IOUtils.move(tmp, this.path, { noOverwrite: false });
++    this._onDisk = true;
++    this._stats.writes++;
++  },
++
++  /** Diagnostics (counts and the label only; no sites, names or values). */
++  debugState() {
++    let records = 0;
++    for (const e of this._persisted.values()) {
++      records += e.records.size;
++    }
++    return {
++      state: this._state,
++      hydrated: this._hydrated,
++      buckets: this._persisted.size,
++      records,
++      hasKey: !!this._key,
++      label: this._label,
++      stats: { ...this._stats },
++    };
++  },
++
++  /** Tests only. */
++  _resetForTests() {
++    this._saveTimer?.cancel();
++    this._state = "idle";
++    this._loadPromise = null;
++    this._persisted = new Map();
++    this._hydrated = false;
++    this._onDisk = false;
++    this._key = null;
++    this._hmacKey = null;
++    this._label = "";
++    this._wrapped = "";
++    this._dirty = false;
++    this._saveTimer = null;
++    this._savePromise = null;
++    for (const k of Object.keys(this._stats)) {
++      this._stats[k] = 0;
++    }
++  },
++};
++
++/**
++ * 0060r2: every clear also reaches the kept sites' persisted buckets
++ * (DarkstrCookieJarStore.purge, same predicates, in any mode); clear-all
++ * deletes the file and its OSKeyStore secret.
++ */
++async function fwClear(bucketMatch, recMatch, reason) {
++  DarkstrCookieFirewall._purge(bucketMatch, recMatch, reason);
++  await DarkstrCookieJarStore.purge(bucketMatch, recMatch);
++}
++export const DarkstrCookieFirewallCleaner = {
++  async deleteAll() {
++    DarkstrCookieFirewall._purge(() => true, () => true, "all");
++    await DarkstrCookieJarStore.clearAll();
++  },
++  async deleteByHost(aHost, aOriginAttributes) {
++    const host = normalizeHost(aHost);
++    await fwClear(
++      (info) => bucketMatchesPattern(info, aOriginAttributes, FW_baseOf),
++      (rec) => normalizeHost(rec.host) === host,
++      "host"
++    );
++  },
++  async deleteByPrincipal(aPrincipal, _aIsUserRequest) {
++    let host = "";
++    try {
++      host = aPrincipal?.host ?? aPrincipal?.URI?.host ?? "";
++    } catch (_e) {}
++    if (!host) {
++      return;
++    }
++    await this.deleteByHost(host, aPrincipal.originAttributes || {});
++  },
++  async deleteBySite(aSchemelessSite, aOriginAttributesPattern, _aIsUserRequest) {
++    const site = normalizeHost(aSchemelessSite);
++    if (!site) {
++      return;
++    }
++    const pattern = aOriginAttributesPattern || {};
++    await fwClear(
++      (info) => bucketMatchesPattern(info, pattern, FW_baseOf),
++      (rec, info) =>
++        hasRootDomain(rec.host, site) || (info.part !== "" && info.base === site),
++      "site"
++    );
++  },
++  async deleteByRange(aFrom, _aTo) {
++    const from = Number(aFrom) || 0;
++    await fwClear(
++      () => true,
++      (rec) => Number(rec.ctime || 0) >= from,
++      "range"
++    );
++  },
++  async deleteByOriginAttributes(aOriginAttributesString) {
++    let pattern = {};
++    try {
++      pattern = JSON.parse(String(aOriginAttributesString || "{}")) || {};
++    } catch (_e) {
++      return;
++    }
++    await fwClear(
++      (info) => bucketMatchesPattern(info, pattern, FW_baseOf),
++      () => true,
++      "oa"
++    );
++  },
++  async deleteByLocalFiles(_aOriginAttributes) {
++    // file: documents are never sandboxed.
++  },
++};
+--- a/toolkit/components/cleardata/ClearDataService.sys.mjs
++++ b/toolkit/components/cleardata/ClearDataService.sys.mjs
+@@ -448,12 +448,53 @@
+   },
+   async deleteByHost(aHost, aOriginAttributesPattern) {
+     await this._impl()?.deleteByHost(aHost, aOriginAttributesPattern);
++  },
++  async deleteByRange(aFrom, aTo) {
++    await this._impl()?.deleteByRange(aFrom, aTo);
++  },
++  async deleteByOriginAttributes(aOriginAttributesString) {
++    await this._impl()?.deleteByOriginAttributes(aOriginAttributesString);
++  },
++};
++
++// darkstr 0060: the cookie firewall's sandbox jar holds the cookies of
++// sandboxed sites while it is armed (they never reach the cookie service),
++// so every cookie clear must reach it too. Partitioned principals / patterns
++// only clear their partition (see DarkstrCookieFirewallCleaner).
++const DarkstrCookieFirewallCleaner = {
++  _impl() {
++    try {
++      return ChromeUtils.importESModule(
++        "moz-src:///browser/components/DarkstrCookieFirewall.sys.mjs"
++      ).DarkstrCookieFirewallCleaner;
++    } catch (_e) {
++      return null;
++    }
++  },
++  async deleteAll() {
++    await this._impl()?.deleteAll();
++  },
++  async deleteByPrincipal(aPrincipal, aIsUserRequest) {
++    await this._impl()?.deleteByPrincipal(aPrincipal, aIsUserRequest);
++  },
++  async deleteBySite(aSchemelessSite, aOriginAttributesPattern, aIsUserRequest) {
++    await this._impl()?.deleteBySite(
++      aSchemelessSite,
++      aOriginAttributesPattern,
++      aIsUserRequest
++    );
++  },
++  async deleteByHost(aHost, aOriginAttributes) {
++    await this._impl()?.deleteByHost(aHost, aOriginAttributes);
+   },
+   async deleteByRange(aFrom, aTo) {
+     await this._impl()?.deleteByRange(aFrom, aTo);
+   },
+   async deleteByOriginAttributes(aOriginAttributesString) {
+     await this._impl()?.deleteByOriginAttributes(aOriginAttributesString);
++  },
++  async deleteByLocalFiles(aOriginAttributes) {
++    await this._impl()?.deleteByLocalFiles(aOriginAttributes);
+   },
+ };
+ 
+@@ -2231,7 +2272,10 @@
+     cleaners: [CertCleaner],
+   },
+ 
+-  { flag: Ci.nsIClearDataService.CLEAR_COOKIES, cleaners: [CookieCleaner] },
++  {
++    flag: Ci.nsIClearDataService.CLEAR_COOKIES,
++    cleaners: [CookieCleaner, DarkstrCookieFirewallCleaner],
++  },
+ 
+   {
+     flag: Ci.nsIClearDataService.CLEAR_NETWORK_CACHE,
+--- a/netwerk/cookie/CookieCommons.cpp
++++ b/netwerk/cookie/CookieCommons.cpp
+@@ -916,12 +916,13 @@
+       return SecurityChecksResult::eDoNotContinue;
+     }
+ 
+-    // darkstr 0048r2 (F3): while the cookie firewall is armed, worker
+-    // CookieStore never reaches the real store (fail closed, including
+-    // allowlisted sites — workers have no per-window firewall answer).
+-    if (StaticPrefs::darkstr_cookieFirewall_contentGate()) {
+-      return SecurityChecksResult::eDoNotContinue;
+-    }
++    // darkstr 0060 (was 0048r2 F3: every worker failed closed while the
++    // cookie firewall was armed, allowlisted or not). Worker CookieStore
++    // requests now continue to CookieStoreParent, which asks the firewall
++    // ("darkstr-cookie-store") for the same allowlist / sandbox decision and
++    // jar the documents of that partition get, and fails closed itself when
++    // the firewall gives no answer. Nothing here reaches the real store
++    // without that parent-side decision.
+ 
+     cookiePrincipal = workerPrivate->GetPrincipal();
+     if (NS_WARN_IF(!cookiePrincipal) || cookiePrincipal->GetIsNullPrincipal()) {
+--- a/dom/cookiestore/CookieStoreParent.cpp
++++ b/dom/cookiestore/CookieStoreParent.cpp
+@@ -10,6 +10,8 @@
+ #include "mozilla/Components.h"
+ #include "mozilla/Maybe.h"
+ #include "mozilla/ScopeExit.h"
++#include "mozilla/Services.h"
++#include "mozilla/StaticPrefs_darkstr.h"
+ #include "mozilla/StaticPrefs_network.h"
+ #include "mozilla/dom/ProcessIsolation.h"
+ #include "mozilla/ipc/BackgroundParent.h"
+@@ -22,9 +24,12 @@
+ #include "mozilla/net/CookieServiceParent.h"
+ #include "mozilla/net/CookieValidation.h"
+ #include "mozilla/net/NeckoParent.h"
++#include "nsHashPropertyBag.h"
++#include "nsICookie.h"
+ #include "nsICookieManager.h"
+ #include "nsICookieService.h"
+ #include "nsIEffectiveTLDService.h"
++#include "nsIObserverService.h"
+ #include "nsNetUtil.h"
+ #include "nsProxyRelease.h"
+ 
+@@ -88,6 +93,62 @@
+   return contentParent && GetCookieServiceParent(contentParent);
+ }
+ 
++// darkstr 0060 (cookie firewall coverage, Fable B8): while the firewall is
++// armed (darkstr.cookieFirewall.contentGate, default branch only), every
++// CookieStore request that reaches the parent -- in practice the service
++// worker CookieStore, since sandboxed documents are served by the
++// firewall's own hooks -- is first offered to DarkstrCookieFirewall over the
++// "darkstr-cookie-store" observer topic. It answers "passthrough" (allowlisted
++// top site: the stock code below runs) or "sandbox" (the request is served
++// from the firewall's jar, nothing touches the cookie service). No answer
++// while armed fails closed. Gate off: no notification, stock behaviour.
++already_AddRefed<nsHashPropertyBag> DarkstrCookieStoreBag(
++    const char* aOp, nsIURI* aCookieURI,
++    const OriginAttributes& aOriginAttributes, bool aThirdPartyContext) {
++  RefPtr<nsHashPropertyBag> bag = new nsHashPropertyBag();
++  (void)bag->SetPropertyAsAString(u"op"_ns, NS_ConvertASCIItoUTF16(aOp));
++  nsAutoCString spec;
++  if (aCookieURI) {
++    (void)aCookieURI->GetSpec(spec);
++  }
++  (void)bag->SetPropertyAsAString(u"uri"_ns, NS_ConvertUTF8toUTF16(spec));
++  (void)bag->SetPropertyAsInt64(u"userContextId"_ns,
++                                aOriginAttributes.mUserContextId);
++  (void)bag->SetPropertyAsInt64(u"privateBrowsingId"_ns,
++                                aOriginAttributes.mPrivateBrowsingId);
++  (void)bag->SetPropertyAsAString(u"partitionKey"_ns,
++                                  aOriginAttributes.mPartitionKey);
++  (void)bag->SetPropertyAsBool(u"thirdParty"_ns, aThirdPartyContext);
++  return bag.forget();
++}
++
++// True when the firewall owns the request (sandbox, or fail closed).
++bool DarkstrCookieStoreFirewallOwns(nsHashPropertyBag* aBag) {
++  if (!StaticPrefs::darkstr_cookieFirewall_contentGate()) {
++    return false;
++  }
++  nsCOMPtr<nsIObserverService> os = mozilla::services::GetObserverService();
++  if (os) {
++    os->NotifyObservers(static_cast<nsIWritablePropertyBag2*>(aBag),
++                        "darkstr-cookie-store", nullptr);
++  }
++  nsAutoString decision;
++  if (NS_FAILED(aBag->GetPropertyAsAString(u"decision"_ns, decision))) {
++    return true;
++  }
++  return !decision.EqualsLiteral("passthrough");
++}
++
++const char16_t* DarkstrSameSiteName(int32_t aSameSite) {
++  if (aSameSite == nsICookie::SAMESITE_STRICT) {
++    return u"strict";
++  }
++  if (aSameSite == nsICookie::SAMESITE_LAX) {
++    return u"lax";
++  }
++  return u"none";
++}
++
+ bool SubscriptionPrincipalMatchesScope(nsIPrincipal* aPrincipal,
+                                        const nsACString& aScopeURL) {
+   nsCOMPtr<nsIURI> scopeURI;
+@@ -372,6 +433,43 @@
+   if (!CheckContentProcessSecurity(aParent, baseDomain, aCookieURI,
+                                    aOriginAttributes)) {
+     return;
++  }
++
++  // darkstr 0060: the cookie firewall's answer first (see above).
++  {
++    RefPtr<nsHashPropertyBag> bag = DarkstrCookieStoreBag(
++        "get", aCookieURI, aOriginAttributes, aThirdPartyContext);
++    if (aPartitionedOriginAttributes) {
++      (void)bag->SetPropertyAsAString(
++          u"partitionedKey"_ns, aPartitionedOriginAttributes->mPartitionKey);
++    }
++    (void)bag->SetPropertyAsAString(u"name"_ns, aName);
++    (void)bag->SetPropertyAsBool(u"matchName"_ns, aMatchName);
++    (void)bag->SetPropertyAsAString(u"path"_ns, NS_ConvertUTF8toUTF16(aPath));
++    (void)bag->SetPropertyAsBool(u"onlyFirstMatch"_ns, aOnlyFirstMatch);
++    if (DarkstrCookieStoreFirewallOwns(bag)) {
++      uint32_t count = 0;
++      if (NS_FAILED(bag->GetPropertyAsUint32(u"count"_ns, &count))) {
++        count = 0;
++      }
++      nsTArray<CookieStoreGetItem> sandboxed;
++      for (uint32_t i = 0; i < count && i < 4096; ++i) {
++        nsAutoString nameKey(u"name"_ns);
++        nameKey.AppendInt(i);
++        nsAutoString valueKey(u"value"_ns);
++        valueKey.AppendInt(i);
++        nsAutoString n;
++        nsAutoString v;
++        if (NS_FAILED(bag->GetPropertyAsAString(nameKey, n)) ||
++            NS_FAILED(bag->GetPropertyAsAString(valueKey, v))) {
++          break;
++        }
++        sandboxed.AppendElement(CookieStoreGetItem(NS_ConvertUTF16toUTF8(n),
++                                                   NS_ConvertUTF16toUTF8(v)));
++      }
++      aResults.SwapElements(sandboxed);
++      return;
++    }
+   }
+ 
+   nsAutoCString hostName;
+@@ -503,6 +601,29 @@
+   if (!CheckContentProcessSecurity(aParent, domain, aCookieURI,
+                                    aOriginAttributes)) {
+     return eSilentFailure;
++  }
++
++  // darkstr 0060: the cookie firewall's answer first (see above). A
++  // sandboxed write never reaches the cookie service and is not notified.
++  {
++    RefPtr<nsHashPropertyBag> bag = DarkstrCookieStoreBag(
++        "set", aCookieURI, aOriginAttributes, aThirdPartyContext);
++    (void)bag->SetPropertyAsAString(u"name"_ns, aName);
++    (void)bag->SetPropertyAsAString(u"value"_ns, aValue);
++    (void)bag->SetPropertyAsBool(u"session"_ns, aSession);
++    (void)bag->SetPropertyAsInt64(u"expires"_ns, aExpires);
++    (void)bag->SetPropertyAsAString(u"domain"_ns, aDomain);
++    (void)bag->SetPropertyAsAString(u"path"_ns, aPath);
++    (void)bag->SetPropertyAsAString(u"sameSite"_ns,
++                                    nsDependentString(DarkstrSameSiteName(aSameSite)));
++    (void)bag->SetPropertyAsBool(u"partitioned"_ns, aPartitioned);
++    if (DarkstrCookieStoreFirewallOwns(bag)) {
++      bool ok = false;
++      if (NS_FAILED(bag->GetPropertyAsBool(u"ok"_ns, &ok))) {
++        ok = false;
++      }
++      return ok ? eSuccess : eSilentFailure;
++    }
+   }
+ 
+   if (aThirdPartyContext &&
+@@ -592,6 +713,19 @@
+     return false;
+   }
+ 
++  // darkstr 0060: the cookie firewall's answer first (see above).
++  {
++    RefPtr<nsHashPropertyBag> bag = DarkstrCookieStoreBag(
++        "delete", aCookieURI, aOriginAttributes, aThirdPartyContext);
++    (void)bag->SetPropertyAsAString(u"name"_ns, aName);
++    (void)bag->SetPropertyAsAString(u"domain"_ns, aDomain);
++    (void)bag->SetPropertyAsAString(u"path"_ns, aPath);
++    (void)bag->SetPropertyAsBool(u"partitioned"_ns, aPartitioned);
++    if (DarkstrCookieStoreFirewallOwns(bag)) {
++      return false;
++    }
++  }
++
+   nsCOMPtr<nsICookieService> service =
+       do_GetService(NS_COOKIESERVICE_CONTRACTID);
+   if (!service) {
+--- a/toolkit/components/cleardata/PrincipalsCollector.sys.mjs
++++ b/toolkit/components/cleardata/PrincipalsCollector.sys.mjs
+@@ -151,6 +151,24 @@
+       );
+     }
+ 
++    // Darkstr 0060: the cookie firewall's sandbox jar holds cookies the
++    // cookie service never sees. Add their host + OriginAttributes in the
++    // same shape as above so collector-driven clears (the shutdown sanitizer
++    // honoring "persist-data-on-shutdown" exceptions) reach them through
++    // ClearDataService's cookie cleaners. Disarmed firewall = empty list =
++    // stock. Memory only; nothing is logged.
++    progress.step = "principals-darkstr-sandbox-cookies";
++    try {
++      const { DarkstrCookieFirewall } = ChromeUtils.importESModule(
++        "moz-src:///browser/components/DarkstrCookieFirewall.sys.mjs"
++      );
++      for (const h of DarkstrCookieFirewall.sandboxCookieHosts()) {
++        hosts.add(h);
++      }
++    } catch (_e) {
++      // Not a Darkstr browser build (or the module is unavailable): stock.
++    }
++
+     progress.step = "principals-host-cookie";
+     hosts.forEach(host => {
+       // Cookies and permissions are handled by origin/host. Doesn't matter if we
+--- a/browser/components/DarkstrNativePersona.sys.mjs
++++ b/browser/components/DarkstrNativePersona.sys.mjs
+@@ -139,6 +139,37 @@
+     return Object.fromEntries(gDiag);
+   },
+ };
++/**
++ * 0060 (no plaintext, 0052 rule): the diagnostics that carry a site name
++ * (lastEtld, lastDecision.site) reach prefs.js only as a keyed digest
++ * "redacted:<32-bit digest>:<length>", keyed per session so it cannot be
++ * looked up across runs. getDiagnostics() keeps the readable value (memory,
++ * chrome only). Same scheme as DarkstrCookieFirewall.redactDiag.
++ */
++const REDACTED_DIAG_PREFS = new Set([LAST_ETLD_PREF, LAST_DECISION_PREF]);
++const DIAG_DIGEST_KEY = Math.floor(Math.random() * 0x100000000) >>> 0 || 1;
++export function redactDiag(value) {
++  const t = String(value ?? "");
++  if (!t) {
++    return "";
++  }
++  let h = (DIAG_DIGEST_KEY ^ 0x811c9dc5) >>> 0;
++  for (let i = 0; i < t.length; i++) {
++    h = Math.imul(h ^ t.charCodeAt(i), 0x01000193) >>> 0;
++  }
++  h = Math.imul(h ^ (h >>> 15), 0x2c1b3c6d) >>> 0;
++  return `redacted:${("00000000" + h.toString(16)).slice(-8)}:${t.length}`;
++}
++const diagFacadeWrite = diagPrefs._write;
++diagPrefs._write = function (setter, name, value) {
++  if (!REDACTED_DIAG_PREFS.has(name)) {
++    diagFacadeWrite.call(this, setter, name, value);
++    return;
++  }
++  // prefs.js (when diagPrefs is on) gets the digest; memory the value.
++  diagFacadeWrite.call(this, setter, name, redactDiag(value));
++  gDiag.set(name, value);
++};
+ const ACTOR_NAME = "DarkstrNativePersona";
+ /** 0056: persisted per-site seeds (parent-only store; loaded on first use). */
+ const SEED_STORE_URI = "moz-src:///browser/components/DarkstrPersonaSeedStore.sys.mjs";

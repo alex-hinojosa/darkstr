@@ -29,7 +29,7 @@ const CHILD_FILES = existsSync(join(root, "patches/0051-files/DarkstrCookieFirew
   ? join(root, "patches/0051-files")
   : FILES;
 const FW_FILE =
-  ["0058c-files", "0059-files", "0058b-files", "0058fp-files", "0058-files", "0057c-files", "0057-files", "0056-files", "0055-files", "0053r2-files", "0053-files", "0052-files"]
+  ["0060-files", "0058c-files", "0059-files", "0058b-files", "0058fp-files", "0058-files", "0057c-files", "0057-files", "0056-files", "0055-files", "0053r2-files", "0053-files", "0052-files"]
     .map((d) => join(root, "patches", d, "DarkstrCookieFirewall.sys.mjs"))
     .find((f) => existsSync(f)) || join(FILES, "DarkstrCookieFirewall.sys.mjs");
 const FW_URL = "moz-src:///browser/components/DarkstrCookieFirewall.sys.mjs";
@@ -1143,6 +1143,14 @@ test("0052: diagPrefs on → the same diagnostics are mirrored to prefs (QA / Pr
   fresh({ "darkstr.debug.diagPrefs": true });
   s6Flow();
   assert.equal(prefs.get("darkstr.cookieFirewall.armed"), true);
+  if (FW_FILE.includes("0060-files")) {
+    // 0060 (no plaintext): site names / cookie values reach prefs only as
+    // keyed digests; memory (getDiagnostics) keeps the readable value.
+    assert.match(String(prefs.get("darkstr.cookieFirewall.lastCookieOut")), /^redacted:[0-9a-f]{8}:\d+$/);
+    assert.match(String(FW.getDiagnostics()["darkstr.cookieFirewall.lastCookieOut"]), /qa_srv=1/);
+    assert.equal(prefs.get("darkstr.cookieFirewall.lastEtld"), fwMod.redactDiag(FW.getDiagnostics()["darkstr.cookieFirewall.lastEtld"]));
+    return;
+  }
   assert.match(String(prefs.get("darkstr.cookieFirewall.lastCookieOut")), /qa_srv=1/);
   assert.equal(prefs.get("darkstr.cookieFirewall.lastEtld"), FW.getDiagnostics()["darkstr.cookieFirewall.lastEtld"]);
 });
