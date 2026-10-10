@@ -55,5 +55,12 @@ grep -Fq '"darkstr-cookie-store"' "$R/dom/cookiestore/CookieStoreParent.cpp"
 grep -Fq 'DarkstrCookieFirewall.sandboxCookieHosts()' "$R/toolkit/components/cleardata/PrincipalsCollector.sys.mjs"
 grep -Fq 'const REDACTED_DIAG_PREFS = new Set([LAST_ETLD_PREF, LAST_DECISION_PREF]);' "$R/browser/components/DarkstrNativePersona.sys.mjs"
 grep -Fq 'darkstr 0060 (was 0048r2 F3' "$R/netwerk/cookie/CookieCommons.cpp"
+# 0060r2: kept sites' encrypted sandbox jar (Keychain-held key, 0600, no plaintext)
+grep -Fq 'export var DarkstrCookieJarStore = {' "$C"
+grep -Fq 'const JAR_LABEL_PREFIX = "darkstr-cookie-jar-";' "$C"
+grep -Fq 'await IOUtils.setPermissions(tmp, 0o600);' "$C"
+grep -Fq 'DarkstrCookieJarStore.attach(this);' "$C"
+grep -Fq 'await DarkstrCookieJarStore.clearAll();' "$C"
+if grep -Fq 'The jar itself is never persisted.' "$C"; then echo "error: pre-0060r2 firewall (no kept-site jar)" >&2; exit 1; fi
 echo "0060 applied. Build (objdir pinned; never a bare mach build):"
 echo "  cd \$DARKSTR_GECKO_ROOT && MOZ_OBJDIR=\$DARKSTR_GECKO_ROOT/obj-aarch64-apple-darwin25.6.0 ./mach build && MOZ_OBJDIR=\$DARKSTR_GECKO_ROOT/obj-aarch64-apple-darwin25.6.0 ./mach package"

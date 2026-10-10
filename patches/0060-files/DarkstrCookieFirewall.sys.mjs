@@ -127,7 +127,16 @@
  *   - No plaintext (0052 rule): diagnostics carrying a site name or a cookie
  *     value are readable only in memory (getDiagnostics, chrome). Anything
  *     written out (prefs.js while darkstr.debug.diagPrefs) is a keyed,
- *     per-session digest. The jar itself is never persisted.
+ *     per-session digest.
+ *
+ * 0060r2 (Alex, 2026-10-09; Proof FAIL on #99): KEPT sites keep their
+ *   sandbox cookies across a restart. DarkstrCookieJarStore (below) persists
+ *   the buckets of top-level sites with a persist-data-on-shutdown exception,
+ *   encrypted at rest like the 0056 seed store (Keychain-held key, profile
+ *   file 0600, per-context HMAC tags, never prefs.js, never private
+ *   browsing). Every other bucket stays memory-only and is gone at quit as
+ *   before. Unkeep, per-site clears, container removal and clear-all remove
+ *   the persisted cookies too.
  *
  * Soft residual (0042): outbound Cookie on content fetch was empty under 0035
  * because http-on-modify-request subject was used without QI to nsIHttpChannel
@@ -1048,6 +1057,7 @@ export var DarkstrCookieFirewall = {
       Services.obs.addObserver(this._cookieStoreObserver, COOKIE_STORE_TOPIC);
     } catch (_e) {}
     this._ensureHttpObserver();
+    DarkstrCookieJarStore.attach(this);
     this.refreshPlan();
   },
 
@@ -1081,6 +1091,8 @@ export var DarkstrCookieFirewall = {
       } catch (_e) {}
       this._actorRegistered = false;
     }
+    // 0060r2: keep the kept buckets before the live jar goes.
+    DarkstrCookieJarStore.onDisarm();
     if (this._jar) {
       this._jar.clear();
     }
@@ -1213,6 +1225,7 @@ export var DarkstrCookieFirewall = {
     if (prevMode && prevMode !== plan.mode && this._jar) {
       // Mode switch: values were written under the other mode.
       this._jar.clear();
+      DarkstrCookieJarStore.onModeSwitch();
     }
     if (this._actorRegistered && (plan.armed || wasArmed)) {
       this._reinstallAllDocuments();
@@ -1221,14 +1234,21 @@ export var DarkstrCookieFirewall = {
   },
 
   _setArmed(armed) {
+    const was = this._armed;
     this._armed = !!armed;
     try {
       diagPrefs.setBoolPref(ARMED_PREF, this._armed);
     } catch (_e) {}
     this._setContentGate(this._armed);
     if (!this._armed && this._jar) {
+      // 0060r2: kept buckets go to the encrypted store first.
+      DarkstrCookieJarStore.onDisarm();
       // Idle: drop sandbox so a later arm starts clean. Real jar untouched.
       this._jar.clear();
+    }
+    if (this._armed && !was) {
+      // 0060r2: load the kept sites' persisted jar and merge it in.
+      DarkstrCookieJarStore.onArmed();
     }
   },
 
@@ -1786,6 +1806,7 @@ export var DarkstrCookieFirewall = {
     if (!res.changed) {
       return res;
     }
+    DarkstrCookieJarStore.noteChange(bucketKey);
     const changes = [];
     if (res.deletedKey) {
       changes.push({ bucketKey, rec: before || built.record, deleted: true });
@@ -1906,6 +1927,7 @@ export var DarkstrCookieFirewall = {
       if (!bucket.size) {
         this._jar.delete(key);
       }
+      DarkstrCookieJarStore.noteChange(key);
     }
     if (changes.length) {
       this._coverageStats.purges++;
@@ -2309,6 +2331,64 @@ export var DarkstrCookieFirewall = {
         } catch (_e) {}
         return;
       }
+      if (this._holdForJarStore(channel, ctx, env)) {
+        return;
+      }
+      this._applyRequestCookie(channel, ctx, env);
+      return;
+    }
+    this._onHttpResponse(channel, topic, ctx, env, plan);
+  },
+
+  /**
+   * 0060r2: while the kept sites' jar is loading (startup), a request that
+   * reads a kept site's buckets waits for it (at most JAR_WAIT_MS), so the
+   * first load after a restart already sends the persisted cookies.
+   */
+  _holdForJarStore(channel, ctx, env) {
+    const store = DarkstrCookieJarStore;
+    if (!store.loading || !store.keepsTop(ctx.top?.base, ctx.oa)) {
+      return false;
+    }
+    const waitMs = store.waitMs();
+    if (!waitMs) {
+      return false;
+    }
+    try {
+      channel.suspend();
+    } catch (_e) {
+      return false;
+    }
+    store._stats.held++;
+    let done = false;
+    let timer = null;
+    const finish = (timedOut) => {
+      if (done) {
+        return;
+      }
+      done = true;
+      timer?.cancel();
+      if (timedOut) {
+        store._stats.heldTimeout++;
+      }
+      try {
+        store._hydrate();
+        this._applyRequestCookie(channel, ctx, env);
+      } catch (e) {
+        console.error("darkstr 0060r2: held request cookie failed", e);
+      } finally {
+        try {
+          channel.resume();
+        } catch (_e) {}
+      }
+    };
+    timer = jarLater(() => finish(true), waitMs);
+    store.whenReady().then(() => finish(false), () => finish(false));
+    return true;
+  },
+
+  _applyRequestCookie(channel, ctx, env) {
+    {
       const now = Date.now();
       const buckets = ctx.readKeys.map((k) => {
         const b = this._bucket(k, false);
@@ -2360,9 +2440,10 @@ export var DarkstrCookieFirewall = {
           diagPrefs.setStringPref(LAST_COOKIE_SET_PREF, "");
         } catch (_e2) {}
       }
-      return;
     }
+  },
 
+  _onHttpResponse(channel, topic, ctx, env, plan) {
     if (!HTTP_TOPICS.includes(topic)) {
       return;
     }
@@ -2701,13 +2782,734 @@ const FW_baseOf = (h) => {
     return h;
   }
 };
+// ---------------------------------------------------------------------------
+// 0060r2 (Alex, 2026-10-09): kept sites keep their sandbox cookies across a
+// restart. DarkstrCookieJarStore persists the sandbox buckets of KEPT
+// top-level sites only, encrypted at rest the way the 0056 seed store is:
+//
+// - File <profile>/darkstr/cookie-jar.json (dir 0700, file 0600), written
+//   only by the parent, atomically (tmp file, chmod 0600, rename), so a
+//   kill -9 leaves either the previous or the new file, never a torn one.
+//   A stray .tmp (killed mid-write) is removed at load; it is encrypted too.
+// - Format v1: { v: 1, l: <OSKeyStore label>, k: <K wrapped by OSKeyStore>,
+//   e: [{ c, h, n, d }] }
+//     c  HMAC-SHA256(K, "ctx:" + userContextId), hex (per-context tag, 0056)
+//     h  HMAC-SHA256(K, userContextId + "|" + bucket key), hex
+//     n  AES-GCM IV (base64)    d  AES-GCM(K, n, JSON{b, m, r}) with AAD c|h
+//        b bucket key, m firewall mode, r cookie records -- all inside the
+//        ciphertext. No host, site, cookie name or value, container number
+//        or time is ever written in the clear.
+//   K: random 32 bytes; the OSKeyStore secret (macOS Keychain) under a random
+//   label "darkstr-cookie-jar-<hex>" wraps it. OSKeyStore unavailable ->
+//   memory only (nothing written).
+// - Kept = top-level site with a persist-data-on-shutdown ALLOW exception and
+//   no cookie ACCESS_SESSION permission (the 0056 keep rule), never private
+//   browsing. Every other bucket stays memory-only: non-kept sites are wiped
+//   on quit exactly as before. Only cookies that would survive a stock restart
+//   are written: persistent cookies (unexpired), plus session cookies only
+//   while session restore is on (browser.startup.page = 3).
+// - The live jar is authoritative once hydrated (first arm after the load);
+//   before that (disarmed / not yet loaded) the file is changed only by
+//   clears and by the keep rule. Unkeep (perm-changed) prunes the site's
+//   entries at once. Clears (DarkstrCookieFirewallCleaner) apply the same
+//   predicates to the persisted buckets (loading the file if needed, in any
+//   mode); clear-all deletes the file and the OSKeyStore secret.
+// - Startup: sandbox requests that would read a kept site's jar wait for the
+//   load (at most JAR_WAIT_MS) so the first load already sends the cookies.
+// ---------------------------------------------------------------------------
+const JAR_DIR = "darkstr";
+const JAR_FILE = "cookie-jar.json";
+const JAR_VERSION = 1;
+const JAR_LABEL_PREFIX = "darkstr-cookie-jar-";
+const JAR_SAVE_DELAY_MS = 500;
+const JAR_WAIT_PREF = "darkstr.cookieFirewall.jarStore.startupWaitMs";
+const JAR_WAIT_DEFAULT_MS = 2000;
+/** Test / ops switch, like darkstr.persona.seedStore.osKeyStore. */
+const JAR_KEYSTORE_PREF = "darkstr.cookieFirewall.jarStore.osKeyStore";
+const JAR_KEEP_PERM_TYPES = new Set(["persist-data-on-shutdown", "cookie"]);
+const STARTUP_PAGE_PREF = "browser.startup.page";
+
+function jarIsParent() {
+  try {
+    return Services.appinfo.processType === Ci.nsIXULRuntime.PROCESS_TYPE_DEFAULT;
+  } catch (_e) {
+    return false;
+  }
+}
+function jarLater(fn, ms) {
+  try {
+    if (typeof Cc !== "undefined" && Ci.nsITimer) {
+      const t = Cc["@mozilla.org/timer;1"].createInstance(Ci.nsITimer);
+      t.initWithCallback(fn, ms, Ci.nsITimer.TYPE_ONE_SHOT);
+      return { cancel: () => t.cancel() };
+    }
+  } catch (_e) {}
+  const t = setTimeout(fn, ms);
+  return { cancel: () => clearTimeout(t) };
+}
+const jarB64 = {
+  enc(bytes) {
+    let s = "";
+    for (const b of bytes) {
+      s += String.fromCharCode(b & 0xff);
+    }
+    return btoa(s);
+  },
+  dec(str) {
+    const s = atob(String(str || ""));
+    const out = new Uint8Array(s.length);
+    for (let i = 0; i < s.length; i++) {
+      out[i] = s.charCodeAt(i);
+    }
+    return out;
+  },
+};
+const jarHex = (buf) =>
+  [...new Uint8Array(buf)].map((x) => x.toString(16).padStart(2, "0")).join("");
+function jarSiteOfHost(host) {
+  const h = normalizeHost(host).replace(/^\./, "");
+  if (!h) {
+    return "";
+  }
+  try {
+    return Services.eTLD.getBaseDomainFromHost(h);
+  } catch (_e) {
+    return h;
+  }
+}
+
+export var DarkstrCookieJarStore = {
+  /** idle | loading | ready | session-only */
+  _state: "idle",
+  _loadPromise: null,
+  /** bucket key -> { mode, records: Map(cookieKey -> record) } (memory). */
+  _persisted: new Map(),
+  /** True while the live firewall jar holds the persisted buckets. */
+  _hydrated: false,
+  _fw: null,
+  _key: null, // CryptoKey AES-GCM
+  _hmacKey: null, // CryptoKey HMAC
+  _label: "",
+  _wrapped: "",
+  _dirty: false,
+  _saveTimer: null,
+  _savePromise: null,
+  _observing: false,
+  /** A file exists (seen at load or written this session). */
+  _onDisk: false,
+  _stats: { reads: 0, writes: 0, keyGens: 0, keyDeletes: 0, dropped: 0, decryptErrors: 0, held: 0, heldTimeout: 0 },
+
+  get path() {
+    return PathUtils.join(PathUtils.profileDir, JAR_DIR, JAR_FILE);
+  },
+  get dirPath() {
+    return PathUtils.join(PathUtils.profileDir, JAR_DIR);
+  },
+  get loading() {
+    return this._state === "loading";
+  },
+  whenReady() {
+    return this._loadPromise || Promise.resolve();
+  },
+
+  _keyStoreAllowed() {
+    try {
+      return Services.prefs.getBoolPref(JAR_KEYSTORE_PREF, true);
+    } catch (_e) {
+      return true;
+    }
+  },
+  _osKeyStore() {
+    return Cc["@mozilla.org/security/oskeystore;1"].getService(Ci.nsIOSKeyStore);
+  },
+  waitMs() {
+    let ms = JAR_WAIT_DEFAULT_MS;
+    try {
+      ms = Services.prefs.getIntPref(JAR_WAIT_PREF, JAR_WAIT_DEFAULT_MS);
+    } catch (_e) {}
+    return Math.max(0, Math.min(10000, ms | 0));
+  },
+
+  /** Called by DarkstrCookieFirewall.init (parent only). */
+  attach(fw) {
+    this._fw = fw;
+    if (!jarIsParent() || this._observing) {
+      return;
+    }
+    this._observing = true;
+    try {
+      Services.obs.addObserver(this, "perm-changed");
+    } catch (_e) {}
+    try {
+      const { AsyncShutdown } = ChromeUtils.importESModule(
+        "resource://gre/modules/AsyncShutdown.sys.mjs"
+      );
+      AsyncShutdown.profileBeforeChange.addBlocker(
+        "darkstr 0060r2: cookie jar store",
+        () => this.flush(true)
+      );
+    } catch (_e) {}
+  },
+
+  observe(subject, topic, data) {
+    if (topic !== "perm-changed") {
+      return;
+    }
+    if (data !== "cleared") {
+      let type = "";
+      try {
+        const perm =
+          subject && typeof subject.QueryInterface === "function"
+            ? subject.QueryInterface(Ci.nsIPermission)
+            : subject;
+        type = String(perm?.type || "");
+      } catch (_e) {
+        return;
+      }
+      if (!JAR_KEEP_PERM_TYPES.has(type)) {
+        return;
+      }
+    }
+    // Keep / unkeep: re-evaluate now. Unkeep prunes the file at once; a new
+    // keep is written from the live jar (when hydrated) at the next save.
+    this._ensureLoaded().then(() => {
+      if (this._state !== "ready") {
+        return;
+      }
+      if (this._hydrated) {
+        this._snapshotLive();
+      }
+      this._applyKeepRule();
+      this._scheduleSave();
+    });
+  },
+
+  /** Load (once). Any mode may load for a clear; only arm hydrates. */
+  _ensureLoaded() {
+    if (!jarIsParent()) {
+      return Promise.resolve();
+    }
+    if (this._state === "idle") {
+      this._state = "loading";
+      this._loadPromise = this._load().catch((e) => {
+        console.error("darkstr 0060r2: cookie jar load failed", e);
+        this._state = "session-only";
+      });
+    }
+    return this._loadPromise || Promise.resolve();
+  },
+
+  async _importKey(raw) {
+    const bytes = Uint8Array.from(raw);
+    this._key = await crypto.subtle.importKey("raw", bytes, { name: "AES-GCM" }, false, ["encrypt", "decrypt"]);
+    this._hmacKey = await crypto.subtle.importKey("raw", bytes, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  },
+
+  async _hmac(msg) {
+    const sig = await crypto.subtle.sign("HMAC", this._hmacKey, new TextEncoder().encode(String(msg)));
+    return jarHex(sig);
+  },
+
+  async _load() {
+    try {
+      await IOUtils.remove(this.path + ".tmp", { ignoreAbsent: true });
+    } catch (_e) {}
+    let data = null;
+    if (await IOUtils.exists(this.path)) {
+      this._onDisk = true;
+      this._stats.reads++;
+      try {
+        data = await IOUtils.readJSON(this.path);
+      } catch (e) {
+        // Unreadable: nothing can be recovered from it; the next save
+        // replaces it (all of its content was ciphertext anyway).
+        console.error("darkstr 0060r2: cookie-jar.json unreadable, starting empty", e);
+        data = null;
+        this._dirty = true;
+      }
+    }
+    if (data && data.v === JAR_VERSION && data.l && data.k) {
+      if (!this._keyStoreAllowed()) {
+        this._state = "session-only";
+        return;
+      }
+      let available = false;
+      try {
+        available = await this._osKeyStore().asyncSecretAvailable(data.l);
+      } catch (_e) {
+        this._state = "session-only";
+        return;
+      }
+      if (available) {
+        const raw = await this._osKeyStore().asyncDecryptBytes(data.l, data.k);
+        await this._importKey(raw);
+        this._label = data.l;
+        this._wrapped = data.k;
+        for (const e of Array.isArray(data.e) ? data.e : []) {
+          try {
+            if (!/^[0-9a-f]{64}$/.test(e?.c) || !/^[0-9a-f]{64}$/.test(e?.h)) {
+              throw new Error("bad tag");
+            }
+            const plain = await crypto.subtle.decrypt(
+              { name: "AES-GCM", iv: jarB64.dec(e.n), additionalData: new TextEncoder().encode(`${e.c}|${e.h}`) },
+              this._key,
+              jarB64.dec(e.d)
+            );
+            const obj = JSON.parse(new TextDecoder().decode(plain));
+            const info = parseBucketKey(obj.b);
+            if (!info || info.privateBrowsingId !== 0 || !Array.isArray(obj.r)) {
+              throw new Error("bad entry");
+            }
+            // The tags must be this entry's own (no swapping between contexts).
+            if (e.c !== (await this._hmac("ctx:" + info.userContextId)) ||
+                e.h !== (await this._hmac(`${info.userContextId}|${obj.b}`))) {
+              throw new Error("tag mismatch");
+            }
+            const records = new Map();
+            for (const r of obj.r) {
+              if (r && typeof r.name === "string" && typeof r.host === "string") {
+                records.set(cookieKey(r), r);
+              }
+            }
+            this._persisted.set(obj.b, { mode: String(obj.m || "synthetic"), records });
+          } catch (_eEntry) {
+            this._stats.decryptErrors++;
+            this._dirty = true;
+          }
+        }
+      } else {
+        // Secret gone (Keychain item removed): unrecoverable; a fresh store
+        // (new key and label) replaces the file at the next save.
+        this._dirty = true;
+      }
+    } else if (data) {
+      this._dirty = true;
+    }
+    this._state = "ready";
+    if (this._applyKeepRule()) {
+      this._dirty = true;
+    }
+    if (this._dirty) {
+      this._scheduleSave();
+    }
+  },
+
+  /** Keep-rule sets (base domains), as in DarkstrPersonaSeedStore._keepSets. */
+  _keepSets() {
+    const keep = new Set();
+    const session = new Set();
+    try {
+      for (const p of Services.perms.getAllByTypes(["persist-data-on-shutdown"])) {
+        if (p.capability === Ci.nsIPermissionManager.ALLOW_ACTION) {
+          const s = jarSiteOfHost(p.principal?.host);
+          if (s) {
+            keep.add(s);
+          }
+        }
+      }
+    } catch (_e) {}
+    try {
+      for (const p of Services.perms.getAllByTypes(["cookie"])) {
+        if (p.capability === Ci.nsICookiePermission.ACCESS_SESSION) {
+          const s = jarSiteOfHost(p.principal?.host);
+          if (s) {
+            session.add(s);
+          }
+        }
+      }
+    } catch (_e) {}
+    return { keep, session };
+  },
+
+  /** Is this bucket (by key) persisted? Never private, kept top sites only. */
+  keepsBucket(bucketKey, sets = this._keepSets()) {
+    const info = parseBucketKey(bucketKey);
+    if (!info || info.privateBrowsingId !== 0) {
+      return false;
+    }
+    const site = normalizeHost(info.base);
+    return !!site && sets.keep.has(site) && !sets.session.has(site);
+  },
+
+  /** Is any bucket for this top site / context persisted (startup hold)? */
+  keepsTop(topBase, oa) {
+    if (Number(oa?.privateBrowsingId || 0) > 0) {
+      return false;
+    }
+    const sets = this._keepSets();
+    const site = normalizeHost(topBase);
+    return !!site && sets.keep.has(site) && !sets.session.has(site);
+  },
+
+  _sessionCookiesSurvive() {
+    try {
+      return Services.prefs.getIntPref(STARTUP_PAGE_PREF, 1) === 3;
+    } catch (_e) {
+      return false;
+    }
+  },
+
+  /** Records of one bucket that a stock restart would keep. */
+  _persistable(records, now = Date.now()) {
+    const keepSession = this._sessionCookiesSurvive();
+    const out = new Map();
+    for (const [k, r] of records) {
+      if (r.expiry === null || r.expiry === undefined) {
+        if (keepSession) {
+          out.set(k, { ...r });
+        }
+      } else if (r.expiry > now) {
+        out.set(k, { ...r });
+      }
+    }
+    return out;
+  },
+
+  _applyKeepRule(sets = this._keepSets()) {
+    let dropped = false;
+    for (const key of [...this._persisted.keys()]) {
+      if (!this.keepsBucket(key, sets)) {
+        this._persisted.delete(key);
+        this._stats.dropped++;
+        dropped = true;
+      }
+    }
+    return dropped;
+  },
+
+  /** Live jar (authoritative while hydrated) -> persisted kept buckets. */
+  _snapshotLive() {
+    const fw = this._fw;
+    if (!fw || !this._hydrated) {
+      return;
+    }
+    const sets = this._keepSets();
+    const mode = fw.getPlan?.().mode || "synthetic";
+    const next = new Map();
+    for (const [key, bucket] of fw._jar || []) {
+      if (!bucket?.size || !this.keepsBucket(key, sets)) {
+        continue;
+      }
+      const records = this._persistable(bucket);
+      if (records.size) {
+        next.set(key, { mode, records });
+      }
+    }
+    this._persisted = next;
+  },
+
+  /** Firewall armed: load, then merge the persisted buckets into the jar. */
+  onArmed() {
+    if (!jarIsParent()) {
+      return;
+    }
+    this._ensureLoaded().then(() => this._hydrate());
+  },
+
+  _hydrate() {
+    const fw = this._fw;
+    if (this._state !== "ready" || !fw?._armed || this._hydrated) {
+      return;
+    }
+    const mode = fw.getPlan?.().mode || "synthetic";
+    const now = Date.now();
+    const changes = [];
+    for (const [key, entry] of this._persisted) {
+      if (entry.mode !== mode) {
+        continue;
+      }
+      const bucket = fw._bucket(key, true);
+      for (const [k, r] of this._persistable(entry.records, now)) {
+        if (!bucket.has(k)) {
+          // A cookie set while the file was loading is newer: it wins.
+          bucket.set(k, r);
+          changes.push({ bucketKey: key, rec: r, deleted: false });
+        }
+      }
+    }
+    this._hydrated = true;
+    if (changes.length) {
+      try {
+        fw._flushDeltas(changes);
+      } catch (_e) {}
+    }
+  },
+
+  /** Firewall about to drop its live jar (disarm): keep the kept buckets. */
+  onDisarm() {
+    if (this._hydrated) {
+      this._snapshotLive();
+      this._hydrated = false;
+      this._scheduleSave();
+    }
+  },
+
+  /** Mode switch: values were written under the other mode -> forget them. */
+  onModeSwitch() {
+    if (this._persisted.size) {
+      this._persisted.clear();
+      this._scheduleSave();
+    }
+  },
+
+  /** A live bucket changed (firewall _store / _purge). */
+  noteChange(bucketKey) {
+    if (!this._hydrated || this._state !== "ready") {
+      return;
+    }
+    const info = parseBucketKey(bucketKey);
+    if (!info || info.privateBrowsingId !== 0) {
+      return; // private never persists, never schedules a write
+    }
+    this._scheduleSave();
+  },
+
+  /** Clears: same predicates as DarkstrCookieFirewall._purge. */
+  async purge(bucketMatch, recMatch) {
+    await this._ensureLoaded();
+    if (this._state !== "ready") {
+      return 0;
+    }
+    if (this._hydrated) {
+      this._snapshotLive(); // live purge already ran; mirror it
+    }
+    let n = 0;
+    for (const [key, entry] of [...this._persisted]) {
+      const info = parseBucketKey(key);
+      if (!info || !bucketMatch(info, key)) {
+        continue;
+      }
+      for (const [k, rec] of [...entry.records]) {
+        if (recMatch(rec, info)) {
+          entry.records.delete(k);
+          n++;
+        }
+      }
+      if (!entry.records.size) {
+        this._persisted.delete(key);
+      }
+    }
+    if (n || this._onDisk) {
+      this._dirty = true;
+      await this.flush();
+    }
+    return n;
+  },
+
+  /** Clear everything: file + OSKeyStore secret (next store: new key). */
+  async clearAll() {
+    if (this._state === "loading") {
+      await this._loadPromise;
+    }
+    while (this._savePromise) {
+      await this._savePromise;
+    }
+    this._saveTimer?.cancel();
+    this._saveTimer = null;
+    this._dirty = false;
+    this._persisted.clear();
+    let label = this._label;
+    if (!label) {
+      try {
+        if (await IOUtils.exists(this.path)) {
+          label = (await IOUtils.readJSON(this.path))?.l || "";
+        }
+      } catch (_e) {}
+    }
+    try {
+      await IOUtils.remove(this.path, { ignoreAbsent: true });
+      await IOUtils.remove(this.path + ".tmp", { ignoreAbsent: true });
+    } catch (e) {
+      console.error("darkstr 0060r2: cookie-jar.json remove failed", e);
+    }
+    if (label && this._keyStoreAllowed()) {
+      try {
+        await this._osKeyStore().asyncDeleteSecret(label);
+        this._stats.keyDeletes++;
+      } catch (_e) {}
+    }
+    this._onDisk = false;
+    this._key = null;
+    this._hmacKey = null;
+    this._label = "";
+    this._wrapped = "";
+    if (this._state === "idle" || this._state === "session-only" || this._state === "ready") {
+      this._state = this._keyStoreAllowed() ? "ready" : "session-only";
+    }
+  },
+
+  _scheduleSave() {
+    if (this._state !== "ready") {
+      return;
+    }
+    this._dirty = true;
+    if (this._saveTimer) {
+      return;
+    }
+    this._saveTimer = jarLater(() => {
+      this._saveTimer = null;
+      this.flush().catch((e) => {
+        console.error("darkstr 0060r2: cookie jar save failed", e);
+      });
+    }, JAR_SAVE_DELAY_MS);
+  },
+
+  async flush(final = false) {
+    this._saveTimer?.cancel();
+    this._saveTimer = null;
+    while (this._savePromise) {
+      await this._savePromise;
+    }
+    if (final && this._hydrated) {
+      this._snapshotLive();
+      this._dirty = true;
+    }
+    if (!this._dirty || this._state !== "ready") {
+      return;
+    }
+    this._dirty = false;
+    this._savePromise = this._save().finally(() => {
+      this._savePromise = null;
+    });
+    await this._savePromise;
+  },
+
+  async _ensureKey() {
+    if (this._key) {
+      return true;
+    }
+    if (!this._keyStoreAllowed()) {
+      return false;
+    }
+    const label = JAR_LABEL_PREFIX + jarHex(crypto.getRandomValues(new Uint8Array(8)));
+    const raw = crypto.getRandomValues(new Uint8Array(32));
+    const ks = this._osKeyStore();
+    await ks.asyncGenerateSecret(label);
+    this._stats.keyGens++;
+    this._wrapped = await ks.asyncEncryptBytes(label, Array.from(raw));
+    this._label = label;
+    await this._importKey(Array.from(raw));
+    raw.fill(0);
+    return true;
+  },
+
+  async _save() {
+    if (this._hydrated) {
+      this._snapshotLive();
+    }
+    this._applyKeepRule();
+    if (!this._persisted.size) {
+      if (this._onDisk || (await IOUtils.exists(this.path))) {
+        // Nothing kept any more: no file (the key stays for the session).
+        await IOUtils.remove(this.path, { ignoreAbsent: true });
+        this._onDisk = false;
+        this._stats.writes++;
+      }
+      return;
+    }
+    try {
+      if (!(await this._ensureKey())) {
+        this._state = "session-only";
+        return;
+      }
+    } catch (e) {
+      console.error("darkstr 0060r2: OSKeyStore unavailable, kept cookies are session-only", e);
+      this._state = "session-only";
+      return;
+    }
+    const e = [];
+    for (const [b, entry] of this._persisted) {
+      const info = parseBucketKey(b);
+      if (!info || info.privateBrowsingId !== 0) {
+        continue;
+      }
+      const c = await this._hmac("ctx:" + info.userContextId);
+      const h = await this._hmac(`${info.userContextId}|${b}`);
+      const iv = crypto.getRandomValues(new Uint8Array(12));
+      const plain = new TextEncoder().encode(JSON.stringify({ b, m: entry.mode, r: [...entry.records.values()] }));
+      const d = await crypto.subtle.encrypt(
+        { name: "AES-GCM", iv, additionalData: new TextEncoder().encode(`${c}|${h}`) },
+        this._key,
+        plain
+      );
+      e.push({ c, h, n: jarB64.enc(iv), d: jarB64.enc(new Uint8Array(d)) });
+    }
+    // Entry order carries no information (sorted by tag).
+    e.sort((x, y) => (x.h < y.h ? -1 : x.h > y.h ? 1 : 0));
+    await this._writeAtomic({ v: JAR_VERSION, l: this._label, k: this._wrapped, e });
+  },
+
+  async _writeAtomic(obj) {
+    if (!jarIsParent()) {
+      throw new Error("darkstr 0060r2: cookie jar store is parent-only");
+    }
+    await IOUtils.makeDirectory(this.dirPath, { ignoreExisting: true, createAncestors: false, permissions: 0o700 });
+    try {
+      await IOUtils.setPermissions(this.dirPath, 0o700);
+    } catch (_e) {}
+    const tmp = this.path + ".tmp";
+    await IOUtils.write(tmp, new TextEncoder().encode(JSON.stringify(obj)), { mode: "overwrite", flush: true });
+    await IOUtils.setPermissions(tmp, 0o600);
+    await IOUtils.move(tmp, this.path, { noOverwrite: false });
+    this._onDisk = true;
+    this._stats.writes++;
+  },
+
+  /** Diagnostics (counts and the label only; no sites, names or values). */
+  debugState() {
+    let records = 0;
+    for (const e of this._persisted.values()) {
+      records += e.records.size;
+    }
+    return {
+      state: this._state,
+      hydrated: this._hydrated,
+      buckets: this._persisted.size,
+      records,
+      hasKey: !!this._key,
+      label: this._label,
+      stats: { ...this._stats },
+    };
+  },
+
+  /** Tests only. */
+  _resetForTests() {
+    this._saveTimer?.cancel();
+    this._state = "idle";
+    this._loadPromise = null;
+    this._persisted = new Map();
+    this._hydrated = false;
+    this._onDisk = false;
+    this._key = null;
+    this._hmacKey = null;
+    this._label = "";
+    this._wrapped = "";
+    this._dirty = false;
+    this._saveTimer = null;
+    this._savePromise = null;
+    for (const k of Object.keys(this._stats)) {
+      this._stats[k] = 0;
+    }
+  },
+};
+
+/**
+ * 0060r2: every clear also reaches the kept sites' persisted buckets
+ * (DarkstrCookieJarStore.purge, same predicates, in any mode); clear-all
+ * deletes the file and its OSKeyStore secret.
+ */
+async function fwClear(bucketMatch, recMatch, reason) {
+  DarkstrCookieFirewall._purge(bucketMatch, recMatch, reason);
+  await DarkstrCookieJarStore.purge(bucketMatch, recMatch);
+}
 export const DarkstrCookieFirewallCleaner = {
   async deleteAll() {
     DarkstrCookieFirewall._purge(() => true, () => true, "all");
+    await DarkstrCookieJarStore.clearAll();
   },
   async deleteByHost(aHost, aOriginAttributes) {
     const host = normalizeHost(aHost);
-    DarkstrCookieFirewall._purge(
+    await fwClear(
       (info) => bucketMatchesPattern(info, aOriginAttributes, FW_baseOf),
       (rec) => normalizeHost(rec.host) === host,
       "host"
@@ -2729,7 +3531,7 @@ export const DarkstrCookieFirewallCleaner = {
       return;
     }
     const pattern = aOriginAttributesPattern || {};
-    DarkstrCookieFirewall._purge(
+    await fwClear(
       (info) => bucketMatchesPattern(info, pattern, FW_baseOf),
       (rec, info) =>
         hasRootDomain(rec.host, site) || (info.part !== "" && info.base === site),
@@ -2738,7 +3540,7 @@ export const DarkstrCookieFirewallCleaner = {
   },
   async deleteByRange(aFrom, _aTo) {
     const from = Number(aFrom) || 0;
-    DarkstrCookieFirewall._purge(
+    await fwClear(
       () => true,
       (rec) => Number(rec.ctime || 0) >= from,
       "range"
@@ -2751,7 +3553,7 @@ export const DarkstrCookieFirewallCleaner = {
     } catch (_e) {
       return;
     }
-    DarkstrCookieFirewall._purge(
+    await fwClear(
       (info) => bucketMatchesPattern(info, pattern, FW_baseOf),
       () => true,
       "oa"

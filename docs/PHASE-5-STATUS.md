@@ -1930,3 +1930,66 @@ Residuals / not built:
 - 0061 (per-site rotation) itself.
 - SharedWorker cookieStore: Gecko exposes CookieStore to service workers only.
 - Container removal goes through `deleteByOriginAttributes`, covered by unit tests but not live.
+
+### 0060r2 — kept sites keep their sandbox cookies across a restart (Alex, 2026-10-09)
+
+Proof FAILed #99 / 0060 on one item: Alex decided that kept sites
+(persist-data-on-shutdown) keep their sandbox cookies across restarts. Every
+other 0060 claim passed and is unchanged. The respin adds
+`DarkstrCookieJarStore` to `DarkstrCookieFirewall.sys.mjs` (no new module,
+no moz.build change):
+
+- **What is persisted:** only the sandbox buckets whose top-level site has a
+  `persist-data-on-shutdown` ALLOW exception and no cookie `ACCESS_SESSION`
+  permission (the 0056 keep rule), in non-private contexts. That covers the
+  site's first-party jar and the partitions under it (`|p`, `|pf`). Only
+  cookies a stock restart keeps are written: persistent unexpired cookies,
+  plus session cookies only while session restore is on
+  (`browser.startup.page = 3`). Non-kept sites stay memory-only and are gone
+  at quit, as before.
+- **At rest:** `<profile>/darkstr/cookie-jar.json`, dir 0700, file 0600,
+  `{ v:1, l, k, e:[{c,h,n,d}] }`. `k` is a random 32-byte key K wrapped by an
+  OSKeyStore (macOS Keychain) secret under a random label
+  `darkstr-cookie-jar-<16 hex>`. `c = HMAC(K, "ctx:"+userContextId)` and
+  `h = HMAC(K, userContextId+"|"+bucket key)` are per-context tags, like 0056.
+  `d` is AES-GCM(K) of `{bucket key, mode, records}` with AAD `c|h`, so
+  hosts, sites, cookie names and values, container numbers and times never
+  appear in the clear. Swapped or tampered entries fail authentication and
+  are dropped. Without OSKeyStore it is memory only. Nothing goes to
+  prefs.js.
+- **Containers / private:** each container's buckets are their own entries
+  with their own tags and are restored into the same container only. Private
+  browsing is never written and never holds a load.
+- **Lifecycle:** the first arm after startup loads the file and merges it into
+  the live jar, which is authoritative from then on. Saves are debounced
+  (500 ms) and flushed at profile-before-change, after the shutdown
+  sanitizer. Disarming keeps the file. A mode switch (isolate ↔ synthetic)
+  forgets it, because values written under one mode are not valid under the
+  other. During the load, sandbox requests that read a kept site's jar are
+  suspended (at most `darkstr.cookieFirewall.jarStore.startupWaitMs`,
+  default 2000), so the first load after a restart already sends the
+  cookies.
+- **Clears:** every DarkstrCookieFirewallCleaner path applies the same
+  predicates to the persisted buckets in any mode, loading the file if
+  needed. That covers Forget About This Site, Clear-Site-Data, per-host and
+  per-principal clears, container removal, and Clear Recent History (records
+  carry `ctime` inside the ciphertext). Clear-all deletes the file and the
+  Keychain secret, so the next store gets a new key and label. Unkeep
+  (perm-changed on `persist-data-on-shutdown` / `cookie`, including clearing
+  all permissions) prunes the site's entries right away. When nothing is
+  kept, the file is removed.
+- **kill -9:** writes go to a tmp file, are chmod'ed 0600, then renamed, so
+  the file is always the previous or the new complete version. A stray
+  `.tmp` (encrypted too) is removed at the next load. An unreadable file is
+  ignored and replaced at the next save. It held only ciphertext.
+- Tests: `tests/cookie-jar-store-0060r2.test.mjs` (restart, non-kept,
+  private, containers + tags, tamper, unkeep, site / container / range /
+  all clears, disarmed clear, kill -9 tmp + garbage, session / expired,
+  mode switch, firewall off = no file / no Keychain item, startup hold).
+- Keychain hygiene for harnesses: the store's label is in
+  `DarkstrCookieJarStore.debugState().label` (and in the file's `l`).
+  Proof-tools `dskc.py` records `darkstr-cookie-jar-*` labels alongside
+  `darkstr-persona-seeds-*`.
+- Shadow flag (open): 0060 carries a copy of `DarkstrNativePersona.sys.mjs`
+  (diag redaction). Once 0058d is in main, that copy needs a 3-way combine
+  with 0058d's, and `patches/STACK` gets 0060 after 0058d.
